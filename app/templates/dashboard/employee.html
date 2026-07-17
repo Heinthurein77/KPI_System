@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% import "partials/status_badge.html" as badges %}
+{% import "partials/period_selector.html" as selectors %}
+{% import "partials/score_badge.html" as scores %}
+{% import "partials/combined_score_card.html" as combined %}
+{% block title %}My KPI{% endblock %}
+{% block page_title %}My KPI Self-Assessment{% endblock %}
+
+{% block content %}
+{{ selectors.period_selector(active_year, active_period, months=months, action=request.url.path) }}
+
+{% if not submissions %}
+<div class="rounded-xl border border-dashed border-slate-300 bg-white px-6 py-16 text-center">
+    <svg class="mx-auto h-9 w-9 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.5"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h6m-6 4h6m2 5H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5.586a1 1 0 0 1 .707.293l5.414 5.414a1 1 0 0 1 .293.707V19a2 2 0 0 1-2 2Z"/></svg>
+    <p class="mt-3 text-sm font-medium text-slate-600">No KPI records</p>
+    <p class="text-sm text-slate-400">Nothing found for {{ active_period }} {{ active_year }}.</p>
+</div>
+{% else %}
+{% set is_editable = is_current_period and submissions[0].status.value == "draft" %}
+{% set accent = {
+    "draft": "bg-slate-300",
+    "pending_dept_approval": "bg-amber-400",
+    "pending_final_approval": "bg-blue-400",
+    "approved": "bg-emerald-400",
+    "rejected": "bg-red-400",
+} %}
+<div class="mb-6">
+    {{ combined.combined_score_card(combined_score) }}
+</div>
+<form action="/kpi/employee/save" method="post">
+    <input type="hidden" name="year" value="{{ active_year }}" />
+    <input type="hidden" name="period" value="{{ active_period }}" />
+
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        {% for s in submissions %}
+        <div class="relative rounded-xl border border-slate-200 bg-white pt-4 px-4 pb-4 flex flex-col gap-3 overflow-hidden hover:shadow-md hover:border-slate-300 hover:-translate-y-0.5 transition-all">
+            <span class="absolute inset-x-0 top-0 h-1 {{ accent[s.status.value] }}"></span>
+
+            <div>
+                <h4 class="text-sm font-semibold text-slate-800 leading-snug line-clamp-2 min-h-[2.5rem]" title="{{ s.kpi_template.metric_name }}">{{ s.kpi_template.metric_name }}</h4>
+                <p class="text-[11px] text-slate-400 mt-0.5">Target {{ s.kpi_template.target }} · Weight {{ s.kpi_template.weight }}</p>
+            </div>
+
+            {{ badges.status_badge(s.status) }}
+
+            <div class="grid grid-cols-3 gap-1.5 rounded-lg bg-slate-50 px-1.5 py-3">
+                <div class="text-center">
+                    <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Self</p>
+                    {% if is_editable %}
+                    <input type="number" step="0.1" min="0" max="200" name="self_score_{{ s.id }}"
+                           value="{{ s.self_score if s.self_score is not none else '' }}"
+                           class="w-full rounded-lg border border-slate-300 px-1 py-1.5 text-sm text-center tabular-nums focus:outline-none focus:ring-2 focus:ring-brand-500" />
+                    {% else %}
+                    {{ scores.score_badge(s.self_score, s.kpi_template.target) }}
+                    {% endif %}
+                </div>
+                <div class="text-center border-x border-slate-200">
+                    <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Dept</p>
+                    {{ scores.score_badge(s.dept_score, s.kpi_template.target) }}
+                </div>
+                <div class="text-center">
+                    <p class="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Final</p>
+                    {{ scores.score_badge(s.final_score, s.kpi_template.target, size="md") }}
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if is_editable %}
+    <div class="mt-6 flex items-center gap-3">
+        <button type="submit" class="rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 transition">
+            Save Draft
+        </button>
+        <button type="submit" formaction="/kpi/employee/submit"
+                class="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition">
+            Submit for Department Approval
+            <svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3"/></svg>
+        </button>
+    </div>
+    {% else %}
+    <p class="mt-5 flex items-center gap-1.5 text-sm text-slate-500">
+        <svg class="h-4 w-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 9.75h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z"/></svg>
+        This KPI has been submitted and is now read-only. Track its status above.
+    </p>
+    {% endif %}
+</form>
+
+{% if submissions[0].remarks %}
+<div class="mt-6 rounded-2xl border border-slate-200 bg-white shadow-sm px-6 py-5">
+    <h3 class="text-sm font-semibold text-slate-800 mb-1.5">Reviewer Remarks</h3>
+    <p class="text-sm text-slate-600 leading-relaxed">{{ submissions[0].remarks }}</p>
+</div>
+{% endif %}
+{% endif %}
+{% endblock %}

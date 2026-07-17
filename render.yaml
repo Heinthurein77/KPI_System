@@ -1,0 +1,23 @@
+services:
+  - type: web
+    name: kpi-approval-system
+    env: docker
+    plan: free                     # bump to "starter" for no cold-start spin-down + more RAM/CPU
+    region: singapore               # pick the Render region closest to your Neon project (ap-southeast-1)
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: SECRET_KEY
+        generateValue: true         # Render generates a random secret at first deploy — never stored in this file
+      - key: DATABASE_URL
+        sync: false                 # SECRET — set manually in the Render dashboard after the Blueprint deploys.
+                                     # Never commit a real connection string here; this file is meant for git.
+                                     # Paste your Neon pooled URL, e.g.:
+                                     # postgresql://<user>:<password>@<host>-pooler.<region>.aws.neon.tech/<db>?sslmode=require&channel_binding=require
+      - key: PORT
+        value: "10000"               # Render's default web-service port; the Dockerfile's CMD binds to $PORT
+                                     # with a fallback to 8000, so this only matters if Render's default ever changes
+      - key: WEB_CONCURRENCY
+        value: "2"                   # gunicorn worker count — keep low on Free/Starter's limited RAM

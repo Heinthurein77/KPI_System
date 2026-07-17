@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% import "partials/error_card.html" as errors %}
+{% block title %}{{ status_code }} · {{ heading }}{% endblock %}
+{% block page_title %}{{ heading }}{% endblock %}
+
+{% block content %}
+<div class="flex items-center justify-center py-16">
+    {{ errors.error_card(status_code, heading, message) }}
+</div>
+{% endblock %}
+
+{% block guest_content %}
+<div class="min-h-screen flex items-center justify-center bg-slate-50 px-4">
+    {{ errors.error_card(status_code, heading, message) }}
+</div>
+{% endblock %}

@@ -1,0 +1,11 @@
+{% macro error_card(status_code, heading, message) %}
+<div class="rounded-2xl bg-white shadow-sm border border-slate-200 px-8 py-10 max-w-md w-full text-center">
+    <p class="text-sm font-semibold text-brand-600">Error {{ status_code }}</p>
+    <h1 class="mt-2 text-xl font-semibold text-slate-900">{{ heading }}</h1>
+    <p class="mt-2 text-sm text-slate-500">{{ message }}</p>
+    <a href="/dashboard"
+       class="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-brand-700 transition">
+        Back to Dashboard
+    </a>
+</div>
+{% endmacro %}

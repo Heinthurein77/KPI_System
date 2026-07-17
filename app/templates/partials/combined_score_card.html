@@ -1,0 +1,40 @@
+{% macro combined_score_card(combined) %}
+{% if combined is none %}
+<div class="flex items-center gap-3 rounded-xl border border-dashed border-slate-200 bg-slate-50/60 px-5 py-4">
+    <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-400">
+        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="1.8"><path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l2.5 2.5M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z"/></svg>
+    </div>
+    <div>
+        <p class="text-[11px] font-semibold text-slate-400 uppercase tracking-wide">Combined Final KPI Score</p>
+        <p class="text-sm text-slate-400">Appears once at least one metric is final-approved</p>
+    </div>
+</div>
+{% else %}
+{% set chip_styles = {
+    "good": "bg-emerald-50 text-emerald-700",
+    "warning": "bg-amber-50 text-amber-700",
+    "critical": "bg-red-50 text-red-700",
+} %}
+{% set accent = {"good": "bg-emerald-500", "warning": "bg-amber-500", "critical": "bg-red-500"} %}
+{% set labels = {"good": "On Target", "warning": "Near Target", "critical": "Below Target"} %}
+{% set icons = {
+    "good": '<path stroke-linecap="round" stroke-linejoin="round" d="m5 13 4 4L19 7"/>',
+    "warning": '<path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L14.71 3.86a2 2 0 0 0-3.42 0Z"/>',
+    "critical": '<path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12"/>',
+} %}
+<div class="relative flex items-center gap-5 rounded-xl border border-slate-200 bg-white shadow-sm pl-5 pr-5 py-4 overflow-hidden">
+    <span class="absolute inset-y-0 left-0 w-1 {{ accent[combined.status] }}"></span>
+    <div class="min-w-0">
+        <p class="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Combined Final KPI Score</p>
+        <p class="mt-0.5 text-4xl font-bold text-slate-900 leading-none">{{ '%.0f'|format(combined.attainment) }}</p>
+        <p class="mt-1.5 text-xs text-slate-400">{{ combined.scored_count }} of {{ combined.total_count }} metrics finalized</p>
+    </div>
+    <div class="ml-auto shrink-0">
+        <span class="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold {{ chip_styles[combined.status] }}">
+            <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">{{ icons[combined.status]|safe }}</svg>
+            {{ labels[combined.status] }}
+        </span>
+    </div>
+</div>
+{% endif %}
+{% endmacro %}

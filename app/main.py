@@ -24,6 +24,9 @@ app = FastAPI(
     openapi_url=None if settings.is_production else "/openapi.json",
 )
 
+# Empty directories aren't tracked by git, so a fresh clone/deploy can be missing
+# app/static entirely even though it exists locally — self-heal rather than crash.
+os.makedirs("app/static", exist_ok=True)
 app.mount("/static", StaticFiles(directory="app/static"), name="static")
 
 templates = Jinja2Templates(directory="app/templates")

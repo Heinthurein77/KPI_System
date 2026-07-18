@@ -13,6 +13,35 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def force_delete_template(db: Session, template: KPITemplate) -> None:
+    """Permanently delete a KPI template and every submission recorded against it,
+    regardless of status. Super Admin's delete is unconditional by design — this is
+    what backs it. (Dept Admin keeps the separate history-protected delete path.)"""
+    db.query(KPISubmission).filter(KPISubmission.kpi_template_id == template.id).delete(
+        synchronize_session=False
+    )
+    db.delete(template)
+    db.commit()
+
+
+def force_delete_user(db: Session, target: User) -> None:
+    """Permanently delete a user and their own KPI submission history. Submissions
+    they only *reviewed* (not their own) belong to someone else's record, so those
+    are kept — just detached from this reviewer. Backs Super Admin's unconditional
+    user delete (the only user-delete path — Dept Admin never had delete access)."""
+    db.query(KPISubmission).filter(KPISubmission.employee_id == target.id).delete(
+        synchronize_session=False
+    )
+    db.query(KPISubmission).filter(KPISubmission.dept_reviewed_by_id == target.id).update(
+        {"dept_reviewed_by_id": None}, synchronize_session=False
+    )
+    db.query(KPISubmission).filter(KPISubmission.final_reviewed_by_id == target.id).update(
+        {"final_reviewed_by_id": None}, synchronize_session=False
+    )
+    db.delete(target)
+    db.commit()
+
+
 def visible_submissions_query(user: User):
     """Scope submissions to what this role is allowed to see (data isolation)."""
     query = select(KPISubmission).options(

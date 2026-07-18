@@ -185,6 +185,9 @@ def edit_user(
 
 @router.post("/users/{user_id}/delete")
 def delete_user(user_id: int, db: Session = Depends(get_db), user: User = Depends(require_super_admin)):
+    """Super Admin can delete any user unconditionally — including their KPI history.
+    The only guard left is against deleting your own currently-signed-in account,
+    since that would lock you out with no way back in."""
     target = db.get(User, user_id)
     if target is None:
         return RedirectResponse(url="/admin/users", status_code=303)
@@ -193,22 +196,7 @@ def delete_user(user_id: int, db: Session = Depends(get_db), user: User = Depend
         error = quote("You can't delete your own account while signed in.")
         return RedirectResponse(url=f"/admin/users?error={error}", status_code=303)
 
-    has_submissions = db.scalar(
-        select(KPISubmission).where(KPISubmission.employee_id == user_id).limit(1)
-    ) is not None
-    is_reviewer = db.scalar(
-        select(KPISubmission).where(
-            (KPISubmission.dept_reviewed_by_id == user_id) | (KPISubmission.final_reviewed_by_id == user_id)
-        ).limit(1)
-    ) is not None
-    if has_submissions or is_reviewer:
-        error = quote(
-            f'"{target.name}" has KPI history on record and can\'t be deleted — use Disable instead to preserve it.'
-        )
-        return RedirectResponse(url=f"/admin/users?error={error}", status_code=303)
-
-    db.delete(target)
-    db.commit()
+    kpi_service.force_delete_user(db, target)
     return RedirectResponse(url="/admin/users", status_code=303)
 
 
@@ -320,11 +308,18 @@ def create_custom_template(
 
 @router.post("/templates/{template_id}/delete")
 def delete_template(template_id: int, db: Session = Depends(get_db), user: User = Depends(require_dept_admin)):
+    """Super Admin can delete any KPI metric unconditionally — including its submission
+    history — no department or history restrictions. Dept Admin keeps the protected
+    path: own-department metrics only, and blocked once real KPI history exists."""
     template = db.get(KPITemplate, template_id)
     if template is None:
         return RedirectResponse(url="/admin/templates", status_code=303)
 
-    if user.role == UserRole.DEPT_ADMIN and template.department_id != user.department_id:
+    if user.role == UserRole.SUPER_ADMIN:
+        kpi_service.force_delete_template(db, template)
+        return RedirectResponse(url="/admin/templates", status_code=303)
+
+    if template.department_id != user.department_id:
         raise HTTPException(403, "Cannot manage metrics outside your department.")
 
     submissions = db.scalars(select(KPISubmission).where(KPISubmission.kpi_template_id == template_id)).all()

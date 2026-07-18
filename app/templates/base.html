@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{% block title %}KPI System{% endblock %} · KPI Approval System</title>
+    <title>{% block title %}KPI System{% endblock %} · abcMIB KPI Approval System</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -34,8 +34,11 @@
     <!-- Sidebar -->
     <aside class="hidden md:flex md:w-64 md:flex-col bg-slate-900 text-slate-200">
         <div class="flex items-center gap-2.5 px-6 py-5">
-            <div class="h-8 w-8 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center font-bold text-white shadow-sm shadow-brand-900/40">K</div>
-            <span class="text-[15px] font-semibold text-white tracking-tight">KPI System</span>
+            <div class="h-8 w-8 shrink-0 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center font-bold text-white shadow-sm shadow-brand-900/40">K</div>
+            <div class="min-w-0 leading-tight">
+                <p class="text-[15px] font-bold text-white tracking-tight truncate">abcMIB</p>
+                <p class="text-[11px] text-slate-400 truncate">KPI Approval System</p>
+            </div>
         </div>
         <div class="mx-4 border-t border-white/10"></div>
 

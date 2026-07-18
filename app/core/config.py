@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    APP_NAME: str = "KPI Approval System"
+    APP_NAME: str = "abcMIB KPI Approval System"
     ENVIRONMENT: str = "development"
     SECRET_KEY: str = "change-this-secret-key-in-production"
     SESSION_COOKIE_NAME: str = "kpi_session"

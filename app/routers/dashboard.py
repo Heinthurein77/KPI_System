@@ -177,5 +177,5 @@ def dashboard(
         return templates.TemplateResponse(request, "dashboard/dept_admin.html", context)
 
     departments = db.scalars(select(Department)).all()
-    context.update(departments=departments)
+    context.update(departments=departments, is_fresh_install=not departments)
     return templates.TemplateResponse(request, "dashboard/super_admin.html", context)

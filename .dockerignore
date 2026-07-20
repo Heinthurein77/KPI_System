@@ -12,4 +12,11 @@ kpi_system.db
 Dockerfile
 docker-compose*.yml
 README.md
-frontend
+
+# The root Dockerfile's frontend-build stage needs frontend/ source in the build
+# context — only exclude what that stage doesn't need (it runs its own npm ci).
+frontend/node_modules
+frontend/dist
+frontend/.env
+frontend/.env.local
+frontend/.env.test

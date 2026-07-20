@@ -1,58 +1,28 @@
-from fastapi import APIRouter, Depends, Form, Request, status
-from fastapi.responses import RedirectResponse
-from fastapi.templating import Jinja2Templates
+from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
-from app.core.deps import get_current_user_optional
+from app.core.deps import get_current_user
 from app.core.security import create_session_token, verify_password
 from app.database import get_db
 from app.models.user import User
+from app.schemas.auth import LoginRequest, LoginResponse
+from app.schemas.user import UserOut
 
-router = APIRouter(tags=["auth"])
-templates = Jinja2Templates(directory="app/templates")
-
-
-@router.get("/login")
-def login_page(request: Request, user: User | None = Depends(get_current_user_optional)):
-    if user is not None:
-        return RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
-    return templates.TemplateResponse(request, "login.html", {"error": None})
+router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
-@router.post("/login")
-def login_submit(
-    request: Request,
-    email: str = Form(...),
-    password: str = Form(...),
-    db: Session = Depends(get_db),
-):
-    user = db.scalar(select(User).where(User.email == email.strip().lower()))
+@router.post("/login", response_model=LoginResponse)
+def login(payload: LoginRequest, db: Session = Depends(get_db)):
+    user = db.scalar(select(User).where(User.email == payload.email.strip().lower()))
 
-    if user is None or not user.is_active or not verify_password(password, user.password_hash):
-        return templates.TemplateResponse(
-            request,
-            "login.html",
-            {"error": "Invalid email or password."},
-            status_code=status.HTTP_401_UNAUTHORIZED,
-        )
+    if user is None or not user.is_active or not verify_password(payload.password, user.password_hash):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
 
     token = create_session_token(user.id)
-    response = RedirectResponse(url="/dashboard", status_code=status.HTTP_303_SEE_OTHER)
-    response.set_cookie(
-        key=settings.SESSION_COOKIE_NAME,
-        value=token,
-        httponly=True,
-        samesite="lax",
-        secure=settings.is_production,
-        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
-    )
-    return response
+    return LoginResponse(access_token=token, user=user)
 
 
-@router.post("/logout")
-def logout():
-    response = RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
-    response.delete_cookie(settings.SESSION_COOKIE_NAME)
-    return response
+@router.get("/me", response_model=UserOut)
+def me(user: User = Depends(get_current_user)):
+    return user

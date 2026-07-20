@@ -12,4 +12,4 @@ kpi_system.db
 Dockerfile
 docker-compose*.yml
 README.md
-render.yaml
+frontend

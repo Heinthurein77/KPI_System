@@ -1,21 +1,28 @@
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.core.security import decode_session_token
 from app.database import get_db
 from app.models.user import User, UserRole
 
 
 class NotAuthenticated(HTTPException):
-    """Raised for unauthenticated access; routers redirect this to /login."""
+    """Raised for unauthenticated/invalid-token access; the SPA treats this as
+    'redirect to login' (401 with a consistent message the client recognizes)."""
 
     def __init__(self) -> None:
-        super().__init__(status_code=status.HTTP_303_SEE_OTHER, detail="Not authenticated")
+        super().__init__(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
+
+
+def _bearer_token(request: Request) -> str | None:
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.lower().startswith("bearer "):
+        return None
+    return auth_header[len("bearer "):].strip()
 
 
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
-    token = request.cookies.get(settings.SESSION_COOKIE_NAME)
+    token = _bearer_token(request)
     if not token:
         raise NotAuthenticated()
 

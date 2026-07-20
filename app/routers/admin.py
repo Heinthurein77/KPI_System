@@ -1,10 +1,6 @@
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
-from fastapi.templating import Jinja2Templates
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-
-from urllib.parse import quote
 
 from app.core.deps import require_dept_admin, require_super_admin
 from app.core.security import hash_password
@@ -14,52 +10,63 @@ from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.kpi_template import KPITemplate
 from app.models.user import User, UserRole
 from app.routers.dashboard import MONTH_NAMES, current_month_period
+from app.schemas.kpi_template import (
+    CreateCustomTemplateRequest,
+    CreateTemplateRequest,
+    KPITemplateOut,
+)
+from app.schemas.user import (
+    CreateDepartmentRequest,
+    CreateUserRequest,
+    DepartmentOut,
+    DepartmentWithCountOut,
+    UpdateUserRequest,
+    UserOut,
+    UserSummaryOut,
+)
 from app.services import kpi_service
 
-router = APIRouter(prefix="/admin", tags=["admin"])
-templates = Jinja2Templates(directory="app/templates")
+router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 # ---------- Departments (Super Admin only) ----------
 
-@router.get("/departments")
-def list_departments(
-    request: Request,
-    error: str | None = None,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_super_admin),
-):
+@router.get("/departments", response_model=list[DepartmentWithCountOut])
+def list_departments(db: Session = Depends(get_db), user: User = Depends(require_super_admin)):
     departments = db.scalars(select(Department)).all()
-    return templates.TemplateResponse(
-        request, "admin/departments.html", {"departments": departments, "user": user, "error": error}
-    )
+    return [
+        DepartmentWithCountOut(id=d.id, name=d.name, employee_count=len(d.users)) for d in departments
+    ]
 
 
-@router.post("/departments")
-def create_department(name: str = Form(...), db: Session = Depends(get_db), user: User = Depends(require_super_admin)):
-    db.add(Department(name=name.strip()))
+@router.post("/departments", response_model=DepartmentOut)
+def create_department(
+    payload: CreateDepartmentRequest, db: Session = Depends(get_db), user: User = Depends(require_super_admin)
+):
+    department = Department(name=payload.name.strip())
+    db.add(department)
     db.commit()
-    return RedirectResponse(url="/admin/departments", status_code=303)
+    return department
 
 
-@router.post("/departments/{department_id}/delete")
+@router.delete("/departments/{department_id}")
 def delete_department(department_id: int, db: Session = Depends(get_db), user: User = Depends(require_super_admin)):
     department = db.get(Department, department_id)
     if department is None:
-        return RedirectResponse(url="/admin/departments", status_code=303)
+        raise HTTPException(404, "Department not found.")
 
     has_users = db.scalar(select(User).where(User.department_id == department_id).limit(1)) is not None
     has_templates = db.scalar(select(KPITemplate).where(KPITemplate.department_id == department_id).limit(1)) is not None
     if has_users or has_templates:
-        error = quote(
+        raise HTTPException(
+            400,
             f'"{department.name}" still has users or KPI metrics assigned to it. '
-            "Reassign or remove those first."
+            "Reassign or remove those first.",
         )
-        return RedirectResponse(url=f"/admin/departments?error={error}", status_code=303)
 
     db.delete(department)
     db.commit()
-    return RedirectResponse(url="/admin/departments", status_code=303)
+    return {"status": "ok"}
 
 
 # ---------- Users ----------
@@ -67,12 +74,7 @@ def delete_department(department_id: int, db: Session = Depends(get_db), user: U
 # accounts within their own department — strict data isolation from other departments.
 
 @router.get("/users")
-def list_users(
-    request: Request,
-    error: str | None = None,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_dept_admin),
-):
+def list_users(db: Session = Depends(get_db), user: User = Depends(require_dept_admin)):
     if user.role == UserRole.DEPT_ADMIN:
         users = db.scalars(select(User).where(User.department_id == user.department_id)).all()
         departments = []
@@ -82,48 +84,49 @@ def list_users(
         departments = db.scalars(select(Department)).all()
         roles = list(UserRole)
 
-    return templates.TemplateResponse(
-        request,
-        "admin/users.html",
-        {"users": users, "departments": departments, "roles": roles, "user": user, "error": error},
-    )
+    return {
+        "users": [UserOut.model_validate(u) for u in users],
+        "departments": [DepartmentOut.model_validate(d) for d in departments],
+        "roles": [r.value for r in roles],
+    }
 
 
-@router.post("/users")
+@router.get("/users/{user_id}", response_model=UserOut)
+def get_user(user_id: int, db: Session = Depends(get_db), user: User = Depends(require_super_admin)):
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(404, "User not found.")
+    return target
+
+
+@router.post("/users", response_model=UserOut)
 def create_user(
-    name: str = Form(...),
-    email: str = Form(...),
-    password: str = Form(...),
-    role: UserRole = Form(...),
-    department_id: str | None = Form(None),
-    db: Session = Depends(get_db),
-    user: User = Depends(require_dept_admin),
+    payload: CreateUserRequest, db: Session = Depends(get_db), user: User = Depends(require_dept_admin)
 ):
     if user.role == UserRole.DEPT_ADMIN:
-        if role != UserRole.EMPLOYEE:
+        if payload.role != UserRole.EMPLOYEE:
             raise HTTPException(403, "Department Admins can only create Employee accounts.")
         resolved_department_id = user.department_id
     else:
-        resolved_department_id = int(department_id) if department_id else None
+        resolved_department_id = payload.department_id
 
-    db.add(
-        User(
-            name=name.strip(),
-            email=email.strip().lower(),
-            password_hash=hash_password(password),
-            role=role,
-            department_id=resolved_department_id if role != UserRole.SUPER_ADMIN else None,
-        )
+    target = User(
+        name=payload.name.strip(),
+        email=payload.email.strip().lower(),
+        password_hash=hash_password(payload.password),
+        role=payload.role,
+        department_id=resolved_department_id if payload.role != UserRole.SUPER_ADMIN else None,
     )
+    db.add(target)
     db.commit()
-    return RedirectResponse(url="/admin/users", status_code=303)
+    return target
 
 
-@router.post("/users/{user_id}/toggle-active")
+@router.post("/users/{user_id}/toggle-active", response_model=UserOut)
 def toggle_user_active(user_id: int, db: Session = Depends(get_db), user: User = Depends(require_dept_admin)):
     target = db.get(User, user_id)
     if target is None:
-        return RedirectResponse(url="/admin/users", status_code=303)
+        raise HTTPException(404, "User not found.")
 
     if user.role == UserRole.DEPT_ADMIN and (
         target.department_id != user.department_id or target.role != UserRole.EMPLOYEE
@@ -132,36 +135,13 @@ def toggle_user_active(user_id: int, db: Session = Depends(get_db), user: User =
 
     target.is_active = not target.is_active
     db.commit()
-    return RedirectResponse(url="/admin/users", status_code=303)
+    return target
 
 
-@router.get("/users/{user_id}/edit")
-def edit_user_form(
-    user_id: int,
-    request: Request,
-    error: str | None = None,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_super_admin),
-):
-    target = db.get(User, user_id)
-    if target is None:
-        raise HTTPException(404, "User not found.")
-    departments = db.scalars(select(Department)).all()
-    return templates.TemplateResponse(
-        request,
-        "admin/user_edit.html",
-        {"target": target, "departments": departments, "roles": list(UserRole), "user": user, "error": error},
-    )
-
-
-@router.post("/users/{user_id}/edit")
+@router.put("/users/{user_id}", response_model=UserOut)
 def edit_user(
     user_id: int,
-    name: str = Form(...),
-    email: str = Form(...),
-    role: UserRole = Form(...),
-    department_id: str | None = Form(None),
-    password: str | None = Form(None),
+    payload: UpdateUserRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_super_admin),
 ):
@@ -169,35 +149,35 @@ def edit_user(
     if target is None:
         raise HTTPException(404, "User not found.")
 
-    if target.id == user.id and role != UserRole.SUPER_ADMIN:
-        error = quote("You can't demote your own account while signed in as it.")
-        return RedirectResponse(url=f"/admin/users/{user_id}/edit?error={error}", status_code=303)
+    if target.id == user.id and payload.role != UserRole.SUPER_ADMIN:
+        raise HTTPException(400, "You can't demote your own account while signed in as it.")
 
-    target.name = name.strip()
-    target.email = email.strip().lower()
-    target.role = role
-    target.department_id = int(department_id) if department_id and role != UserRole.SUPER_ADMIN else None
-    if password:
-        target.password_hash = hash_password(password)
+    target.name = payload.name.strip()
+    target.email = payload.email.strip().lower()
+    target.role = payload.role
+    target.department_id = (
+        payload.department_id if payload.department_id and payload.role != UserRole.SUPER_ADMIN else None
+    )
+    if payload.password:
+        target.password_hash = hash_password(payload.password)
     db.commit()
-    return RedirectResponse(url="/admin/users", status_code=303)
+    return target
 
 
-@router.post("/users/{user_id}/delete")
+@router.delete("/users/{user_id}")
 def delete_user(user_id: int, db: Session = Depends(get_db), user: User = Depends(require_super_admin)):
     """Super Admin can delete any user unconditionally — including their KPI history.
     The only guard left is against deleting your own currently-signed-in account,
     since that would lock you out with no way back in."""
     target = db.get(User, user_id)
     if target is None:
-        return RedirectResponse(url="/admin/users", status_code=303)
+        raise HTTPException(404, "User not found.")
 
     if target.id == user.id:
-        error = quote("You can't delete your own account while signed in.")
-        return RedirectResponse(url=f"/admin/users?error={error}", status_code=303)
+        raise HTTPException(400, "You can't delete your own account while signed in.")
 
     kpi_service.force_delete_user(db, target)
-    return RedirectResponse(url="/admin/users", status_code=303)
+    return {"status": "ok"}
 
 
 # ---------- KPI Templates (metrics) ----------
@@ -206,12 +186,7 @@ def delete_user(user_id: int, db: Session = Depends(get_db), user: User = Depend
 # see company-wide metrics (since those apply to their team too) but not edit them.
 
 @router.get("/templates")
-def list_templates(
-    request: Request,
-    error: str | None = None,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_dept_admin),
-):
+def list_templates(db: Session = Depends(get_db), user: User = Depends(require_dept_admin)):
     default_year, default_period = current_month_period()
 
     if user.role == UserRole.DEPT_ADMIN:
@@ -233,60 +208,43 @@ def list_templates(
             select(User).where(User.role.in_([UserRole.EMPLOYEE, UserRole.DEPT_ADMIN]))
         ).all()
 
-    return templates.TemplateResponse(
-        request,
-        "admin/templates.html",
-        {
-            "kpi_templates": kpi_templates,
-            "departments": departments,
-            "team": team,
-            "months": MONTH_NAMES,
-            "default_year": default_year,
-            "default_period": default_period,
-            "user": user,
-            "error": error,
-        },
-    )
+    return {
+        "kpi_templates": [KPITemplateOut.model_validate(t) for t in kpi_templates],
+        "departments": [DepartmentOut.model_validate(d) for d in departments],
+        "team": [UserSummaryOut.model_validate(u) for u in team],
+        "months": MONTH_NAMES,
+        "default_year": default_year,
+        "default_period": default_period,
+    }
 
 
-@router.post("/templates")
+@router.post("/templates", response_model=KPITemplateOut)
 def create_template(
-    metric_name: str = Form(...),
-    target: float = Form(...),
-    weight: float = Form(...),
-    department_id: str | None = Form(None),
-    db: Session = Depends(get_db),
-    user: User = Depends(require_dept_admin),
+    payload: CreateTemplateRequest, db: Session = Depends(get_db), user: User = Depends(require_dept_admin)
 ):
     if user.role == UserRole.DEPT_ADMIN:
         resolved_department_id = user.department_id
     else:
-        resolved_department_id = int(department_id) if department_id else None
+        resolved_department_id = payload.department_id
 
-    db.add(
-        KPITemplate(
-            metric_name=metric_name.strip(),
-            target=target,
-            weight=weight,
-            department_id=resolved_department_id,
-        )
+    template = KPITemplate(
+        metric_name=payload.metric_name.strip(),
+        target=payload.target,
+        weight=payload.weight,
+        department_id=resolved_department_id,
     )
+    db.add(template)
     db.commit()
-    return RedirectResponse(url="/admin/templates", status_code=303)
+    return template
 
 
-@router.post("/templates/custom")
+@router.post("/templates/custom", response_model=KPITemplateOut)
 def create_custom_template(
-    employee_id: int = Form(...),
-    metric_name: str = Form(...),
-    target: float = Form(...),
-    weight: float = Form(...),
-    year: int = Form(...),
-    period: str = Form(...),
+    payload: CreateCustomTemplateRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_dept_admin),
 ):
-    employee = db.get(User, employee_id)
+    employee = db.get(User, payload.employee_id)
     if employee is None:
         raise HTTPException(404, "User not found.")
 
@@ -300,24 +258,24 @@ def create_custom_template(
         if employee.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN):
             raise HTTPException(400, "Custom KPIs can only be assigned to Employees or Department Admins.")
 
-    kpi_service.create_custom_employee_kpi(
-        db, employee, metric_name.strip(), target, weight, year, period
+    submission = kpi_service.create_custom_employee_kpi(
+        db, employee, payload.metric_name.strip(), payload.target, payload.weight, payload.year, payload.period
     )
-    return RedirectResponse(url="/admin/templates", status_code=303)
+    return submission.kpi_template
 
 
-@router.post("/templates/{template_id}/delete")
+@router.delete("/templates/{template_id}")
 def delete_template(template_id: int, db: Session = Depends(get_db), user: User = Depends(require_dept_admin)):
     """Super Admin can delete any KPI metric unconditionally — including its submission
     history — no department or history restrictions. Dept Admin keeps the protected
     path: own-department metrics only, and blocked once real KPI history exists."""
     template = db.get(KPITemplate, template_id)
     if template is None:
-        return RedirectResponse(url="/admin/templates", status_code=303)
+        raise HTTPException(404, "Template not found.")
 
     if user.role == UserRole.SUPER_ADMIN:
         kpi_service.force_delete_template(db, template)
-        return RedirectResponse(url="/admin/templates", status_code=303)
+        return {"status": "ok"}
 
     if template.department_id != user.department_id:
         raise HTTPException(403, "Cannot manage metrics outside your department.")
@@ -325,11 +283,11 @@ def delete_template(template_id: int, db: Session = Depends(get_db), user: User 
     submissions = db.scalars(select(KPISubmission).where(KPISubmission.kpi_template_id == template_id)).all()
     blocking = [s for s in submissions if s.status != KPIStatus.DRAFT]
     if blocking:
-        error = quote(
+        raise HTTPException(
+            400,
             f'"{template.metric_name}" already has KPI submissions recorded against it and can\'t be deleted, '
-            "to keep employee KPI history intact."
+            "to keep employee KPI history intact.",
         )
-        return RedirectResponse(url=f"/admin/templates?error={error}", status_code=303)
 
     # Untouched draft rows aren't "history" yet — clean them up along with the template.
     for s in submissions:
@@ -337,4 +295,4 @@ def delete_template(template_id: int, db: Session = Depends(get_db), user: User 
 
     db.delete(template)
     db.commit()
-    return RedirectResponse(url="/admin/templates", status_code=303)
+    return {"status": "ok"}

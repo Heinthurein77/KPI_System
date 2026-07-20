@@ -1,8 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, Request
-from fastapi.responses import RedirectResponse
-from fastapi.templating import Jinja2Templates
+from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -11,10 +9,11 @@ from app.database import get_db
 from app.models.department import Department
 from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.user import User, UserRole
+from app.schemas.kpi import KPISubmissionOut
+from app.schemas.user import DepartmentOut
 from app.services import kpi_service
 
-router = APIRouter(tags=["dashboard"])
-templates = Jinja2Templates(directory="app/templates")
+router = APIRouter(prefix="/api", tags=["dashboard"])
 
 
 MONTH_NAMES = [
@@ -64,14 +63,12 @@ def per_employee_combined_scores(submissions) -> dict[str, dict | None]:
     return {name: combined_final_score(group) for name, group in by_employee.items()}
 
 
-@router.get("/")
-def root():
-    return RedirectResponse(url="/dashboard")
+def _serialize(submissions) -> list[KPISubmissionOut]:
+    return [KPISubmissionOut.model_validate(s) for s in submissions]
 
 
 @router.get("/my-kpi")
 def my_kpi(
-    request: Request,
     year: int | None = None,
     period: str | None = None,
     db: Session = Depends(get_db),
@@ -79,7 +76,7 @@ def my_kpi(
 ):
     """Self-assessment view for a Dept Admin's own custom KPIs (assigned by the Super Admin).
 
-    Regular Employees use /dashboard for this; Dept Admins are normally routed to
+    Regular Employees use /api/dashboard for this; Dept Admins are normally routed to
     their team-review dashboard, so they need a separate place to score their own.
     """
     default_year, default_period = current_month_period()
@@ -97,21 +94,18 @@ def my_kpi(
         ).unique().all()
     submissions.sort(key=lambda s: s.kpi_template.metric_name)
 
-    context = {
-        "user": user,
+    return {
         "active_year": year,
         "active_period": period,
         "months": MONTH_NAMES,
-        "submissions": submissions,
+        "submissions": _serialize(submissions),
         "is_current_period": is_fillable_period,
         "combined_score": combined_final_score(submissions),
     }
-    return templates.TemplateResponse(request, "dashboard/employee.html", context)
 
 
 @router.get("/dashboard")
 def dashboard(
-    request: Request,
     year: int | None = None,
     period: str | None = None,
     status_filter: str | None = None,
@@ -125,7 +119,7 @@ def dashboard(
     resolved_department_id = int(department_id) if department_id else None
 
     context = {
-        "user": user,
+        "role": user.role,
         "active_year": year,
         "active_period": period,
         "status_filter": status_filter or "",
@@ -145,11 +139,11 @@ def dashboard(
             ).unique().all()
         submissions.sort(key=lambda s: s.kpi_template.metric_name)
         context.update(
-            submissions=submissions,
+            submissions=_serialize(submissions),
             is_current_period=is_fillable_period,
             combined_score=combined_final_score(submissions),
         )
-        return templates.TemplateResponse(request, "dashboard/employee.html", context)
+        return context
 
     query = kpi_service.visible_submissions_query(user).where(
         KPISubmission.year == year,
@@ -160,7 +154,7 @@ def dashboard(
     if resolved_department_id and user.role == UserRole.SUPER_ADMIN:
         query = query.where(KPISubmission.department_id == resolved_department_id)
     if user.role == UserRole.DEPT_ADMIN:
-        # A Dept Admin's own KPI isn't reviewed here — see /my-kpi — so keep it off
+        # A Dept Admin's own KPI isn't reviewed here — see /api/my-kpi — so keep it off
         # their team list to avoid an unactionable row that looks broken.
         query = query.where(KPISubmission.employee_id != user.id)
 
@@ -168,14 +162,17 @@ def dashboard(
     submissions.sort(key=lambda s: (s.employee.name, s.kpi_template.metric_name))
 
     context.update(
-        submissions=submissions,
-        statuses=list(KPIStatus),
+        submissions=_serialize(submissions),
+        statuses=[s.value for s in KPIStatus],
         employee_combined=per_employee_combined_scores(submissions),
     )
 
     if user.role == UserRole.DEPT_ADMIN:
-        return templates.TemplateResponse(request, "dashboard/dept_admin.html", context)
+        return context
 
     departments = db.scalars(select(Department)).all()
-    context.update(departments=departments, is_fresh_install=not departments)
-    return templates.TemplateResponse(request, "dashboard/super_admin.html", context)
+    context.update(
+        departments=[DepartmentOut.model_validate(d) for d in departments],
+        is_fresh_install=not departments,
+    )
+    return context

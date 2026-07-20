@@ -8,8 +8,15 @@ class Settings(BaseSettings):
     APP_NAME: str = "abcMIB KPI Approval System"
     ENVIRONMENT: str = "development"
     SECRET_KEY: str = "change-this-secret-key-in-production"
-    SESSION_COOKIE_NAME: str = "kpi_session"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24h
+
+    # Comma-separated list of origins allowed to call this API (the deployed React app's
+    # URL(s)). Defaults to the local Vite dev server.
+    CORS_ORIGINS: str = "http://localhost:5173"
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
     # Falls back to local SQLite when DATABASE_URL is not set (e.g. Neon.tech Postgres URL)
     DATABASE_URL: str | None = None

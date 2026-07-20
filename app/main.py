@@ -1,9 +1,10 @@
 import logging
 import os
+from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -83,14 +84,31 @@ app.include_router(kpi.router)
 app.include_router(admin.router)
 
 
-@app.get("/")
-def root():
-    return {"name": settings.APP_NAME, "status": "ok"}
-
-
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
+
+
+# Single-deployment mode: the React app is built into ./frontend_dist alongside this
+# file (see the root Dockerfile) and served directly, so the whole app — API and UI —
+# lives at one URL, the way the old Jinja2 templates did. Registered last so it never
+# shadows the API routes/healthz above: Starlette matches routes in registration order.
+FRONTEND_DIST = (Path(__file__).resolve().parent.parent / "frontend_dist").resolve()
+
+if FRONTEND_DIST.is_dir():
+
+    @app.get("/{full_path:path}")
+    def serve_frontend(full_path: str):
+        if full_path.startswith(("api/", "docs", "redoc", "openapi.json", "healthz")):
+            raise HTTPException(status_code=404, detail="Not Found")
+
+        candidate = (FRONTEND_DIST / full_path).resolve()
+        if full_path and candidate.is_file() and FRONTEND_DIST in candidate.parents:
+            return FileResponse(candidate)
+
+        # Anything else (including client-side routes like /admin/users) falls
+        # back to index.html so React Router can take over.
+        return FileResponse(FRONTEND_DIST / "index.html")
 
 
 if __name__ == "__main__":

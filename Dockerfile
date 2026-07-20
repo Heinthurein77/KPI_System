@@ -1,3 +1,20 @@
+# ---- Frontend build stage ----
+FROM node:20-alpine AS frontend-build
+WORKDIR /frontend
+
+COPY frontend/package*.json ./
+RUN npm ci
+
+COPY frontend/ .
+
+# Same-origin deploy: the API is served from this same container, so leave the
+# base URL empty and let axios make relative requests instead of an absolute one.
+ARG VITE_API_BASE_URL=""
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+
+RUN npm run build
+
+# ---- Backend stage ----
 FROM python:3.11-slim AS base
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -15,6 +32,7 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY app ./app
+COPY --from=frontend-build /frontend/dist ./frontend_dist
 
 RUN useradd --create-home appuser \
     && chown -R appuser:appuser /app

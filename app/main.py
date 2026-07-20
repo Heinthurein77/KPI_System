@@ -83,6 +83,11 @@ app.include_router(kpi.router)
 app.include_router(admin.router)
 
 
+@app.get("/")
+def root():
+    return {"name": settings.APP_NAME, "status": "ok"}
+
+
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}

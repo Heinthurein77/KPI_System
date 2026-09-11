@@ -1,6 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-
 from app.core.deps import get_current_user, require_dept_admin, require_super_admin
 from app.database import get_db
 from app.models.kpi_submission import KPISubmission

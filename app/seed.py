@@ -8,9 +8,7 @@ Override the default bootstrap account via env vars (recommended for production)
 """
 
 import os
-
 from sqlalchemy import select
-
 from app.core.security import hash_password
 from app.database import Base, SessionLocal, engine
 from app.models.user import User, UserRole

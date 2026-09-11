@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-
 from app.core.deps import require_dept_admin, require_super_admin
 from app.core.security import hash_password
 from app.database import get_db

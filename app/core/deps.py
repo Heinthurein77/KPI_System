@@ -1,6 +1,5 @@
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
-
 from app.core.security import decode_session_token
 from app.database import get_db
 from app.models.user import User, UserRole

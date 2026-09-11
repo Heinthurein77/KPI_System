@@ -1,9 +1,7 @@
 from datetime import date
-
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-
 from app.core.deps import get_current_user
 from app.database import get_db
 from app.models.department import Department
@@ -12,7 +10,7 @@ from app.models.user import User, UserRole
 from app.schemas.kpi import KPISubmissionOut
 from app.schemas.user import DepartmentOut
 from app.services import kpi_service
-
+from typing import Dict, List, Optional, Any
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
 
@@ -34,27 +32,73 @@ def is_current_or_future_period(year: int, period: str, today: date | None = Non
     return (year, MONTH_NAMES.index(period)) >= (current_year, MONTH_NAMES.index(current_period))
 
 
-def combined_final_score(submissions) -> dict | None:
-    """Weight-combined final KPI score (as % of target) across an employee's approved metrics."""
+def combined_final_score(
+    submissions: List[Any], 
+    max_cap: Optional[float] = 120.0
+) -> Optional[Dict[str, Any]]:
+    """
+    Weight-combined final KPI score (as % of target) across an employee's approved metrics.
+    
+    Args:
+        submissions: List of submission objects containing final_score and kpi_template.
+        max_cap: Maximum allowed attainment percentage per metric (e.g., 100.0 or 120.0). 
+                 Set to None to allow uncapped overachievement.
+    """
     weighted_sum = 0.0
     weight_total = 0.0
     scored_count = 0
+
     for s in submissions:
-        if s.final_score is None or not s.kpi_template.target:
+        # Check if score exists and target is non-zero
+        if s.final_score is None or not s.kpi_template or not s.kpi_template.target:
             continue
-        attainment = s.final_score / s.kpi_template.target * 100
-        weight = s.kpi_template.weight or 1.0
+
+        target = float(s.kpi_template.target)
+        actual = float(s.final_score)
+
+        # 1. Calculate Raw Attainment (%)
+        # Check metric direction if attribute exists (default: higher is better)
+        is_lower_better = getattr(s.kpi_template, 'is_lower_better', False)
+        
+        if is_lower_better:
+            # For metrics like Defect Rate, Error Count
+            attainment = (target / actual * 100) if actual > 0 else 100.0
+        else:
+            # Standard metric (higher is better)
+            attainment = (actual / target) * 100
+
+        # 2. Apply Capping Rule (Prevents single-metric distortion)
+        if max_cap is not None:
+            attainment = min(attainment, max_cap)
+
+        # 3. Apply Weightage
+        weight = float(s.kpi_template.weight or 1.0)
+        
         weighted_sum += attainment * weight
         weight_total += weight
         scored_count += 1
 
+    # Return None if no valid scored metrics exist
     if weight_total == 0:
         return None
 
-    combined = weighted_sum / weight_total
-    status = "good" if combined >= 100 else ("warning" if combined >= 85 else "critical")
-    return {"attainment": combined, "status": status, "scored_count": scored_count, "total_count": len(submissions)}
+    # Normalized Weighted Average Score (%)
+    combined_attainment = round(weighted_sum / weight_total, 2)
 
+    # Status Evaluation
+    if combined_attainment >= 100.0:
+        status = "good"
+    elif combined_attainment >= 85.0:
+        status = "warning"
+    else:
+        status = "critical"
+
+    return {
+        "attainment": combined_attainment,
+        "status": status,
+        "scored_count": scored_count,
+        "total_count": len(submissions)
+    }
 
 def per_employee_combined_scores(submissions) -> dict[str, dict | None]:
     by_employee: dict[str, list] = {}

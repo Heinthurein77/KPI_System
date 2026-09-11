@@ -1,13 +1,11 @@
 import logging
 import os
 from pathlib import Path
-
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
-
 from app.core.config import settings
 from app.database import Base, engine
 from app.routers import admin, auth, dashboard, kpi

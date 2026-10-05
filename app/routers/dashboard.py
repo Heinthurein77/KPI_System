@@ -1,4 +1,5 @@
 from datetime import date
+from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -10,12 +11,14 @@ from app.models.user import User, UserRole
 from app.schemas.kpi import KPISubmissionOut
 from app.schemas.user import DepartmentOut
 from app.services import kpi_service
-from typing import Dict, List, Optional, Any
+
 router = APIRouter(prefix="/api", tags=["dashboard"])
+
 MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 ]
+
 
 def current_month_period(today: date | None = None) -> tuple[int, str]:
     today = today or date.today()
@@ -29,78 +32,64 @@ def is_current_or_future_period(year: int, period: str, today: date | None = Non
     return (year, MONTH_NAMES.index(period)) >= (current_year, MONTH_NAMES.index(current_period))
 
 
-def combined_final_score(
-    submissions: List[Any],
-    max_cap: Optional[float] = 120.0
-) -> Optional[Dict[str, Any]]:
-    """
-    Weight-combined final KPI score (as % of target) across an employee's approved metrics.
+def calculate_kpi(kpi_list: List[Dict[str, Any]]) -> tuple[float, str]:
+    # Weight စုစုပေါင်း 100 မပြည့်ပါက Error ပြရန်
+    total_weight = sum(item["weight"] for item in kpi_list)
+    if total_weight != 100:
+        raise ValueError(f"Total weight must be exactly 100%. Current total: {total_weight}%")
 
-    Args:
-        submissions: List of submission objects containing final_score and kpi_template.
-        max_cap: Maximum allowed attainment percentage per metric (e.g., 100.0 or 120.0).
-                 Set to None to allow uncapped overachievement.
-    """
-    weighted_sum = 0.0
-    weight_total = 0.0
-    scored_count = 0
+    total_score = 0.0
+    for item in kpi_list:
+        actual = item["actual"]
+        target = item["target"]
+        weight = item["weight"]
 
+        # Actual က Target ထက် ကျော်လွန်ပါက Error တက်စေရန်
+        if actual > target:
+            raise ValueError(f"Actual ({actual}) cannot be greater than Target ({target}).")
+
+        total_score += (actual / target) * weight
+
+    # Rating သတ်မှတ်ခြင်း
+    if total_score <= 50:
+        rating = "Need to improve "
+    elif total_score <= 75:
+        rating = "Normal"
+    else:
+        rating = "Performance "
+
+    return round(total_score, 2), rating
+
+
+def combined_final_score(submissions: List[Any]) -> Optional[Dict[str, Any]]:
+    """
+    Weight-combined final KPI score using calculate_kpi validation rules.
+    """
+    valid_items = []
     for s in submissions:
-        # Check if score exists and target is non-zero
         if s.final_score is None or not s.kpi_template or not s.kpi_template.target:
             continue
 
-        target = float(s.kpi_template.target)
-        actual = float(s.final_score)
+        valid_items.append({
+            "actual": float(s.final_score),
+            "target": float(s.kpi_template.target),
+            "weight": float(s.kpi_template.weight or 0.0),
+        })
 
-        # 1. Calculate Raw Attainment (%)
-        # Check metric direction if attribute exists (default: higher is better)
-        is_lower_better = getattr(s.kpi_template, 'is_lower_better', False)
-
-        if is_lower_better:
-            # For metrics like Defect Rate, Error Count
-            attainment = (target / actual * 100) if actual > 0 else 100.0
-        else:
-            # Standard metric (higher is better)
-            attainment = (actual / target) * 100
-
-        # 2. Apply Capping Rule (Prevents single-metric distortion)
-        if max_cap is not None:
-            attainment = min(attainment, max_cap)
-
-        # 3. Apply Weightage
-        weight = float(s.kpi_template.weight or 1.0)
-
-        weighted_sum += attainment * weight
-        weight_total += weight
-        scored_count += 1
-
-    # Return None if no valid scored metrics exist
-    if weight_total == 0:
+    if not valid_items:
         return None
 
-    # Normalized Weighted Average Score (%)
-    combined_attainment = round(weighted_sum / weight_total, 2)
-
-    # Status Evaluation
-    if combined_attainment >= 100.0:
-        status = "good"
-    elif combined_attainment >= 85.0:
-        status = "warning"
-    else:
-        status = "critical"
+    total_score, rating = calculate_kpi(valid_items)
 
     return {
-        "attainment": combined_attainment,
-        "status": status,
-        "scored_count": scored_count,
-        "total_count": len(submissions)
+        "attainment": total_score,
+        "status": rating,
+        "scored_count": len(valid_items),
+        "total_count": len(submissions),
     }
 
+
 def per_employee_combined_scores(submissions) -> dict[int, dict | None]:
-    # Keyed by employee id, not name — two employees can share a display name
-    # (common once a tenant has more than a handful of people), and a name key
-    # would silently merge their submissions into one combined score.
     by_employee: dict[int, list] = {}
     for s in submissions:
         by_employee.setdefault(s.employee_id, []).append(s)
@@ -122,15 +111,7 @@ def my_kpi(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Self-assessment view for a Dept Admin's own custom KPIs (assigned by the Super Admin).
-
-    Regular Employees use /api/dashboard for this; Dept Admins are normally routed to
-    their team-review dashboard, so they need a separate place to score their own.
-    """
-    # Allow-list, not deny-list — same rationale as /api/dashboard below: a
-    # platform-level account (tenant_id IS NULL) authenticates fine when no tenant
-    # is resolved for the request, so this must reject it explicitly rather than
-    # silently falling through to ensure_period_submissions with a null tenant.
+    """Self-assessment view for a Dept Admin's own custom KPIs (assigned by the Super Admin)."""
     if user.role != UserRole.DEPT_ADMIN:
         raise HTTPException(403, "This account type cannot access this view.")
 
@@ -157,7 +138,8 @@ def my_kpi(
         "is_current_period": is_fillable_period,
         "combined_score": combined_final_score(submissions),
     }
- 
+
+
 @router.get("/dashboard")
 def dashboard(
     year: int | None = None,
@@ -167,10 +149,6 @@ def dashboard(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    # Allow-list, not deny-list: any account role outside these three (e.g. a
-    # mislabeled/platform-level user somehow holding a tenant-scoped session)
-    # must be rejected explicitly rather than silently falling through to the
-    # tenant-wide admin view below.
     if user.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN, UserRole.TENANT_ADMIN):
         raise HTTPException(403, "This account type cannot access the dashboard.")
 
@@ -215,8 +193,6 @@ def dashboard(
     if resolved_department_id and user.role == UserRole.TENANT_ADMIN:
         query = query.where(KPISubmission.department_id == resolved_department_id)
     if user.role == UserRole.DEPT_ADMIN:
-        # A Dept Admin's own KPI isn't reviewed here — see /api/my-kpi — so keep it off
-        # their team list to avoid an unactionable row that looks broken.
         query = query.where(KPISubmission.employee_id != user.id)
 
     submissions = db.scalars(query).unique().all()

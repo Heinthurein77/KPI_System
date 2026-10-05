@@ -1,5 +1,5 @@
 from datetime import date
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.core.deps import get_current_user
@@ -12,13 +12,10 @@ from app.schemas.user import DepartmentOut
 from app.services import kpi_service
 from typing import Dict, List, Optional, Any
 router = APIRouter(prefix="/api", tags=["dashboard"])
-
-
 MONTH_NAMES = [
     "January", "February", "March", "April", "May", "June",
     "July", "August", "September", "October", "November", "December",
 ]
-
 
 def current_month_period(today: date | None = None) -> tuple[int, str]:
     today = today or date.today()
@@ -33,15 +30,15 @@ def is_current_or_future_period(year: int, period: str, today: date | None = Non
 
 
 def combined_final_score(
-    submissions: List[Any], 
+    submissions: List[Any],
     max_cap: Optional[float] = 120.0
 ) -> Optional[Dict[str, Any]]:
     """
     Weight-combined final KPI score (as % of target) across an employee's approved metrics.
-    
+
     Args:
         submissions: List of submission objects containing final_score and kpi_template.
-        max_cap: Maximum allowed attainment percentage per metric (e.g., 100.0 or 120.0). 
+        max_cap: Maximum allowed attainment percentage per metric (e.g., 100.0 or 120.0).
                  Set to None to allow uncapped overachievement.
     """
     weighted_sum = 0.0
@@ -59,7 +56,7 @@ def combined_final_score(
         # 1. Calculate Raw Attainment (%)
         # Check metric direction if attribute exists (default: higher is better)
         is_lower_better = getattr(s.kpi_template, 'is_lower_better', False)
-        
+
         if is_lower_better:
             # For metrics like Defect Rate, Error Count
             attainment = (target / actual * 100) if actual > 0 else 100.0
@@ -73,7 +70,7 @@ def combined_final_score(
 
         # 3. Apply Weightage
         weight = float(s.kpi_template.weight or 1.0)
-        
+
         weighted_sum += attainment * weight
         weight_total += weight
         scored_count += 1
@@ -100,11 +97,18 @@ def combined_final_score(
         "total_count": len(submissions)
     }
 
-def per_employee_combined_scores(submissions) -> dict[str, dict | None]:
-    by_employee: dict[str, list] = {}
+def per_employee_combined_scores(submissions) -> dict[int, dict | None]:
+    # Keyed by employee id, not name — two employees can share a display name
+    # (common once a tenant has more than a handful of people), and a name key
+    # would silently merge their submissions into one combined score.
+    by_employee: dict[int, list] = {}
     for s in submissions:
-        by_employee.setdefault(s.employee.name, []).append(s)
-    return {name: combined_final_score(group) for name, group in by_employee.items()}
+        by_employee.setdefault(s.employee_id, []).append(s)
+    result: dict[int, dict | None] = {}
+    for employee_id, group in by_employee.items():
+        combined = combined_final_score(group)
+        result[employee_id] = {**combined, "name": group[0].employee.name} if combined else None
+    return result
 
 
 def _serialize(submissions) -> list[KPISubmissionOut]:
@@ -123,6 +127,13 @@ def my_kpi(
     Regular Employees use /api/dashboard for this; Dept Admins are normally routed to
     their team-review dashboard, so they need a separate place to score their own.
     """
+    # Allow-list, not deny-list — same rationale as /api/dashboard below: a
+    # platform-level account (tenant_id IS NULL) authenticates fine when no tenant
+    # is resolved for the request, so this must reject it explicitly rather than
+    # silently falling through to ensure_period_submissions with a null tenant.
+    if user.role != UserRole.DEPT_ADMIN:
+        raise HTTPException(403, "This account type cannot access this view.")
+
     default_year, default_period = current_month_period()
     year = year or default_year
     period = period or default_period
@@ -146,8 +157,7 @@ def my_kpi(
         "is_current_period": is_fillable_period,
         "combined_score": combined_final_score(submissions),
     }
-
-
+ 
 @router.get("/dashboard")
 def dashboard(
     year: int | None = None,
@@ -157,6 +167,13 @@ def dashboard(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    # Allow-list, not deny-list: any account role outside these three (e.g. a
+    # mislabeled/platform-level user somehow holding a tenant-scoped session)
+    # must be rejected explicitly rather than silently falling through to the
+    # tenant-wide admin view below.
+    if user.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN, UserRole.TENANT_ADMIN):
+        raise HTTPException(403, "This account type cannot access the dashboard.")
+
     default_year, default_period = current_month_period()
     year = year or default_year
     period = period or default_period
@@ -195,7 +212,7 @@ def dashboard(
     )
     if status_filter:
         query = query.where(KPISubmission.status == status_filter)
-    if resolved_department_id and user.role == UserRole.SUPER_ADMIN:
+    if resolved_department_id and user.role == UserRole.TENANT_ADMIN:
         query = query.where(KPISubmission.department_id == resolved_department_id)
     if user.role == UserRole.DEPT_ADMIN:
         # A Dept Admin's own KPI isn't reviewed here — see /api/my-kpi — so keep it off
@@ -214,7 +231,7 @@ def dashboard(
     if user.role == UserRole.DEPT_ADMIN:
         return context
 
-    departments = db.scalars(select(Department)).all()
+    departments = db.scalars(select(Department).where(Department.tenant_id == user.tenant_id)).all()
     context.update(
         departments=[DepartmentOut.model_validate(d) for d in departments],
         is_fresh_install=not departments,

@@ -1,0 +1,42 @@
+# Local development stack: the web app plus a throwaway Postgres.
+#   docker compose -f docker-compose.local.yml up --build
+#   docker compose -f docker-compose.local.yml exec web python -m app.seed
+#
+# NOT for servers — production uses docker-compose.yml (web only, external Neon DB).
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: kpi
+      POSTGRES_PASSWORD: kpi
+      POSTGRES_DB: kpi_system
+    ports:
+      # Loopback only: these are throwaway credentials. Connect to 127.0.0.1, not
+      # "localhost" — Windows tries IPv6 first for localhost and stalls for seconds.
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - kpi_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kpi"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  web:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # development keeps /docs available and skips the production-only SECRET_KEY
+      # checks, so no real secret has to live in this (tracked) file.
+      ENVIRONMENT: development
+      SECRET_KEY: local-development-only-not-a-real-secret
+      DATABASE_URL: postgresql://kpi:kpi@db:5432/kpi_system
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  kpi_pg_data:

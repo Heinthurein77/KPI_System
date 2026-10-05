@@ -1,8 +1,9 @@
 
 > frontend@0.0.0 dev
-> vite --host 127.0.0.1 --port 5173
+> vite
 
 
-  VITE v8.1.5  ready in 2193 ms
+  [32m[1mVITE[22m v8.1.5[39m  [2mready in [0m[1m648[22m[2m[0m ms[22m
 
-  ➜  Local:   http://127.0.0.1:5173/
+  [32m➜[39m  [1mLocal[22m:   [36mhttp://localhost:[1m5173[22m/[39m
+[2m  [32m➜[39m  [1mNetwork[22m[2m: use [22m[1m--host[22m[2m to expose[22m

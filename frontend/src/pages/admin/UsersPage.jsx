@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import AppShell from "../../components/layout/AppShell";
+import PageLoading from "../../components/ui/PageLoading";
+import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
 import { createUser, deleteUser, listUsers, toggleUserActive } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
 
@@ -11,25 +14,31 @@ function titleCase(role) {
 
 export default function UsersPage() {
   const { user: currentUser } = useAuth();
+  const toast = useToast();
   const isDeptAdmin = currentUser.role === "dept_admin";
 
   const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("employee");
   const [departmentId, setDepartmentId] = useState("");
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   function load() {
-    listUsers().then(setData);
+    listUsers()
+      .then(setData)
+      .catch((err) => toast.error(getErrorMessage(err)));
   }
 
+  // `toast` is a plain object re-created every render (not memoized by
+  // ToastContext), so listing it here would refetch on every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, []);
 
   async function handleCreate(e) {
     e.preventDefault();
-    setError(null);
     try {
       await createUser({
         name: name.trim(),
@@ -41,41 +50,42 @@ export default function UsersPage() {
       setName("");
       setEmail("");
       setPassword("");
+      toast.success(isDeptAdmin ? "Employee added." : "User created.");
       load();
     } catch (err) {
-      setError(getErrorMessage(err));
+      toast.error(getErrorMessage(err));
     }
   }
 
   async function handleToggle(u) {
-    setError(null);
     try {
       await toggleUserActive(u.id);
+      toast.success(u.is_active ? `${u.name}'s account disabled.` : `${u.name}'s account re-enabled.`);
       load();
     } catch (err) {
-      setError(getErrorMessage(err));
+      toast.error(getErrorMessage(err));
     }
   }
 
-  async function handleDelete(u) {
-    if (!confirm(`Permanently delete ${u.name}?\n\nThis also permanently removes all of their KPI submission history. This cannot be undone.`))
-      return;
-    setError(null);
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
     try {
-      await deleteUser(u.id);
+      await deleteUser(pendingDelete.id);
+      toast.success(`${pendingDelete.name} deleted.`);
+      setPendingDelete(null);
       load();
     } catch (err) {
-      setError(getErrorMessage(err));
+      toast.error(getErrorMessage(err));
+    } finally {
+      setDeleting(false);
     }
   }
 
-  if (!data) return <AppShell title={isDeptAdmin ? "My Team" : "Users"}>{null}</AppShell>;
+  if (!data) return <AppShell title={isDeptAdmin ? "My Team" : "Users"}><PageLoading /></AppShell>;
 
   return (
     <AppShell title={isDeptAdmin ? "My Team" : "Users"}>
-      {error && (
-        <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
-      )}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
@@ -178,7 +188,7 @@ export default function UsersPage() {
                           {!isDeptAdmin && u.id !== currentUser.id && (
                             <button
                               type="button"
-                              onClick={() => handleDelete(u)}
+                              onClick={() => setPendingDelete(u)}
                               title={`Delete ${u.name} (also removes their KPI history)`}
                               className="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-slate-200 text-slate-400 hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition"
                             >
@@ -252,7 +262,7 @@ export default function UsersPage() {
                   onChange={(e) => setDepartmentId(e.target.value)}
                   className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
                 >
-                  <option value="">No department (Super Admin)</option>
+                  <option value="">No department (Tenant Admin)</option>
                   {data.departments.map((d) => (
                     <option key={d.id} value={d.id}>
                       {d.name}
@@ -274,6 +284,15 @@ export default function UsersPage() {
           </form>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={`Delete ${pendingDelete?.name}?`}
+        message="This also permanently removes all of their KPI submission history. This cannot be undone."
+        submitting={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </AppShell>
   );
 }

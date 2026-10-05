@@ -1,15 +1,18 @@
 import { useEffect, useState } from "react";
 import AppShell from "../../components/layout/AppShell";
+import PageLoading from "../../components/ui/PageLoading";
+import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { useAuth } from "../../context/AuthContext";
+import { useToast } from "../../context/ToastContext";
 import { createCustomTemplate, createTemplate, deleteTemplate, listTemplates } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
 
 export default function TemplatesPage() {
   const { user } = useAuth();
+  const toast = useToast();
   const isDeptAdmin = user.role === "dept_admin";
 
   const [data, setData] = useState(null);
-  const [error, setError] = useState(null);
 
   const [metricName, setMetricName] = useState("");
   const [target, setTarget] = useState("");
@@ -22,20 +25,26 @@ export default function TemplatesPage() {
   const [customWeight, setCustomWeight] = useState("");
   const [customYear, setCustomYear] = useState(null);
   const [customPeriod, setCustomPeriod] = useState(null);
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   function load() {
-    listTemplates().then((d) => {
-      setData(d);
-      setCustomYear((y) => y ?? d.default_year);
-      setCustomPeriod((p) => p ?? d.default_period);
-    });
+    listTemplates()
+      .then((d) => {
+        setData(d);
+        setCustomYear((y) => y ?? d.default_year);
+        setCustomPeriod((p) => p ?? d.default_period);
+      })
+      .catch((err) => toast.error(getErrorMessage(err)));
   }
 
+  // `toast` is a plain object re-created every render (not memoized by
+  // ToastContext), so listing it here would refetch on every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, []);
 
   async function handleCreateTemplate(e) {
     e.preventDefault();
-    setError(null);
     try {
       await createTemplate({
         metric_name: metricName.trim(),
@@ -43,18 +52,18 @@ export default function TemplatesPage() {
         weight: Number(weight),
         department_id: isDeptAdmin ? undefined : departmentId || undefined,
       });
+      toast.success(`Metric "${metricName.trim()}" created.`);
       setMetricName("");
       setTarget("");
       setWeight("");
       load();
     } catch (err) {
-      setError(getErrorMessage(err));
+      toast.error(getErrorMessage(err));
     }
   }
 
   async function handleCreateCustom(e) {
     e.preventDefault();
-    setError(null);
     try {
       await createCustomTemplate({
         employee_id: Number(customEmployeeId),
@@ -64,39 +73,38 @@ export default function TemplatesPage() {
         year: Number(customYear),
         period: customPeriod,
       });
+      toast.success(`Custom KPI "${customMetricName.trim()}" added.`);
       setCustomEmployeeId("");
       setCustomMetricName("");
       setCustomTarget("");
       setCustomWeight("");
       load();
     } catch (err) {
-      setError(getErrorMessage(err));
+      toast.error(getErrorMessage(err));
     }
   }
 
-  async function handleDelete(t) {
-    const message = isDeptAdmin
-      ? "Delete this metric?"
-      : `Delete "${t.metric_name}"?\n\nThis also permanently removes all KPI submissions recorded against it. This cannot be undone.`;
-    if (!confirm(message)) return;
-    setError(null);
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
     try {
-      await deleteTemplate(t.id);
+      await deleteTemplate(pendingDelete.id);
+      toast.success("Metric deleted.");
+      setPendingDelete(null);
       load();
     } catch (err) {
-      setError(getErrorMessage(err));
+      toast.error(getErrorMessage(err));
+    } finally {
+      setDeleting(false);
     }
   }
 
-  if (!data) return <AppShell title="KPI Metrics">{null}</AppShell>;
+  if (!data) return <AppShell title="KPI Metrics"><PageLoading /></AppShell>;
 
   const yearOptions = Array.from({ length: 3 }, (_, i) => data.default_year - 1 + i);
 
   return (
     <AppShell title={isDeptAdmin ? "My Department Metrics" : "KPI Metric Templates"}>
-      {error && (
-        <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
-      )}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
@@ -144,7 +152,7 @@ export default function TemplatesPage() {
                           {!isDeptAdmin || t.department_id === user.department_id ? (
                             <button
                               type="button"
-                              onClick={() => handleDelete(t)}
+                              onClick={() => setPendingDelete(t)}
                               title={!isDeptAdmin ? "Delete (also removes its KPI submission history)" : undefined}
                               className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 hover:border-red-300 transition"
                             >
@@ -342,6 +350,17 @@ export default function TemplatesPage() {
           </div>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={isDeptAdmin ? "Delete this metric?" : `Delete "${pendingDelete?.metric_name}"?`}
+        message={
+          isDeptAdmin ? null : "This also permanently removes all KPI submissions recorded against it. This cannot be undone."
+        }
+        submitting={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </AppShell>
   );
 }

@@ -10,6 +10,32 @@ const ACCENT = {
   rejected: "bg-red-400",
 };
 
+const ROLE_LABELS = {
+  super_admin: "Super Admin",
+  tenant_admin: "Tenant Admin",
+  dept_admin: "Dept Admin",
+  employee: "Employee",
+};
+
+// `Number("")` is 0, not NaN, so an emptied or never-filled score field would
+// otherwise submit silently as a real 0 score/approval. Also enforces the
+// same 0–200 range the inputs advertise via min/max, which the browser never
+// validates here since these are plain buttons outside a <form>.
+function isValidScore(value) {
+  if (value === "" || value === null || value === undefined) return false;
+  const n = Number(value);
+  return !Number.isNaN(n) && n >= 0 && n <= 200;
+}
+
+function remarkAuthor(s) {
+  const deptAt = s.dept_reviewed_at ? new Date(s.dept_reviewed_at) : null;
+  const finalAt = s.final_reviewed_at ? new Date(s.final_reviewed_at) : null;
+  if (finalAt && (!deptAt || finalAt >= deptAt)) {
+    return s.final_reviewer ? { user: s.final_reviewer, at: finalAt } : null;
+  }
+  return s.dept_reviewer ? { user: s.dept_reviewer, at: deptAt } : null;
+}
+
 export default function KpiCard({
   submission: s,
   editableSelf = false,
@@ -29,6 +55,7 @@ export default function KpiCard({
   const [overrideOpen, setOverrideOpen] = useState(false);
 
   const canReject = onReject && (s.status === "pending_dept_approval" || s.status === "pending_final_approval");
+  const author = remarkAuthor(s);
 
   return (
     <div className="relative rounded-xl border border-slate-200 bg-white pt-4 px-4 pb-4 flex flex-col gap-3 overflow-hidden hover:shadow-md hover:border-slate-300 hover:-translate-y-0.5 transition-all">
@@ -75,6 +102,31 @@ export default function KpiCard({
         </div>
       </div>
 
+      {s.remarks && (
+        <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2.5">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide">Remarks</p>
+            {author?.at && (
+              <span className="text-[10px] text-amber-600/80 tabular-nums shrink-0">
+                {author.at.toLocaleDateString(undefined, { month: "short", day: "numeric" })}
+              </span>
+            )}
+          </div>
+          <p className="text-xs text-amber-900 leading-relaxed whitespace-pre-wrap">{s.remarks}</p>
+          {author?.user && (
+            <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-amber-200/70">
+              <div className="h-5 w-5 shrink-0 rounded-full bg-amber-200 text-amber-800 flex items-center justify-center text-[10px] font-semibold">
+                {author.user.name[0]?.toUpperCase()}
+              </div>
+              <span className="text-[11px] font-medium text-amber-900 truncate">{author.user.name}</span>
+              <span className="text-[10px] text-amber-600 shrink-0">
+                · {ROLE_LABELS[author.user.role] || author.user.role}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
       {onDeptApprove && s.status === "pending_dept_approval" && (
         <div className="pt-1 border-t border-slate-100 space-y-2 mt-auto">
           <div className="flex items-center gap-2 pt-2">
@@ -99,15 +151,17 @@ export default function KpiCard({
           <div className="flex items-center gap-1.5">
             <button
               type="button"
+              disabled={!isValidScore(deptScore)}
               onClick={() => onDeptSave(s.id, Number(deptScore), deptRemarks || undefined)}
-              className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:border-slate-400 transition"
+              className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:border-slate-400 transition disabled:opacity-60"
             >
               Save
             </button>
             <button
               type="button"
+              disabled={!isValidScore(deptScore)}
               onClick={() => onDeptApprove(s.id, Number(deptScore), deptRemarks || undefined)}
-              className="flex-1 inline-flex items-center justify-center gap-1 rounded-md bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-brand-700 transition"
+              className="flex-1 inline-flex items-center justify-center gap-1 rounded-md bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-brand-700 transition disabled:opacity-60"
             >
               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.4">
                 <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
@@ -145,8 +199,9 @@ export default function KpiCard({
               />
               <button
                 type="button"
+                disabled={!isValidScore(finalScore)}
                 onClick={() => onFinalApprove(s.id, Number(finalScore))}
-                className="w-full inline-flex items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 transition whitespace-nowrap"
+                className="w-full inline-flex items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 transition whitespace-nowrap disabled:opacity-60"
               >
                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.4">
                   <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
@@ -194,8 +249,9 @@ export default function KpiCard({
                   />
                   <button
                     type="button"
+                    disabled={!isValidScore(overrideScore)}
                     onClick={() => onOverride(s.id, Number(overrideScore), overrideRemarks || undefined)}
-                    className="w-full rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800 transition"
+                    className="w-full rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800 transition disabled:opacity-60"
                   >
                     Override &amp; Approve
                   </button>

@@ -17,88 +17,158 @@ function NavLink({ to, active, children, icon }) {
   );
 }
 
-export default function Sidebar() {
+export default function Sidebar({ open = false, onClose }) {
   const { user } = useAuth();
   const { pathname } = useLocation();
 
   return (
-    <aside className="hidden md:flex md:w-64 md:flex-col bg-slate-900 text-slate-200">
-      <div className="flex items-center gap-2.5 px-6 py-5">
-        <div className="h-8 w-8 shrink-0 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center font-bold text-white shadow-sm shadow-brand-900/40">
-          K
-        </div>
-        <div className="min-w-0 leading-tight">
-          <p className="text-[15px] font-bold text-white tracking-tight truncate">abcMIB</p>
-          <p className="text-[11px] text-slate-400 truncate">KPI Approval System</p>
-        </div>
-      </div>
-      <div className="mx-4 border-t border-white/10"></div>
-
-      <nav className="flex-1 px-3 py-5 space-y-0.5">
-        <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">Workspace</p>
-        <NavLink
-          to="/dashboard"
-          active={pathname === "/dashboard"}
-          icon={<path strokeLinecap="round" strokeLinejoin="round" d="M3 13h8V3H3v10Zm10 8h8V11h-8v10Zm0-18v6h8V3h-8ZM3 21h8v-6H3v6Z" />}
-        >
-          Dashboard
-        </NavLink>
-        {user.role === "dept_admin" && (
-          <NavLink
-            to="/my-kpi"
-            active={pathname === "/my-kpi"}
-            icon={
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z"
-              />
-            }
+    <>
+      {open && (
+        <div
+          className="fixed inset-0 z-40 bg-slate-900/50 backdrop-blur-sm md:hidden"
+          onClick={onClose}
+          aria-hidden="true"
+        />
+      )}
+      <aside
+        className={`${open ? "flex" : "hidden"} md:flex fixed md:static inset-y-0 left-0 z-50 w-64 md:w-64 md:shrink-0 flex-col h-screen overflow-y-auto bg-slate-900 text-slate-200 shadow-2xl md:shadow-none`}
+      >
+        <div className="flex items-center gap-2.5 px-6 py-5">
+          <div className="h-8 w-8 shrink-0 rounded-lg bg-gradient-to-br from-brand-500 to-brand-700 flex items-center justify-center font-bold text-white shadow-sm shadow-brand-900/40">
+            K
+          </div>
+          <div className="min-w-0 leading-tight flex-1">
+            <p className="text-[15px] font-bold text-white tracking-tight truncate">abcMIB</p>
+            <p className="text-[11px] text-slate-400 truncate">KPI Approval System</p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="md:hidden -mr-1 shrink-0 inline-flex items-center justify-center h-8 w-8 rounded-lg text-slate-400 hover:bg-white/5 hover:text-white transition"
           >
-            My KPI
-          </NavLink>
-        )}
+            <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div className="mx-4 border-t border-white/10"></div>
 
-        {(user.role === "super_admin" || user.role === "dept_admin") && (
-          <p className="px-3 pt-4 pb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">Manage</p>
-        )}
-        {user.role === "super_admin" && (
-          <NavLink
-            to="/admin/departments"
-            active={pathname.startsWith("/admin/departments")}
-            icon={<path strokeLinecap="round" strokeLinejoin="round" d="M3 21V7l9-4 9 4v14M9 21v-6h6v6" />}
-          >
-            Departments
-          </NavLink>
-        )}
-        {(user.role === "super_admin" || user.role === "dept_admin") && (
+      <nav className="flex-1 px-3 py-5 space-y-0.5" onClick={onClose}>
+        {user.role === "super_admin" ? (
           <>
+            <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">Platform</p>
             <NavLink
-              to="/admin/users"
-              active={pathname.startsWith("/admin/users")}
-              icon={
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M17 20h5v-2a4 4 0 0 0-3-3.87M9 20H4v-2a4 4 0 0 1 3-3.87m5-8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm6 3a4 4 0 1 1-2.6-3.75"
-                />
-              }
+              to="/platform/tenants"
+              active={pathname.startsWith("/platform/tenants")}
+              icon={<path strokeLinecap="round" strokeLinejoin="round" d="M3 21V7l9-4 9 4v14M9 21v-6h6v6" />}
             >
-              {user.role === "dept_admin" ? "My Team" : "Users"}
+              Tenants
             </NavLink>
+          </>
+        ) : (
+          <>
+            <p className="px-3 pb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">Workspace</p>
             <NavLink
-              to="/admin/templates"
-              active={pathname.startsWith("/admin/templates")}
-              icon={
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M9 12h6m-6 3.75h6M9 8.25h1.5M8.25 6h7.5A2.25 2.25 0 0 1 18 8.25v10.5A2.25 2.25 0 0 1 15.75 21H8.25A2.25 2.25 0 0 1 6 18.75V8.25A2.25 2.25 0 0 1 8.25 6Zm2.4-3h2.7a.9.9 0 0 1 .9.9v.6a.9.9 0 0 1-.9.9h-2.7a.9.9 0 0 1-.9-.9v-.6a.9.9 0 0 1 .9-.9Z"
-                />
-              }
+              to="/dashboard"
+              active={pathname === "/dashboard"}
+              icon={<path strokeLinecap="round" strokeLinejoin="round" d="M3 13h8V3H3v10Zm10 8h8V11h-8v10Zm0-18v6h8V3h-8ZM3 21h8v-6H3v6Z" />}
             >
-              KPI Metrics
+              Dashboard
             </NavLink>
+            {user.role === "dept_admin" && (
+              <NavLink
+                to="/my-kpi"
+                active={pathname === "/my-kpi"}
+                icon={
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z"
+                  />
+                }
+              >
+                My KPI
+              </NavLink>
+            )}
+
+            {(user.role === "tenant_admin" || user.role === "dept_admin") && (
+              <p className="px-3 pt-4 pb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">Manage</p>
+            )}
+            {user.role === "tenant_admin" && (
+              <NavLink
+                to="/admin/departments"
+                active={pathname.startsWith("/admin/departments")}
+                icon={<path strokeLinecap="round" strokeLinejoin="round" d="M3 21V7l9-4 9 4v14M9 21v-6h6v6" />}
+              >
+                Departments
+              </NavLink>
+            )}
+            {(user.role === "tenant_admin" || user.role === "dept_admin") && (
+              <>
+                <NavLink
+                  to="/admin/users"
+                  active={pathname.startsWith("/admin/users")}
+                  icon={
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M17 20h5v-2a4 4 0 0 0-3-3.87M9 20H4v-2a4 4 0 0 1 3-3.87m5-8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm6 3a4 4 0 1 1-2.6-3.75"
+                    />
+                  }
+                >
+                  {user.role === "dept_admin" ? "My Team" : "Users"}
+                </NavLink>
+                <NavLink
+                  to="/admin/templates"
+                  active={pathname.startsWith("/admin/templates")}
+                  icon={
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M9 12h6m-6 3.75h6M9 8.25h1.5M8.25 6h7.5A2.25 2.25 0 0 1 18 8.25v10.5A2.25 2.25 0 0 1 15.75 21H8.25A2.25 2.25 0 0 1 6 18.75V8.25A2.25 2.25 0 0 1 8.25 6Zm2.4-3h2.7a.9.9 0 0 1 .9.9v.6a.9.9 0 0 1-.9.9h-2.7a.9.9 0 0 1-.9-.9v-.6a.9.9 0 0 1 .9-.9Z"
+                    />
+                  }
+                >
+                  KPI Metrics
+                </NavLink>
+              </>
+            )}
+
+            {(user.role === "tenant_admin" || user.role === "dept_admin") && (
+              <>
+                <p className="px-3 pt-4 pb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
+                  Insights
+                </p>
+                <NavLink
+                  to="/admin/kpi-trend"
+                  active={pathname.startsWith("/admin/kpi-trend")}
+                  icon={
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M3 3v16.5A1.5 1.5 0 0 0 4.5 21H21M7 15.5 11 10l3 3 5.5-6.5"
+                    />
+                  }
+                >
+                  KPI Trend
+                </NavLink>
+                {user.role === "tenant_admin" && (
+                  <NavLink
+                    to="/admin/audit-log"
+                    active={pathname.startsWith("/admin/audit-log")}
+                    icon={
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M12 9v3.75m9-.75a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9 3.75h.008v.008H12v-.008Z"
+                      />
+                    }
+                  >
+                    Audit Log
+                  </NavLink>
+                )}
+              </>
+            )}
           </>
         )}
       </nav>
@@ -118,6 +188,7 @@ export default function Sidebar() {
           {user.role.replace(/_/g, " ")}
         </span>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

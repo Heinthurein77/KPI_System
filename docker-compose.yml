@@ -1,33 +1,61 @@
+# Production stack: the web app behind Caddy (automatic HTTPS). The database is
+# external (Neon.tech), supplied through DATABASE_URL in .env — there is deliberately
+# no Postgres service. For local development with a bundled Postgres, use
+# docker-compose.local.yml.
 services:
-  db:
-    image: postgres:16-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_USER: kpi
-      POSTGRES_PASSWORD: kpi
-      POSTGRES_DB: kpi_system
-    ports:
-      - "5432:5432"
-    volumes:
-      - kpi_pg_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U kpi"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-
   web:
     build: .
-    restart: unless-stopped
-    ports:
-      - "8000:8000"
+    container_name: kpi-web
+    restart: always
+    env_file: .env
     environment:
+      # Wins over anything in .env, so a forgotten line there can never start the
+      # server in development mode (which would expose /docs and skip key checks).
       ENVIRONMENT: production
-      SECRET_KEY: dev-only-secret-change-me
-      DATABASE_URL: postgresql://kpi:kpi@db:5432/kpi_system
+    # Not published to the host: Caddy reaches it over the compose network, so the
+    # only way in from the internet is through HTTPS.
+    expose:
+      - "8000"
+    # Keep a runaway process from taking SSH and the OS down with it on a 2 GB box;
+    # the container is simply restarted (restart: always) if it ever hits this.
+    mem_limit: 1g
+    # Give gunicorn's graceful-timeout (30s) room to finish in-flight requests
+    # before docker escalates to SIGKILL on `docker compose down/up`.
+    stop_grace_period: 40s
+    # The image ships its own HEALTHCHECK (GET /healthz — never touches the database,
+    # so it can't keep a suspended Neon compute awake).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: kpi-caddy
+    restart: always
     depends_on:
-      db:
+      web:
         condition: service_healthy
+    ports:
+      - "80:80"        # certificate challenge + http -> https redirect
+      - "443:443"
+      - "443:443/udp"  # HTTP/3
+    environment:
+      DOMAIN: "${DOMAIN:?Set DOMAIN in .env to your site hostname, e.g. kpi.example.com}"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The certificates and ACME account live here. Losing this volume means
+      # re-issuing on every redeploy, which quickly hits Let's Encrypt rate limits.
+      - caddy_data:/data
+      - caddy_config:/config
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
-  kpi_pg_data:
+  caddy_data:
+  caddy_config:

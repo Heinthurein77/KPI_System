@@ -5,4 +5,5 @@ venv/
 .env
 *.db
 kpi_system.db
+kpi_system.db.*
 .pytest_cache/

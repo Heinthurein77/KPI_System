@@ -19,14 +19,26 @@ export function AuthProvider({ children }) {
       .then(setUser)
       .catch(() => {
         localStorage.removeItem("access_token");
+        localStorage.removeItem("tenant_slug");
         setUser(null);
       })
       .finally(() => setLoading(false));
   }, []);
 
-  async function login(email, password) {
+  async function login(orgSlug, email, password) {
     try {
-      const data = await authApi.login(email, password);
+      const data = await authApi.login(orgSlug, email, password);
+      localStorage.setItem("access_token", data.access_token);
+      setUser(data.user);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: getErrorMessage(err, "Invalid organization, email, or password.") };
+    }
+  }
+
+  async function platformLogin(email, password) {
+    try {
+      const data = await authApi.platformLogin(email, password);
       localStorage.setItem("access_token", data.access_token);
       setUser(data.user);
       return { ok: true };
@@ -37,11 +49,12 @@ export function AuthProvider({ children }) {
 
   function logout() {
     localStorage.removeItem("access_token");
+    localStorage.removeItem("tenant_slug");
     setUser(null);
   }
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, platformLogin, logout }}>
       {children}
     </AuthContext.Provider>
   );

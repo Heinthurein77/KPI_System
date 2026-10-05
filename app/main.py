@@ -1,16 +1,25 @@
 import logging
 import os
 from pathlib import Path
+from alembic import command
+from alembic.config import Config
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.config import settings
-from app.database import Base, engine
-from app.routers import admin, auth, dashboard, kpi
-
+from app.core.tenant import TenantResolutionMiddleware
+from app.database import engine
+from app.routers import admin, auth, dashboard, kpi, platform
 logger = logging.getLogger("kpi_system")
+
+if settings.is_production and settings.SECRET_KEY == "change-this-secret-key-in-production":
+    raise RuntimeError(
+        "SECRET_KEY is still set to its insecure default. Set a long random SECRET_KEY "
+        "env var before running with ENVIRONMENT=production — every JWT session is "
+        "forgeable by anyone who knows this default otherwise."
+    )
 
 app = FastAPI(
     title=settings.APP_NAME,
@@ -27,32 +36,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Arbitrary fixed id for the schema-creation advisory lock — any int64 works,
+app.add_middleware(TenantResolutionMiddleware)
+
+# Arbitrary fixed id for the schema-migration advisory lock — any int64 works,
 # it just needs to be the same value everywhere this runs.
 _SCHEMA_LOCK_ID = 727271
+
+_ALEMBIC_CFG = Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
 
 
 @app.on_event("startup")
 def on_startup() -> None:
     if settings.is_sqlite:
-        Base.metadata.create_all(bind=engine)
+        command.upgrade(_ALEMBIC_CFG, "head")
         return
 
     # Production runs multiple gunicorn workers that each boot this startup hook
-    # concurrently. SQLAlchemy's create_all() is safe for tables (CREATE TABLE IF
-    # NOT EXISTS) but Postgres ENUM types have no such atomic guard, so two workers
-    # racing to create the same enum type crash with a UniqueViolation. A session-level
-    # advisory lock serializes DDL across worker processes: whoever gets there first
-    # creates the schema; the rest block, then find everything already exists.
+    # concurrently. Alembic's DDL isn't safe run concurrently from multiple
+    # processes (e.g. two workers racing to create the same enum type crash with
+    # a UniqueViolation). A session-level advisory lock serializes migrations
+    # across worker processes: whoever gets there first runs them; the rest
+    # block, then find everything already at head.
     with engine.connect() as conn:
         conn.execute(text("SELECT pg_advisory_lock(:id)"), {"id": _SCHEMA_LOCK_ID})
         try:
-            Base.metadata.create_all(bind=engine)
+            command.upgrade(_ALEMBIC_CFG, "head")
         finally:
             conn.execute(text("SELECT pg_advisory_unlock(:id)"), {"id": _SCHEMA_LOCK_ID})
             conn.commit()
-
-
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     response = await call_next(request)
@@ -80,6 +91,7 @@ app.include_router(auth.router)
 app.include_router(dashboard.router)
 app.include_router(kpi.router)
 app.include_router(admin.router)
+app.include_router(platform.router)
 
 
 @app.get("/healthz")

@@ -31,6 +31,11 @@ class KPISubmission(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant: Mapped["Tenant"] = relationship()  # noqa: F821
+
     employee_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     department_id: Mapped[int | None] = mapped_column(
         ForeignKey("departments.id", ondelete="SET NULL"), nullable=True

@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from app.core.deps import get_current_user, require_dept_admin, require_super_admin
+from app.core.deps import get_current_user, require_dept_admin, require_tenant_admin
 from app.database import get_db
 from app.models.kpi_submission import KPISubmission
 from app.models.user import User, UserRole
@@ -35,10 +35,12 @@ def employee_save_scores(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    # Regular Employees self-assess their recurring metrics; a Dept Admin can also
-    # land here to self-score a custom KPI Super Admin assigned them directly.
-    if user.role == UserRole.SUPER_ADMIN:
-        raise HTTPException(403, "Super Admins do not self-assess.")
+    # Allow-list, not deny-list: only Employees and Dept Admins self-assess. A
+    # Tenant Admin never does, and neither does a platform-level account
+    # (tenant_id IS NULL) that happens to authenticate here when no tenant is
+    # resolved for the request.
+    if user.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN):
+        raise HTTPException(403, "This account type does not self-assess.")
 
     if payload.scores:
         kpi_service.save_self_scores(db, user, {int(k): v for k, v in payload.scores.items()})
@@ -52,8 +54,8 @@ def employee_submit(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    if user.role == UserRole.SUPER_ADMIN:
-        raise HTTPException(403, "Super Admins do not self-assess.")
+    if user.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN):
+        raise HTTPException(403, "This account type does not self-assess.")
 
     if payload.scores:
         kpi_service.save_self_scores(db, user, {int(k): v for k, v in payload.scores.items()})
@@ -91,7 +93,7 @@ def final_approve(
     submission_id: int,
     payload: FinalApproveRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_super_admin),
+    user: User = Depends(require_tenant_admin),
 ):
     submission = kpi_service.get_submission_scoped(db, user, submission_id)
     kpi_service.final_approve(db, user, submission, payload.final_score, payload.remarks)
@@ -99,14 +101,14 @@ def final_approve(
 
 
 @router.post("/{submission_id}/override", response_model=KPISubmissionOut)
-def super_admin_override(
+def tenant_admin_override(
     submission_id: int,
     payload: OverrideRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_super_admin),
+    user: User = Depends(require_tenant_admin),
 ):
     submission = kpi_service.get_submission_scoped(db, user, submission_id)
-    kpi_service.super_admin_override(db, user, submission, payload.final_score, payload.remarks)
+    kpi_service.tenant_admin_override(db, user, submission, payload.final_score, payload.remarks)
     return submission
 
 
@@ -118,5 +120,5 @@ def reject(
     user: User = Depends(require_dept_admin),
 ):
     submission = kpi_service.get_submission_scoped(db, user, submission_id)
-    kpi_service.reject_submission(db, submission, payload.remarks)
+    kpi_service.reject_submission(db, user, submission, payload.remarks)
     return submission

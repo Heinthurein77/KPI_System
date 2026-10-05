@@ -29,6 +29,12 @@ client.interceptors.request.use((config) => {
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
+  // Identifies which tenant a request belongs to (see app/core/tenant.py).
+  // Unset for platform-admin sessions (/platform/*), which aren't tenant-scoped.
+  const tenantSlug = localStorage.getItem("tenant_slug");
+  if (tenantSlug) {
+    config.headers["X-Tenant-Slug"] = tenantSlug;
+  }
   return config;
 });
 

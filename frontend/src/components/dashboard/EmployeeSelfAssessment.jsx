@@ -1,27 +1,42 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import PeriodSelector from "../ui/PeriodSelector";
 import CombinedScoreCard from "../ui/CombinedScoreCard";
 import KpiCard from "../ui/KpiCard";
 import EmptyState from "../ui/EmptyState";
+import PageLoading from "../ui/PageLoading";
+import { STYLES as STATUS_STYLES, LABELS as STATUS_LABELS } from "../ui/statusMeta";
 import { employeeSaveScores, employeeSubmit } from "../../api/kpi";
 import { getErrorMessage } from "../../api/errors";
+import { useToast } from "../../context/ToastContext";
 
 export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI records" }) {
+  const toast = useToast();
   const [data, setData] = useState(null);
   const [scores, setScores] = useState({});
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
   const [params, setParams] = useState({});
+  const loadIdRef = useRef(0);
 
   function load(nextParams) {
-    fetcher(nextParams).then((d) => {
-      setData(d);
-      const initial = {};
-      d.submissions.forEach((s) => {
-        initial[s.id] = s.self_score ?? "";
+    // Guard against out-of-order responses: switching the period while a
+    // previous request is still in flight must not let a stale response
+    // overwrite the newer one.
+    const requestId = ++loadIdRef.current;
+    fetcher(nextParams)
+      .then((d) => {
+        if (loadIdRef.current !== requestId) return;
+        setData(d);
+        const initial = {};
+        d.submissions.forEach((s) => {
+          initial[s.id] = s.self_score ?? "";
+        });
+        setScores(initial);
+      })
+      .catch((err) => {
+        if (loadIdRef.current !== requestId) return;
+        toast.error(getErrorMessage(err));
       });
-      setScores(initial);
-    });
   }
 
   useEffect(() => {
@@ -29,7 +44,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (!data) return null;
+  if (!data) return <PageLoading />;
 
   const isEditable = data.is_current_period && data.submissions[0]?.status === "draft";
 
@@ -57,6 +72,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     setError(null);
     try {
       await employeeSaveScores({ year: data.active_year, period: data.active_period, scores: buildScoresPayload() });
+      toast.success("Draft saved.");
       load(params);
     } catch (err) {
       setError(getErrorMessage(err));
@@ -70,6 +86,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     setError(null);
     try {
       await employeeSubmit({ year: data.active_year, period: data.active_period, scores: buildScoresPayload() });
+      toast.success("Submitted for department approval.");
       load(params);
     } catch (err) {
       setError(getErrorMessage(err));
@@ -95,6 +112,25 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
         <EmptyState title={emptyTitle} message={`Nothing found for ${data.active_period} ${data.active_year}.`} />
       ) : (
         <>
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide mr-1">
+              {data.submissions.length} metric{data.submissions.length !== 1 ? "s" : ""}
+            </span>
+            {Object.entries(
+              data.submissions.reduce((acc, s) => {
+                acc[s.status] = (acc[s.status] || 0) + 1;
+                return acc;
+              }, {})
+            ).map(([status, count]) => (
+              <span
+                key={status}
+                className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${STATUS_STYLES[status] || "bg-slate-100 text-slate-600"}`}
+              >
+                {count} {STATUS_LABELS[status] || status}
+              </span>
+            ))}
+          </div>
+
           <div className="mb-6">
             <CombinedScoreCard combined={data.combined_score} />
           </div>
@@ -144,13 +180,6 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
               </svg>
               This KPI has been submitted and is now read-only. Track its status above.
             </p>
-          )}
-
-          {data.submissions[0]?.remarks && (
-            <div className="mt-6 rounded-2xl border border-slate-200 bg-white shadow-sm px-6 py-5">
-              <h3 className="text-sm font-semibold text-slate-800 mb-1.5">Reviewer Remarks</h3>
-              <p className="text-sm text-slate-600 leading-relaxed">{data.submissions[0].remarks}</p>
-            </div>
           )}
         </>
       )}

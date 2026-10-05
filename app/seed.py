@@ -1,33 +1,37 @@
-"""Seed the database with a single Super Admin account — no sample departments,
-employees, or KPI metrics. Everything else is created from the admin UI.
+"""Seed a platform-level Super Admin account (tenant_id IS NULL) — no tenants,
+departments, employees, or KPI metrics. Tenants are created from the Platform
+portal after logging in as this account.
 
 Run with: python -m app.seed
 
 Override the default bootstrap account via env vars (recommended for production):
-  SUPER_ADMIN_NAME, SUPER_ADMIN_EMAIL, SUPER_ADMIN_PASSWORD
+  PLATFORM_SUPER_ADMIN_NAME, PLATFORM_SUPER_ADMIN_EMAIL, PLATFORM_SUPER_ADMIN_PASSWORD
 """
 
 import os
 from sqlalchemy import select
 from app.core.security import hash_password
-from app.database import Base, SessionLocal, engine
+from app.database import SessionLocal
 from app.models.user import User, UserRole
 
-SUPER_ADMIN_NAME = os.getenv("SUPER_ADMIN_NAME", "Super Admin")
-SUPER_ADMIN_EMAIL = os.getenv("SUPER_ADMIN_EMAIL", "admin@kpi.com")
-SUPER_ADMIN_PASSWORD = os.getenv("SUPER_ADMIN_PASSWORD", "Password123!")
+SUPER_ADMIN_NAME = os.getenv("PLATFORM_SUPER_ADMIN_NAME", "Platform Super Admin")
+SUPER_ADMIN_EMAIL = os.getenv("PLATFORM_SUPER_ADMIN_EMAIL", "platform-admin@kpi.com")
+SUPER_ADMIN_PASSWORD = os.getenv("PLATFORM_SUPER_ADMIN_PASSWORD", "Password123!")
 
 
 def run() -> None:
-    Base.metadata.create_all(bind=engine)
+    # Schema is managed by Alembic migrations (see app/migrations/), applied at
+    # app startup — this script only seeds data, on an already-migrated DB.
     db = SessionLocal()
     try:
-        if db.scalar(select(User).limit(1)) is not None:
-            print("Database already has users — skipping seed.")
+        existing = db.scalar(select(User).where(User.tenant_id.is_(None)).limit(1))
+        if existing is not None:
+            print("A platform Super Admin already exists — skipping seed.")
             return
 
         db.add(
             User(
+                tenant_id=None,
                 name=SUPER_ADMIN_NAME,
                 email=SUPER_ADMIN_EMAIL,
                 password_hash=hash_password(SUPER_ADMIN_PASSWORD),
@@ -37,12 +41,12 @@ def run() -> None:
         )
         db.commit()
 
-        print("Seed complete — Super Admin account created:")
+        print("Seed complete — platform Super Admin account created:")
         print(f"  Email:    {SUPER_ADMIN_EMAIL}")
         print(f"  Password: {SUPER_ADMIN_PASSWORD}")
         if SUPER_ADMIN_PASSWORD == "Password123!":
             print("  WARNING: change this password after first login in production.")
-        print("Sign in and create departments, users, and KPI metrics from the admin UI.")
+        print("Sign in at /platform/login and create tenants from the Platform portal.")
     finally:
         db.close()
 

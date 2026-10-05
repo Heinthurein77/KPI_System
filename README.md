@@ -75,21 +75,27 @@ Change the password after first login regardless.
 ## Local Setup with Docker (Postgres)
 
 ```bash
-docker compose up --build
+docker compose -f docker-compose.local.yml up --build
+docker compose -f docker-compose.local.yml exec web python -m app.seed
+```
+
+App (API + UI) available at http://localhost:8000.
+
+### Production stack with Docker (web only, external Neon database)
+
+`docker-compose.yml` is the production stack: the web app behind Caddy (automatic HTTPS,
+see `Caddyfile`), no Postgres service. Copy `.env.example` to `.env` (gitignored — never
+commit real credentials), fill in `SECRET_KEY`, `DATABASE_URL` and `DOMAIN`, point the
+domain's DNS A record at the server, then:
+
+```bash
+docker compose up -d --build
 docker compose exec web python -m app.seed
 ```
 
-Backend available at http://localhost:8000. Run the frontend separately with `npm run dev`.
-
-### Local Setup with Docker against Neon (no local Postgres)
-
-```bash
-# .env (gitignored — never commit real credentials)
-DATABASE_URL=postgresql://user:password@ep-xxxx-pooler.region.aws.neon.tech/dbname?sslmode=require&channel_binding=require
-
-docker compose -f docker-compose.neon.yml up --build
-docker compose -f docker-compose.neon.yml exec web python -m app.seed
-```
+Only Caddy is exposed (ports 80/443); the app container is reachable only through it.
+Because the stack forces `ENVIRONMENT=production`, it refuses to start without a real
+`SECRET_KEY` and a `DATABASE_URL`.
 
 Note: since `.env` is auto-loaded by `pydantic-settings`, once it contains a real
 `DATABASE_URL`, **any** local command (including a bare `uvicorn app.main:app --reload`

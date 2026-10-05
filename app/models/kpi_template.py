@@ -21,6 +21,11 @@ class KPITemplate(Base):
     target: Mapped[float] = mapped_column(Float, nullable=False, default=100.0)
     weight: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
 
+    tenant_id: Mapped[int] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    tenant: Mapped["Tenant"] = relationship()  # noqa: F821
+
     department_id: Mapped[int | None] = mapped_column(
         ForeignKey("departments.id", ondelete="CASCADE"), nullable=True
     )

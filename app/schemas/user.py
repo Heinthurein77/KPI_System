@@ -20,6 +20,7 @@ class UserOut(BaseModel):
     email: str
     role: UserRole
     is_active: bool
+    tenant_id: int | None
     department_id: int | None
     department: DepartmentOut | None = None
 

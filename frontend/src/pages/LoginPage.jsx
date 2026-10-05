@@ -1,24 +1,25 @@
 import { useState } from "react";
-import { Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
 export default function LoginPage() {
   const { user, login } = useAuth();
   const navigate = useNavigate();
+  const [orgSlug, setOrgSlug] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
   if (user) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={user.role === "super_admin" ? "/platform/tenants" : "/dashboard"} replace />;
   }
 
   async function handleSubmit(e) {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
-    const result = await login(email, password);
+    const result = await login(orgSlug, email, password);
     setSubmitting(false);
     if (result.ok) {
       navigate("/dashboard", { replace: true });
@@ -110,6 +111,21 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="mt-7 space-y-4">
             <div>
+              <label htmlFor="orgSlug" className="block text-sm font-medium text-slate-700 mb-1.5">
+                Organization
+              </label>
+              <input
+                id="orgSlug"
+                type="text"
+                required
+                autoFocus
+                value={orgSlug}
+                onChange={(e) => setOrgSlug(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                placeholder="your-company"
+              />
+            </div>
+            <div>
               <label htmlFor="email" className="block text-sm font-medium text-slate-700 mb-1.5">
                 Email
               </label>
@@ -117,7 +133,6 @@ export default function LoginPage() {
                 id="email"
                 type="email"
                 required
-                autoFocus
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
@@ -149,6 +164,13 @@ export default function LoginPage() {
               </svg>
             </button>
           </form>
+
+          <p className="mt-6 text-center text-xs text-slate-400">
+            Platform administrator?{" "}
+            <Link to="/platform/login" className="font-medium text-slate-500 hover:text-brand-600">
+              Sign in here
+            </Link>
+          </p>
         </div>
       </div>
     </div>

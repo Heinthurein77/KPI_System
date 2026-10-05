@@ -6,11 +6,15 @@ __pycache__
 .env
 .env.example
 *.db
-kpi_system.db
+kpi_system.db*
+*.log
+.claude
+app/tests
 .pytest_cache
 .dockerignore
 Dockerfile
 docker-compose*.yml
+Caddyfile
 README.md
 
 # The root Dockerfile's frontend-build stage needs frontend/ source in the build

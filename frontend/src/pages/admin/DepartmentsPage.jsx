@@ -1,47 +1,60 @@
 import { useEffect, useState } from "react";
 import AppShell from "../../components/layout/AppShell";
+import PageLoading from "../../components/ui/PageLoading";
+import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { createDepartment, deleteDepartment, listDepartments } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
+import { useToast } from "../../context/ToastContext";
 
 export default function DepartmentsPage() {
-  const [departments, setDepartments] = useState([]);
+  const toast = useToast();
+  const [departments, setDepartments] = useState(null);
   const [name, setName] = useState("");
-  const [error, setError] = useState(null);
+  const [pendingDelete, setPendingDelete] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   function load() {
-    listDepartments().then(setDepartments);
+    listDepartments()
+      .then(setDepartments)
+      .catch((err) => toast.error(getErrorMessage(err)));
   }
 
+  // `toast` is a plain object re-created every render (not memoized by
+  // ToastContext), so listing it here would refetch on every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, []);
 
   async function handleCreate(e) {
     e.preventDefault();
-    setError(null);
     try {
       await createDepartment({ name: name.trim() });
+      toast.success(`Department "${name.trim()}" created.`);
       setName("");
       load();
     } catch (err) {
-      setError(getErrorMessage(err));
+      toast.error(getErrorMessage(err));
     }
   }
 
-  async function handleDelete(d) {
-    if (!confirm("Delete this department?")) return;
-    setError(null);
+  async function confirmDelete() {
+    if (!pendingDelete) return;
+    setDeleting(true);
     try {
-      await deleteDepartment(d.id);
+      await deleteDepartment(pendingDelete.id);
+      toast.success(`Department "${pendingDelete.name}" deleted.`);
+      setPendingDelete(null);
       load();
     } catch (err) {
-      setError(getErrorMessage(err));
+      toast.error(getErrorMessage(err));
+    } finally {
+      setDeleting(false);
     }
   }
+
+  if (!departments) return <AppShell title="Departments"><PageLoading /></AppShell>;
 
   return (
     <AppShell title="Departments">
-      {error && (
-        <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
-      )}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
@@ -77,7 +90,7 @@ export default function DepartmentsPage() {
                       <td className="px-6 py-4 text-right">
                         <button
                           type="button"
-                          onClick={() => handleDelete(d)}
+                          onClick={() => setPendingDelete(d)}
                           className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 hover:border-red-300 transition"
                         >
                           <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -121,6 +134,15 @@ export default function DepartmentsPage() {
           </form>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title={`Delete "${pendingDelete?.name}"?`}
+        message="This can't be undone. Departments with employees or KPI metrics still assigned can't be deleted."
+        submitting={deleting}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(null)}
+      />
     </AppShell>
   );
 }

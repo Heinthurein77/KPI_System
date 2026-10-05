@@ -36,6 +36,18 @@ export function deleteUser(id) {
   return client.delete(`/api/admin/users/${id}`).then((r) => r.data);
 }
 
+export function getUserKpiTrend(id, year) {
+  return client
+    .get(`/api/admin/users/${id}/kpi-trend`, { params: year ? { year } : {} })
+    .then((r) => r.data);
+}
+
+export function getUserSubmissionsForPeriod(id, year, period) {
+  return client
+    .get(`/api/admin/users/${id}/submissions`, { params: { year, period } })
+    .then((r) => r.data);
+}
+
 export function listTemplates() {
   return client.get("/api/admin/templates").then((r) => r.data);
 }
@@ -50,4 +62,8 @@ export function createCustomTemplate(payload) {
 
 export function deleteTemplate(id) {
   return client.delete(`/api/admin/templates/${id}`).then((r) => r.data);
+}
+
+export function getAuditLog(limit) {
+  return client.get("/api/admin/audit-log", { params: limit ? { limit } : {} }).then((r) => r.data);
 }

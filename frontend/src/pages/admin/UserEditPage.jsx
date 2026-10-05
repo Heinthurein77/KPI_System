@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import AppShell from "../../components/layout/AppShell";
+import PageLoading from "../../components/ui/PageLoading";
 import { getUser, listDepartments, updateUser } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
+import { useToast } from "../../context/ToastContext";
 
-const ROLES = ["employee", "dept_admin", "super_admin"];
+const ROLES = ["employee", "dept_admin", "tenant_admin"];
 
 function titleCase(role) {
   return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -13,6 +15,7 @@ function titleCase(role) {
 export default function UserEditPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const toast = useToast();
   const [target, setTarget] = useState(null);
   const [departments, setDepartments] = useState([]);
   const [name, setName] = useState("");
@@ -23,14 +26,19 @@ export default function UserEditPage() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    Promise.all([getUser(id), listDepartments()]).then(([u, depts]) => {
-      setTarget(u);
-      setDepartments(depts);
-      setName(u.name);
-      setEmail(u.email);
-      setRole(u.role);
-      setDepartmentId(u.department_id ?? "");
-    });
+    Promise.all([getUser(id), listDepartments()])
+      .then(([u, depts]) => {
+        setTarget(u);
+        setDepartments(depts);
+        setName(u.name);
+        setEmail(u.email);
+        setRole(u.role);
+        setDepartmentId(u.department_id ?? "");
+      })
+      .catch((err) => toast.error(getErrorMessage(err)));
+    // `toast` is a plain object re-created every render (not memoized by
+    // ToastContext), so listing it here would refetch on every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   async function handleSubmit(e) {
@@ -44,13 +52,14 @@ export default function UserEditPage() {
         department_id: departmentId || undefined,
         password: password || undefined,
       });
+      toast.success(`${name.trim()} updated.`);
       navigate("/admin/users");
     } catch (err) {
       setError(getErrorMessage(err));
     }
   }
 
-  if (!target) return <AppShell title="Edit User">{null}</AppShell>;
+  if (!target) return <AppShell title="Edit User"><PageLoading /></AppShell>;
 
   return (
     <AppShell title="Edit User">
@@ -112,7 +121,7 @@ export default function UserEditPage() {
                 onChange={(e) => setDepartmentId(e.target.value)}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
               >
-                <option value="">No department (Super Admin)</option>
+                <option value="">No department (Tenant Admin)</option>
                 {departments.map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.name}

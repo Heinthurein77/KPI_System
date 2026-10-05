@@ -1,20 +1,30 @@
 from datetime import datetime, timezone
+
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
+
 from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.kpi_template import KPITemplate
 from app.models.user import User, UserRole
+from app.services import audit_service
+from app.services.audit_service import fmt_score
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def force_delete_template(db: Session, template: KPITemplate) -> None:
+def force_delete_template(db: Session, actor: User, template: KPITemplate) -> None:
     """Permanently delete a KPI template and every submission recorded against it,
-    regardless of status. Super Admin's delete is unconditional by design — this is
+    regardless of status. Tenant Admin's delete is unconditional by design — this is
     what backs it. (Dept Admin keeps the separate history-protected delete path.)"""
+    audit_service.log(
+        db, actor, "kpi_template_deleted", "kpi_template", template.id, template.metric_name,
+        f"KPI metric deleted (target={fmt_score(template.target)}, weight={fmt_score(template.weight)}), "
+        "including all submission history.",
+        department_id=template.department_id,
+    )
     db.query(KPISubmission).filter(KPISubmission.kpi_template_id == template.id).delete(
         synchronize_session=False
     )
@@ -22,11 +32,16 @@ def force_delete_template(db: Session, template: KPITemplate) -> None:
     db.commit()
 
 
-def force_delete_user(db: Session, target: User) -> None:
+def force_delete_user(db: Session, actor: User, target: User) -> None:
     """Permanently delete a user and their own KPI submission history. Submissions
     they only *reviewed* (not their own) belong to someone else's record, so those
     are kept — just detached from this reviewer. Backs Super Admin's unconditional
     user delete (the only user-delete path — Dept Admin never had delete access)."""
+    audit_service.log(
+        db, actor, "user_deleted", "user", target.id, target.name,
+        f"User deleted ({target.role.value}), including their own KPI submission history.",
+        department_id=target.department_id,
+    )
     db.query(KPISubmission).filter(KPISubmission.employee_id == target.id).delete(
         synchronize_session=False
     )
@@ -46,9 +61,11 @@ def visible_submissions_query(user: User):
         joinedload(KPISubmission.employee),
         joinedload(KPISubmission.kpi_template),
         joinedload(KPISubmission.department),
-    )
+        joinedload(KPISubmission.dept_reviewer),
+        joinedload(KPISubmission.final_reviewer),
+    ).where(KPISubmission.tenant_id == user.tenant_id)
 
-    if user.role == UserRole.SUPER_ADMIN:
+    if user.role == UserRole.TENANT_ADMIN:
         return query
     if user.role == UserRole.DEPT_ADMIN:
         return query.where(KPISubmission.department_id == user.department_id)
@@ -61,7 +78,9 @@ def own_submissions_query(user: User):
         joinedload(KPISubmission.employee),
         joinedload(KPISubmission.kpi_template),
         joinedload(KPISubmission.department),
-    ).where(KPISubmission.employee_id == user.id)
+        joinedload(KPISubmission.dept_reviewer),
+        joinedload(KPISubmission.final_reviewer),
+    ).where(KPISubmission.employee_id == user.id, KPISubmission.tenant_id == user.tenant_id)
 
 
 def get_submission_scoped(db: Session, user: User, submission_id: int) -> KPISubmission:
@@ -72,9 +91,11 @@ def get_submission_scoped(db: Session, user: User, submission_id: int) -> KPISub
             joinedload(KPISubmission.employee),
             joinedload(KPISubmission.kpi_template),
             joinedload(KPISubmission.department),
+            joinedload(KPISubmission.dept_reviewer),
+            joinedload(KPISubmission.final_reviewer),
         ],
     )
-    if submission is None:
+    if submission is None or submission.tenant_id != user.tenant_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Submission not found.")
 
     if user.role == UserRole.EMPLOYEE and submission.employee_id != user.id:
@@ -109,7 +130,9 @@ def ensure_period_submissions(
     else:
         condition = custom_condition
 
-    templates = db.scalars(select(KPITemplate).where(condition)).all()
+    templates = db.scalars(
+        select(KPITemplate).where(KPITemplate.tenant_id == employee.tenant_id, condition)
+    ).all()
 
     if not templates:
         if employee.role == UserRole.EMPLOYEE:
@@ -124,6 +147,7 @@ def ensure_period_submissions(
             KPISubmission.employee_id == employee.id,
             KPISubmission.year == year,
             KPISubmission.month_or_quarter == period,
+            KPISubmission.tenant_id == employee.tenant_id,
         )
     ).all()
     existing_template_ids = {s.kpi_template_id for s in existing}
@@ -133,6 +157,7 @@ def ensure_period_submissions(
         if template.id in existing_template_ids:
             continue
         submission = KPISubmission(
+            tenant_id=employee.tenant_id,
             employee_id=employee.id,
             department_id=employee.department_id,
             kpi_template_id=template.id,
@@ -149,6 +174,7 @@ def ensure_period_submissions(
 
 def create_custom_employee_kpi(
     db: Session,
+    actor: User,
     employee: User,
     metric_name: str,
     target: float,
@@ -167,6 +193,7 @@ def create_custom_employee_kpi(
             KPITemplate.metric_name == metric_name,
             KPITemplate.locked_year == year,
             KPITemplate.locked_period == period,
+            KPITemplate.tenant_id == employee.tenant_id,
         )
     )
     if existing_template is not None:
@@ -176,6 +203,7 @@ def create_custom_employee_kpi(
         )
 
     template = KPITemplate(
+        tenant_id=employee.tenant_id,
         metric_name=metric_name,
         target=target,
         weight=weight,
@@ -188,6 +216,7 @@ def create_custom_employee_kpi(
     db.flush()
 
     submission = KPISubmission(
+        tenant_id=employee.tenant_id,
         employee_id=employee.id,
         department_id=employee.department_id,
         kpi_template_id=template.id,
@@ -196,6 +225,12 @@ def create_custom_employee_kpi(
         status=KPIStatus.DRAFT,
     )
     db.add(submission)
+    audit_service.log(
+        db, actor, "kpi_template_created", "kpi_template", template.id,
+        f"{metric_name} — {employee.name}",
+        f"Custom KPI created for {employee.name}: target={fmt_score(target)}, weight={fmt_score(weight)}.",
+        department_id=employee.department_id,
+    )
     db.commit()
     return submission
 
@@ -205,6 +240,7 @@ def save_self_scores(db: Session, employee: User, scores: dict[int, float]) -> N
         select(KPISubmission).where(
             KPISubmission.id.in_(scores.keys()),
             KPISubmission.employee_id == employee.id,
+            KPISubmission.tenant_id == employee.tenant_id,
         )
     ).all()
     for submission in submissions:
@@ -222,6 +258,7 @@ def submit_for_dept_approval(db: Session, employee: User, year: int, period: str
             KPISubmission.employee_id == employee.id,
             KPISubmission.year == year,
             KPISubmission.month_or_quarter == period,
+            KPISubmission.tenant_id == employee.tenant_id,
         )
     ).all()
     if not submissions:
@@ -238,10 +275,23 @@ def submit_for_dept_approval(db: Session, employee: User, year: int, period: str
         KPIStatus.PENDING_FINAL_APPROVAL if employee.role == UserRole.DEPT_ADMIN else KPIStatus.PENDING_DEPT_APPROVAL
     )
 
+    stage = "final approval" if next_status == KPIStatus.PENDING_FINAL_APPROVAL else "department approval"
     for submission in submissions:
         submission.status = next_status
         submission.submitted_at = _now()
+        audit_service.log(
+            db, employee, "kpi_submitted", "kpi_submission", submission.id, _entity_label(submission),
+            f"Submitted (self score {fmt_score(submission.self_score)}) for {stage}.",
+            department_id=submission.department_id,
+        )
     db.commit()
+
+
+def _entity_label(submission: KPISubmission) -> str:
+    return (
+        f"{submission.kpi_template.metric_name} — {submission.employee.name} "
+        f"({submission.month_or_quarter} {submission.year})"
+    )
 
 
 def dept_save_score(
@@ -250,11 +300,17 @@ def dept_save_score(
     """Dept Admin edits the score without forwarding yet."""
     if submission.status != KPIStatus.PENDING_DEPT_APPROVAL:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not awaiting department review.")
+    old_score = submission.dept_score
     submission.dept_score = dept_score
     if remarks is not None:
         submission.remarks = remarks
     submission.dept_reviewed_by_id = reviewer.id
     submission.dept_reviewed_at = _now()
+    audit_service.log(
+        db, reviewer, "kpi_dept_score_saved", "kpi_submission", submission.id, _entity_label(submission),
+        f"Dept score saved: {fmt_score(old_score)} → {fmt_score(dept_score)}",
+        department_id=submission.department_id,
+    )
     db.commit()
 
 
@@ -268,6 +324,7 @@ def dept_approve(
     """Dept Admin approves and forwards to the Super Admin for final review."""
     if submission.status != KPIStatus.PENDING_DEPT_APPROVAL:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not awaiting department review.")
+    old_score = submission.dept_score
     submission.dept_score = dept_score if dept_score is not None else (
         submission.dept_score if submission.dept_score is not None else submission.self_score
     )
@@ -276,6 +333,12 @@ def dept_approve(
     submission.status = KPIStatus.PENDING_FINAL_APPROVAL
     submission.dept_reviewed_by_id = reviewer.id
     submission.dept_reviewed_at = _now()
+    audit_service.log(
+        db, reviewer, "kpi_dept_approved", "kpi_submission", submission.id, _entity_label(submission),
+        f"Dept approved (score {fmt_score(old_score)} → {fmt_score(submission.dept_score)}), "
+        "forwarded for final approval.",
+        department_id=submission.department_id,
+    )
     db.commit()
 
 
@@ -297,26 +360,46 @@ def final_approve(
     submission.status = KPIStatus.APPROVED
     submission.final_reviewed_by_id = reviewer.id
     submission.final_reviewed_at = _now()
+    audit_service.log(
+        db, reviewer, "kpi_final_approved", "kpi_submission", submission.id, _entity_label(submission),
+        f"Final approved at {fmt_score(submission.final_score)}.",
+        department_id=submission.department_id,
+    )
     db.commit()
 
 
-def super_admin_override(
+def tenant_admin_override(
     db: Session, admin: User, submission: KPISubmission, final_score: float, remarks: str | None
 ) -> None:
-    """Super Admin can override the score and force-approve at any workflow stage."""
+    """Tenant Admin can override the score and force-approve at any workflow stage."""
+    old_score = submission.final_score if submission.final_score is not None else (
+        submission.dept_score if submission.dept_score is not None else submission.self_score
+    )
     submission.final_score = final_score
     if remarks is not None:
         submission.remarks = remarks
     submission.status = KPIStatus.APPROVED
     submission.final_reviewed_by_id = admin.id
     submission.final_reviewed_at = _now()
+    audit_service.log(
+        db, admin, "kpi_overridden", "kpi_submission", submission.id, _entity_label(submission),
+        f"Score overridden: {fmt_score(old_score)} → {fmt_score(final_score)}.",
+        department_id=submission.department_id,
+    )
     db.commit()
 
 
-def reject_submission(db: Session, submission: KPISubmission, remarks: str | None) -> None:
+def reject_submission(
+    db: Session, reviewer: User, submission: KPISubmission, remarks: str | None
+) -> None:
     if submission.status not in (KPIStatus.PENDING_DEPT_APPROVAL, KPIStatus.PENDING_FINAL_APPROVAL):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not in a reviewable state.")
     submission.status = KPIStatus.REJECTED
     if remarks is not None:
         submission.remarks = remarks
+    audit_service.log(
+        db, reviewer, "kpi_rejected", "kpi_submission", submission.id, _entity_label(submission),
+        "Submission rejected.",
+        department_id=submission.department_id,
+    )
     db.commit()

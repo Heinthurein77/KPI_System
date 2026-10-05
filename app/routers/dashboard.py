@@ -35,8 +35,13 @@ def is_current_or_future_period(year: int, period: str, today: date | None = Non
 def calculate_kpi(kpi_list: List[Dict[str, Any]]) -> tuple[float, str]:
     # Weight စုစုပေါင်း 100 မပြည့်ပါက Error ပြရန်
     total_weight = sum(item["weight"] for item in kpi_list)
+    if total_weight == 0:
+        return 0.0, "N/A"
+
+# Weight 100% မပြည့်ပါကလည်း Error မတက်စေဘဲ တွက်ချက်ပေးရန် သို့မဟုတ် 0 ပေးရန်
     if total_weight != 100:
-        raise ValueError(f"Total weight must be exactly 100%. Current total: {total_weight}%")
+    # ဥပမာ - Weight အချိုးအစားအတိုင်း အမှတ်တွက်ပေးခြင်း သို့မဟုတ် Return 0 လုပ်ပေးခြင်း
+        pass
 
     total_score = 0.0
     for item in kpi_list:

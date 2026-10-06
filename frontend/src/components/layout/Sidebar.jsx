@@ -152,6 +152,19 @@ export default function Sidebar({ open = false, onClose }) {
                 >
                   KPI Trend
                 </NavLink>
+                <NavLink
+                  to="/admin/kpi-download"
+                  active={pathname.startsWith("/admin/kpi-download")}
+                  icon={
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      d="M12 3v12m0 0 4-4m-4 4-4-4m-3 8.25v.75a2.25 2.25 0 0 0 2.25 2.25h9.5A2.25 2.25 0 0 0 19.5 19.5v-.75"
+                    />
+                  }
+                >
+                  Excel Downloads
+                </NavLink>
                 {user.role === "tenant_admin" && (
                   <NavLink
                     to="/admin/audit-log"

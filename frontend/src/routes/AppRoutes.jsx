@@ -9,6 +9,7 @@ import DepartmentsPage from "../pages/admin/DepartmentsPage";
 import UsersPage from "../pages/admin/UsersPage";
 import UserEditPage from "../pages/admin/UserEditPage";
 import UserKpiTrendPage from "../pages/admin/UserKpiTrendPage";
+import KpiDownloadPage from "../pages/admin/KpiDownloadPage";
 import TemplatesPage from "../pages/admin/TemplatesPage";
 import AuditLogPage from "../pages/admin/AuditLogPage";
 import PlatformLoginPage from "../pages/platform/PlatformLoginPage";
@@ -92,6 +93,14 @@ export default function AppRoutes() {
         element={
           <ProtectedRoute roles={["tenant_admin", "dept_admin"]}>
             <UserKpiTrendPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/kpi-download"
+        element={
+          <ProtectedRoute roles={["tenant_admin", "dept_admin"]}>
+            <KpiDownloadPage />
           </ProtectedRoute>
         }
       />

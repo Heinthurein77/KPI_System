@@ -265,6 +265,48 @@ def export_employee_kpi_report(
     )
 
 
+@router.get("/kpi-export/annual")
+def export_employee_annual_kpi_report(
+    employee_id: int,
+    year: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_dept_admin),
+):
+    """Download one employee's full-year KPI workbook, scoped like monthly exports."""
+    target = get_tenant_scoped_or_404(db, User, employee_id, user.tenant_id, "User not found.")
+    if user.role == UserRole.DEPT_ADMIN and (
+        target.department_id != user.department_id or target.role != UserRole.EMPLOYEE
+    ):
+        raise HTTPException(403, "Cannot export KPI data outside your department.")
+
+    submissions = db.scalars(
+        select(KPISubmission)
+        .options(joinedload(KPISubmission.kpi_template))
+        .where(
+            KPISubmission.employee_id == target.id,
+            KPISubmission.tenant_id == user.tenant_id,
+            KPISubmission.year == year,
+            KPISubmission.month_or_quarter.in_(MONTH_NAMES),
+        )
+    ).unique().all()
+    submissions.sort(key=lambda s: (MONTH_NAMES.index(s.month_or_quarter), s.kpi_template.metric_name))
+
+    by_month = {month: [] for month in MONTH_NAMES}
+    for submission in submissions:
+        by_month[submission.month_or_quarter].append(submission)
+    monthly_scores = {month: combined_final_score(by_month[month]) for month in MONTH_NAMES}
+
+    report = kpi_export_service.build_employee_annual_kpi_report(
+        target, submissions, year, MONTH_NAMES, monthly_scores
+    )
+    filename = f"employee-kpi-annual-{target.id}-{year}.xlsx"
+    return StreamingResponse(
+        report,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
 @router.post("/users", response_model=UserOut)
 def create_user(
     payload: CreateUserRequest, db: Session = Depends(get_db), user: User = Depends(require_dept_admin)

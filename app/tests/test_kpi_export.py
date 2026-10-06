@@ -56,3 +56,40 @@ def test_employee_kpi_export_is_department_scoped(db, client):
     )
 
     assert response.status_code == 403
+
+
+def test_employee_annual_kpi_export_contains_summary_and_month_sheets(db, client):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    department = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=department, name="Aye Aye")
+    template = make_template(db, tenant, metric_name="Sales", target=100.0, weight=100.0, department=department)
+    make_submission(
+        db, tenant, employee, template, year=2026, period="January",
+        self_score=80.0, dept_score=85.0, final_score=90.0,
+    )
+    make_submission(
+        db, tenant, employee, template, year=2026, period="February",
+        self_score=70.0, dept_score=75.0, final_score=80.0,
+    )
+
+    response = client.get(
+        "/api/admin/kpi-export/annual",
+        params={"employee_id": employee.id, "year": 2026},
+        headers=auth_headers(admin, tenant),
+    )
+
+    assert response.status_code == 200
+    assert "employee-kpi-annual" in response.headers["content-disposition"]
+
+    workbook = load_workbook(BytesIO(response.content), data_only=True)
+    summary = workbook["Annual Summary"]
+    assert summary["B3"].value == "Aye Aye"
+    assert summary["E3"].value == 2026
+    assert summary["H3"].value == 85
+    assert summary["A8"].value == "January"
+    assert summary["D8"].value == 90
+    assert summary["A9"].value == "February"
+    assert summary["D9"].value == 80
+    assert workbook["January"]["A8"].value == "Sales"
+    assert workbook["December"]["A8"].value == "No KPI records for this month."

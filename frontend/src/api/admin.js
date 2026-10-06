@@ -55,6 +55,13 @@ export function downloadEmployeeKpiReport(employeeId, month, year) {
   }).then((r) => r.data);
 }
 
+export function downloadEmployeeAnnualKpiReport(employeeId, year) {
+  return client.get("/api/admin/kpi-export/annual", {
+    params: { employee_id: employeeId, year },
+    responseType: "blob",
+  }).then((r) => r.data);
+}
+
 export function listTemplates() {
   return client.get("/api/admin/templates").then((r) => r.data);
 }

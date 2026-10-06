@@ -16,6 +16,9 @@ class KPITemplateOut(BaseModel):
     locked_year: int | None
     locked_period: str | None
     is_custom: bool
+    # True when the recurrence service should carry this custom template
+    # forward into every new month automatically.
+    is_recurring: bool = False
 
 
 class CreateTemplateRequest(BaseModel):
@@ -35,4 +38,14 @@ class CreateCustomTemplateRequest(BaseModel):
     target: float = Field(gt=0)
     weight: float = Field(gt=0)
     year: int
+    period: str
+    # New custom assignments recur by default. Existing persisted templates
+    # retain their migration default (False), and API callers can opt out.
+    is_recurring: bool = True
+
+
+class RunRecurringKpisRequest(BaseModel):
+    """Target month for an idempotent tenant-wide recurring KPI run."""
+
+    year: int = Field(ge=1)
     period: str

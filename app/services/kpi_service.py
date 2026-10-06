@@ -9,6 +9,7 @@ from app.models.kpi_template import KPITemplate
 from app.models.user import User, UserRole
 from app.services import audit_service
 from app.services.audit_service import fmt_score
+from app.services.recurring_service import is_template_active_for_period
 
 
 def _now() -> datetime:
@@ -119,8 +120,10 @@ def ensure_period_submissions(
     """
     custom_condition = (
         (KPITemplate.employee_id == employee.id)
-        & (KPITemplate.locked_year == year)
-        & (KPITemplate.locked_period == period)
+        & (
+            ((KPITemplate.locked_year == year) & (KPITemplate.locked_period == period))
+            | (KPITemplate.is_recurring.is_(True))
+        )
     )
     if employee.role == UserRole.EMPLOYEE:
         condition = custom_condition | (
@@ -133,6 +136,14 @@ def ensure_period_submissions(
     templates = db.scalars(
         select(KPITemplate).where(KPITemplate.tenant_id == employee.tenant_id, condition)
     ).all()
+
+    # A recurring custom template becomes applicable from its configured month
+    # forward.  Keeping this guard in the existing lazy materialisation path
+    # makes monthly carry-over automatic even if the bulk job has not run yet.
+    templates = [
+        template for template in templates
+        if not template.is_recurring or is_template_active_for_period(template, year, period)
+    ]
 
     if not templates:
         if employee.role == UserRole.EMPLOYEE:
@@ -181,8 +192,13 @@ def create_custom_employee_kpi(
     weight: float,
     year: int,
     period: str,
+    is_recurring: bool = True,
 ) -> KPISubmission:
-    """Dept Admin creates a one-off custom metric for a single employee, locked to one period.
+    """Dept Admin creates a one-off (or recurring) custom metric for a single employee.
+
+    When is_recurring=True the template is flagged for monthly carry-over by
+    the recurrence service — the submission for the requested period is still
+    materialised immediately so it's visible right away.
 
     Materializes the KPISubmission immediately so it's visible right away, rather
     than waiting for the employee to load their dashboard for that period.
@@ -211,6 +227,7 @@ def create_custom_employee_kpi(
         employee_id=employee.id,
         locked_year=year,
         locked_period=period,
+        is_recurring=is_recurring,
     )
     db.add(template)
     db.flush()
@@ -225,10 +242,11 @@ def create_custom_employee_kpi(
         status=KPIStatus.DRAFT,
     )
     db.add(submission)
+    recurring_note = " Marked as monthly recurring." if is_recurring else ""
     audit_service.log(
         db, actor, "kpi_template_created", "kpi_template", template.id,
         f"{metric_name} — {employee.name}",
-        f"Custom KPI created for {employee.name}: target={fmt_score(target)}, weight={fmt_score(weight)}.",
+        f"Custom KPI created for {employee.name}: target={fmt_score(target)}, weight={fmt_score(weight)}.{recurring_note}",
         department_id=employee.department_id,
     )
     db.commit()

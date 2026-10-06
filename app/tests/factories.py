@@ -68,6 +68,7 @@ def make_template(
     employee: User | None = None,
     locked_year: int | None = None,
     locked_period: str | None = None,
+    is_recurring: bool = False,
 ) -> KPITemplate:
     template = KPITemplate(
         tenant_id=tenant.id,
@@ -78,6 +79,7 @@ def make_template(
         employee_id=employee.id if employee else None,
         locked_year=locked_year,
         locked_period=locked_period,
+        is_recurring=is_recurring,
     )
     db.add(template)
     db.commit()

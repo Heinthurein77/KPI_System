@@ -17,6 +17,7 @@ from app.schemas.kpi_template import (
     CreateCustomTemplateRequest,
     CreateTemplateRequest,
     KPITemplateOut,
+    RunRecurringKpisRequest,
 )
 from app.schemas.user import (
     CreateDepartmentRequest,
@@ -27,7 +28,7 @@ from app.schemas.user import (
     UserOut,
     UserSummaryOut,
 )
-from app.services import audit_service, kpi_service
+from app.services import audit_service, kpi_service, recurring_service
 from app.services.audit_service import fmt_score
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -402,9 +403,37 @@ def create_custom_template(
             raise HTTPException(400, "Custom KPIs can only be assigned to Employees or Department Admins.")
 
     submission = kpi_service.create_custom_employee_kpi(
-        db, user, employee, payload.metric_name.strip(), payload.target, payload.weight, payload.year, payload.period
+        db, user, employee, payload.metric_name.strip(), payload.target, payload.weight,
+        payload.year, payload.period, is_recurring=payload.is_recurring,
     )
     return submission.kpi_template
+
+
+@router.post("/recurring/run")
+def run_recurring_kpis(
+    payload: RunRecurringKpisRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_tenant_admin),
+):
+    """Materialise this tenant's opted-in custom KPIs for one monthly period.
+
+    This endpoint is intentionally additive and idempotent: it only creates
+    missing draft submissions and never changes existing KPI data or workflow
+    state.  It can be called by a monthly scheduler or run manually.
+    """
+    if payload.period not in MONTH_NAMES:
+        raise HTTPException(422, f"period must be one of: {', '.join(MONTH_NAMES)}")
+
+    result = recurring_service.materialise_recurring_for_period(
+        db, payload.year, payload.period, tenant_id=user.tenant_id
+    )
+    return {
+        "year": result.year,
+        "period": result.period,
+        "created_count": result.created_count,
+        "skipped_count": result.skipped_count,
+        "errors": result.errors,
+    }
 
 
 @router.delete("/templates/{template_id}")

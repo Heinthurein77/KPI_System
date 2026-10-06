@@ -92,6 +92,7 @@ def test_create_custom_template_success_dept_admin_own_employee(db, client):
     assert body["metric_name"] == "Special Project"
     assert body["employee_id"] == employee.id
     assert body["is_custom"] is True
+    assert body["is_recurring"] is True
 
 
 # ---------- Delete-with-dependents-like guard (Dept Admin path only) ----------

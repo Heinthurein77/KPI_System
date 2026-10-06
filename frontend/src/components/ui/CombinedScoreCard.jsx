@@ -35,7 +35,7 @@ const RADIUS = 32;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
 function ScoreRing({ attainment, color }) {
-  const pct = Math.min(Math.max(attainment, 0), 100);
+  const pct = Math.min(Math.max(attainment ?? 0, 0), 100);
   const offset = CIRCUMFERENCE - (CIRCUMFERENCE * pct) / 100;
 
   return (
@@ -56,7 +56,7 @@ function ScoreRing({ attainment, color }) {
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-xl font-bold text-slate-900 leading-none tabular-nums">{attainment.toFixed(0)}</span>
+        <span className="text-xl font-bold text-slate-900 leading-none tabular-nums">{(attainment ?? 0).toFixed(0)}</span>
         <span className="text-[9px] font-semibold text-slate-400 mt-0.5">%</span>
       </div>
     </div>
@@ -98,7 +98,7 @@ export default function CombinedScoreCard({ combined }) {
       <div className="relative min-w-0 flex-1">
         <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">Combined Final KPI Score</p>
         <p className="mt-1 text-2xl font-bold text-slate-900 leading-none tabular-nums">
-          {combined.attainment.toFixed(0)}
+          {combined.attainment?.toFixed(0) ?? "—"}
           <span className="text-sm font-semibold text-slate-400">%</span>
         </p>
         <p className="mt-1.5 text-xs text-slate-500">
@@ -112,7 +112,7 @@ export default function CombinedScoreCard({ combined }) {
         <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
           {tier.icon}
         </svg>
-        {combined.status.trim()}
+        {combined.status?.trim()}
       </span>
     </div>
   );

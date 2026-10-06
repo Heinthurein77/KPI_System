@@ -156,7 +156,7 @@ export default function TeamReviewBoard({
                         <p className="text-xs text-slate-500 truncate">
                           {showDepartmentColumn && `${department ?? "Unassigned"} · `}
                           {group.length} metric{group.length !== 1 ? "s" : ""}
-                          {!isOpen && data.employee_combined[String(employeeId)] && (
+                          {!isOpen && data.employee_combined?.[String(employeeId)]?.attainment != null && (
                             <> · {data.employee_combined[String(employeeId)].attainment.toFixed(0)}% combined</>
                           )}
                         </p>

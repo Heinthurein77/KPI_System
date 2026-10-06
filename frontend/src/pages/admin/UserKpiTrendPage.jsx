@@ -17,6 +17,19 @@ const STATUS_CHIP = {
 };
 const STATUS_LABEL = { good: "On Target", warning: "Near Target", critical: "Below Target" };
 
+// Normalise the raw rating string returned by the backend's combined_final_score
+// ("Need to improve ", "Normal", "Performance ") to the tier key used by STATUS_CHIP/LABEL.
+function toTierKey(status) {
+  if (!status) return null;
+  const s = status.trim();
+  if (s === "Performance") return "good";
+  if (s === "Normal") return "warning";
+  if (s === "Need to improve") return "critical";
+  // Already a tier key (forward-compat)
+  if (s in STATUS_CHIP) return s;
+  return null;
+}
+
 function SummaryCard({ label, value, detail, accent, icon }) {
   return (
     <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
@@ -326,13 +339,16 @@ export default function UserKpiTrendPage() {
                         </td>
                         <td className="px-6 py-3 text-sm tabular-nums text-slate-700">{fmtPct(p.attainment)}</td>
                         <td className="px-6 py-3 text-sm">
-                          {p.status ? (
-                            <span
-                              className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider ring-1 ring-inset ${STATUS_CHIP[p.status]}`}
-                            >
-                              {STATUS_LABEL[p.status]}
-                            </span>
-                          ) : (
+                          {p.status ? (() => {
+                            const tk = toTierKey(p.status);
+                            return (
+                              <span
+                                className={`inline-flex items-center rounded-full px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider ring-1 ring-inset ${STATUS_CHIP[tk] ?? "bg-slate-100 text-slate-600 ring-slate-200"}`}
+                              >
+                                {STATUS_LABEL[tk] ?? p.status.trim()}
+                              </span>
+                            );
+                          })() : (
                             <span className="text-slate-400">{p.total_count === 0 ? "No submissions" : "—"}</span>
                           )}
                         </td>
@@ -370,7 +386,7 @@ export default function UserKpiTrendPage() {
                                 </div>
 
                                 <div className="mb-5">
-                                  <CombinedScoreCard combined={p.attainment !== null ? p : null} />
+                                  <CombinedScoreCard combined={p.attainment != null ? p : null} />
                                 </div>
 
                                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

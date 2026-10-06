@@ -10,6 +10,19 @@ const LINE_COLOR = "#0284c7"; // brand-600
 
 const STATUS_LABEL = { good: "On Target", warning: "Near Target", critical: "Below Target" };
 
+// The backend returns raw rating strings from calculate_kpi (with possible trailing spaces).
+// Normalise them to the tier keys used by STATUS_COLOR / STATUS_LABEL.
+function toTierKey(status) {
+  if (!status) return null;
+  const s = status.trim();
+  if (s === "Performance") return "good";
+  if (s === "Normal") return "warning";
+  if (s === "Need to improve") return "critical";
+  // Already a tier key (future-proof)
+  if (s in STATUS_COLOR) return s;
+  return null;
+}
+
 const MONTH_ABBR = {
   January: "Jan", February: "Feb", March: "Mar", April: "Apr", May: "May", June: "Jun",
   July: "Jul", August: "Aug", September: "Sep", October: "Oct", November: "Nov", December: "Dec",
@@ -173,9 +186,10 @@ export default function KpiTrendChart({ points, onPointClick, pointLinkLabel = "
 
             {/* Points + hit targets */}
             {points.map((p, i) => {
-              const hasScore = p.attainment !== null;
+              const hasScore = p.attainment != null;
               const cy = hasScore ? yFor(p.attainment) : PLOT_H;
-              const color = hasScore ? STATUS_COLOR[p.status] ?? LINE_COLOR : NO_DATA_COLOR;
+              const tierKey = toTierKey(p.status);
+              const color = hasScore ? STATUS_COLOR[tierKey] ?? LINE_COLOR : NO_DATA_COLOR;
               const clickable = Boolean(onPointClick) && p.total_count > 0;
               return (
                 <g key={i}>
@@ -217,10 +231,10 @@ export default function KpiTrendChart({ points, onPointClick, pointLinkLabel = "
             <p className="font-semibold text-slate-800">
               {hovered.month_or_quarter} {hovered.year}
             </p>
-            {hovered.attainment !== null ? (
+            {hovered.attainment != null ? (
               <>
-                <p className="mt-0.5 text-sm font-bold tabular-nums text-slate-900">{hovered.attainment.toFixed(0)}%</p>
-                <p className="text-slate-500">{STATUS_LABEL[hovered.status]}</p>
+                <p className="mt-0.5 text-sm font-bold tabular-nums text-slate-900">{hovered.attainment?.toFixed(0)}%</p>
+                <p className="text-slate-500">{STATUS_LABEL[toTierKey(hovered.status)] ?? hovered.status?.trim()}</p>
               </>
             ) : (
               <p className="mt-0.5 text-slate-500">Not yet scored</p>

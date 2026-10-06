@@ -10,6 +10,8 @@ import { getErrorMessage } from "../../api/errors";
 import { useToast } from "../../context/ToastContext";
 import { useAuth } from "../../context/AuthContext";
 
+const TARGET_EXCEEDED_MESSAGE = "Target ထက်ကျော်နေပါ၍ပြန်ထည့်ရန်";
+
 export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI records" }) {
   const toast = useToast();
   const { user } = useAuth();
@@ -17,6 +19,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   const [data, setData] = useState(null);
   const [scores, setScores] = useState({});
   const [error, setError] = useState(null);
+  const [invalidScoreId, setInvalidScoreId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [params, setParams] = useState({});
   const loadIdRef = useRef(0);
@@ -56,8 +59,44 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     load(nextParams);
   }
 
+  function validateScores(nextScores) {
+    const exceeded = data.submissions.find((submission) => {
+      const value = nextScores[submission.id];
+      return value !== "" && value !== null && value !== undefined
+        && Number(value) > Number(submission.kpi_template.target);
+    });
+
+    if (exceeded) {
+      setInvalidScoreId(exceeded.id);
+      setError(TARGET_EXCEEDED_MESSAGE);
+      requestAnimationFrame(() => document.getElementById(`self-score-${exceeded.id}`)?.focus());
+      return false;
+    }
+
+    // An emptied field is not a corrected value. Keep this validation message
+    // visible until the previously invalid value is replaced with one at or
+    // below its target.
+    if (invalidScoreId !== null) {
+      const previousInvalidValue = nextScores[invalidScoreId];
+      const previousInvalidSubmission = data.submissions.find((s) => s.id === invalidScoreId);
+      if (
+        previousInvalidSubmission
+        && previousInvalidValue !== ""
+        && previousInvalidValue !== null
+        && previousInvalidValue !== undefined
+        && Number(previousInvalidValue) <= Number(previousInvalidSubmission.kpi_template.target)
+      ) {
+        setInvalidScoreId(null);
+        if (error === TARGET_EXCEEDED_MESSAGE) setError(null);
+      }
+    }
+    return error !== TARGET_EXCEEDED_MESSAGE;
+  }
+
   function handleSelfScoreChange(id, value) {
-    setScores((prev) => ({ ...prev, [id]: value }));
+    const nextScores = { ...scores, [id]: value };
+    setScores(nextScores);
+    validateScores(nextScores);
   }
 
   function buildScoresPayload() {
@@ -71,6 +110,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   }
 
   async function handleSave() {
+    if (!validateScores(scores)) return;
     setSaving(true);
     setError(null);
     try {
@@ -85,6 +125,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   }
 
   async function handleSubmit() {
+    if (!validateScores(scores)) return;
     setSaving(true);
     setError(null);
     try {
@@ -145,6 +186,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
                 submission={s}
                 editableSelf={isEditable}
                 selfScoreValue={scores[s.id]}
+                selfScoreInvalid={invalidScoreId === s.id}
                 onSelfScoreChange={handleSelfScoreChange}
               />
             ))}

@@ -1,6 +1,9 @@
 import { useState } from "react";
 import StatusBadge from "./StatusBadge";
 import ScoreBadge from "./ScoreBadge";
+import { useToast } from "../../context/ToastContext";
+
+const TARGET_EXCEEDED_MESSAGE = "Target ထက်ကျော်နေပါ၍ပြန်ထည့်ရန်";
 
 const ACCENT = {
   draft: "bg-slate-300",
@@ -21,10 +24,10 @@ const ROLE_LABELS = {
 // otherwise submit silently as a real 0 score/approval. Also enforces the
 // same 0–200 range the inputs advertise via min/max, which the browser never
 // validates here since these are plain buttons outside a <form>.
-function isValidScore(value) {
+function isValidScore(value, target) {
   if (value === "" || value === null || value === undefined) return false;
   const n = Number(value);
-  return !Number.isNaN(n) && n >= 0 && n <= 200;
+  return !Number.isNaN(n) && n >= 0 && n <= 200 && n <= Number(target);
 }
 
 function remarkAuthor(s) {
@@ -40,6 +43,7 @@ export default function KpiCard({
   submission: s,
   editableSelf = false,
   selfScoreValue,
+  selfScoreInvalid = false,
   onSelfScoreChange,
   onDeptSave,
   onDeptApprove,
@@ -47,15 +51,27 @@ export default function KpiCard({
   onOverride,
   onReject,
 }) {
+  const toast = useToast();
   const [deptScore, setDeptScore] = useState(s.dept_score ?? s.self_score ?? "");
   const [deptRemarks, setDeptRemarks] = useState("");
   const [finalScore, setFinalScore] = useState(s.final_score ?? s.dept_score ?? "");
   const [overrideScore, setOverrideScore] = useState("");
   const [overrideRemarks, setOverrideRemarks] = useState("");
   const [overrideOpen, setOverrideOpen] = useState(false);
+  const [invalidScoreField, setInvalidScoreField] = useState(null);
 
   const canReject = onReject && (s.status === "pending_dept_approval" || s.status === "pending_final_approval");
   const author = remarkAuthor(s);
+
+  function handleScoreChange(setScore, field, value) {
+    setScore(value);
+    if (value !== "" && Number(value) > Number(s.kpi_template.target)) {
+      setInvalidScoreField(field);
+      toast.error(TARGET_EXCEEDED_MESSAGE);
+    } else if (invalidScoreField === field && value !== "" && Number(value) <= Number(s.kpi_template.target)) {
+      setInvalidScoreField(null);
+    }
+  }
 
   return (
     <div className="relative rounded-xl border border-slate-200 bg-white pt-4 px-4 pb-4 flex flex-col gap-3 overflow-hidden hover:shadow-md hover:border-slate-300 hover:-translate-y-0.5 transition-all">
@@ -80,13 +96,15 @@ export default function KpiCard({
           <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Self</p>
           {editableSelf ? (
             <input
+              id={`self-score-${s.id}`}
               type="number"
               step="0.1"
               min="0"
               max="200"
               value={selfScoreValue ?? ""}
               onChange={(e) => onSelfScoreChange(s.id, e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-1 py-1.5 text-sm text-center tabular-nums focus:outline-none focus:ring-2 focus:ring-brand-500"
+              aria-invalid={selfScoreInvalid}
+              className={`w-full rounded-lg border px-1 py-1.5 text-sm text-center tabular-nums focus:outline-none focus:ring-2 ${selfScoreInvalid ? "border-red-500 focus:ring-red-500" : "border-slate-300 focus:ring-brand-500"}`}
             />
           ) : (
             <ScoreBadge value={s.self_score} target={s.kpi_template.target} />
@@ -137,8 +155,9 @@ export default function KpiCard({
               min="0"
               max="200"
               value={deptScore}
-              onChange={(e) => setDeptScore(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+              onChange={(e) => handleScoreChange(setDeptScore, "dept", e.target.value)}
+              aria-invalid={invalidScoreField === "dept"}
+              className={`w-full rounded-lg border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 ${invalidScoreField === "dept" ? "border-red-500 focus:ring-red-500" : "border-slate-300 focus:ring-brand-500"}`}
             />
           </div>
           <input
@@ -151,7 +170,7 @@ export default function KpiCard({
           <div className="flex items-center gap-1.5">
             <button
               type="button"
-              disabled={!isValidScore(deptScore)}
+              disabled={!isValidScore(deptScore, s.kpi_template.target)}
               onClick={() => onDeptSave(s.id, Number(deptScore), deptRemarks || undefined)}
               className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:border-slate-400 transition disabled:opacity-60"
             >
@@ -159,7 +178,7 @@ export default function KpiCard({
             </button>
             <button
               type="button"
-              disabled={!isValidScore(deptScore)}
+              disabled={!isValidScore(deptScore, s.kpi_template.target)}
               onClick={() => onDeptApprove(s.id, Number(deptScore), deptRemarks || undefined)}
               className="flex-1 inline-flex items-center justify-center gap-1 rounded-md bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-brand-700 transition disabled:opacity-60"
             >
@@ -194,12 +213,13 @@ export default function KpiCard({
                 min="0"
                 max="200"
                 value={finalScore}
-                onChange={(e) => setFinalScore(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500"
+                onChange={(e) => handleScoreChange(setFinalScore, "final", e.target.value)}
+                aria-invalid={invalidScoreField === "final"}
+                className={`w-full rounded-lg border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 ${invalidScoreField === "final" ? "border-red-500 focus:ring-red-500" : "border-slate-300 focus:ring-brand-500"}`}
               />
               <button
                 type="button"
-                disabled={!isValidScore(finalScore)}
+                disabled={!isValidScore(finalScore, s.kpi_template.target)}
                 onClick={() => onFinalApprove(s.id, Number(finalScore))}
                 className="w-full inline-flex items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 transition whitespace-nowrap disabled:opacity-60"
               >
@@ -237,8 +257,9 @@ export default function KpiCard({
                     max="200"
                     placeholder="Score"
                     value={overrideScore}
-                    onChange={(e) => setOverrideScore(e.target.value)}
-                    className="w-full rounded-lg border border-slate-300 px-2 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500"
+                    onChange={(e) => handleScoreChange(setOverrideScore, "override", e.target.value)}
+                    aria-invalid={invalidScoreField === "override"}
+                    className={`w-full rounded-lg border px-2 py-1.5 text-xs focus:outline-none focus:ring-2 ${invalidScoreField === "override" ? "border-red-500 focus:ring-red-500" : "border-slate-300 focus:ring-brand-500"}`}
                   />
                   <input
                     type="text"
@@ -249,7 +270,7 @@ export default function KpiCard({
                   />
                   <button
                     type="button"
-                    disabled={!isValidScore(overrideScore)}
+                    disabled={!isValidScore(overrideScore, s.kpi_template.target)}
                     onClick={() => onOverride(s.id, Number(overrideScore), overrideRemarks || undefined)}
                     className="w-full rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800 transition disabled:opacity-60"
                   >

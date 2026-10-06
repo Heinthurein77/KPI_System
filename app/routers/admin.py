@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 from app.core.deps import require_dept_admin, require_tenant_admin
@@ -28,7 +29,7 @@ from app.schemas.user import (
     UserOut,
     UserSummaryOut,
 )
-from app.services import audit_service, kpi_service, recurring_service
+from app.services import audit_service, kpi_export_service, kpi_service, recurring_service
 from app.services.audit_service import fmt_score
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -217,6 +218,51 @@ def get_user_submissions_for_period(
         "month_or_quarter": period,
         "submissions": [KPISubmissionOut.model_validate(s) for s in submissions],
     }
+
+
+@router.get("/kpi-export")
+def export_employee_kpi_report(
+    employee_id: int,
+    month: str,
+    year: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_dept_admin),
+):
+    """Download one employee's KPI scores for a selected monthly period.
+
+    The export is read-only and uses the existing final-score calculation,
+    with the same tenant and department access scope as existing KPI views.
+    """
+    if month not in MONTH_NAMES:
+        raise HTTPException(422, f"month must be one of: {', '.join(MONTH_NAMES)}")
+
+    target = get_tenant_scoped_or_404(db, User, employee_id, user.tenant_id, "User not found.")
+    if user.role == UserRole.DEPT_ADMIN and (
+        target.department_id != user.department_id or target.role != UserRole.EMPLOYEE
+    ):
+        raise HTTPException(403, "Cannot export KPI data outside your department.")
+
+    submissions = db.scalars(
+        select(KPISubmission)
+        .options(joinedload(KPISubmission.kpi_template))
+        .where(
+            KPISubmission.employee_id == target.id,
+            KPISubmission.tenant_id == user.tenant_id,
+            KPISubmission.year == year,
+            KPISubmission.month_or_quarter == month,
+        )
+    ).unique().all()
+    submissions.sort(key=lambda s: s.kpi_template.metric_name)
+
+    report = kpi_export_service.build_employee_kpi_report(
+        target, submissions, year, month, combined_final_score(submissions)
+    )
+    filename = f"employee-kpi-{target.id}-{year}-{month.lower()}.xlsx"
+    return StreamingResponse(
+        report,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("/users", response_model=UserOut)

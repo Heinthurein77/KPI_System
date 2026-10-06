@@ -48,6 +48,13 @@ export function getUserSubmissionsForPeriod(id, year, period) {
     .then((r) => r.data);
 }
 
+export function downloadEmployeeKpiReport(employeeId, month, year) {
+  return client.get("/api/admin/kpi-export", {
+    params: { employee_id: employeeId, month, year },
+    responseType: "blob",
+  }).then((r) => r.data);
+}
+
 export function listTemplates() {
   return client.get("/api/admin/templates").then((r) => r.data);
 }

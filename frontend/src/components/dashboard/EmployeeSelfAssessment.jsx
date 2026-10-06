@@ -11,6 +11,7 @@ import { useToast } from "../../context/ToastContext";
 import { useAuth } from "../../context/AuthContext";
 
 const TARGET_EXCEEDED_MESSAGE = "Target ထက်ကျော်နေပါ၍ပြန်ထည့်ရန်";
+const WEIGHT_TOTAL_MESSAGE = "Weight စုစုပေါင်းသည် 100% ဖြစ်ရပါမည်။ (100 ထက် ကျော်လွန်နေပါသည် သို့မဟုတ် 100 မပြည့်သေးပါ)";
 
 export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI records" }) {
   const toast = useToast();
@@ -109,8 +110,22 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     return payload;
   }
 
+  function validateTotalWeight() {
+    const totalWeight = data.submissions.reduce(
+      (sum, submission) => sum + Number(submission.kpi_template.weight),
+      0
+    );
+    if (totalWeight !== 100) {
+      setError(WEIGHT_TOTAL_MESSAGE);
+      toast.error(WEIGHT_TOTAL_MESSAGE);
+      return false;
+    }
+    return true;
+  }
+
   async function handleSave() {
     if (!validateScores(scores)) return;
+    if (!validateTotalWeight()) return;
     setSaving(true);
     setError(null);
     try {
@@ -126,6 +141,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
 
   async function handleSubmit() {
     if (!validateScores(scores)) return;
+    if (!validateTotalWeight()) return;
     setSaving(true);
     setError(null);
     try {

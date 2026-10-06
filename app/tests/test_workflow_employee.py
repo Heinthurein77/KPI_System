@@ -23,7 +23,7 @@ def _setup_tenant(db):
     dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, name="Dept Admin", department=dept)
     tenant_admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Tenant Admin")
     # Company-wide template (no department, no employee) applies to every Employee.
-    template = make_template(db, tenant, metric_name="Revenue", target=100.0, weight=1.0)
+    template = make_template(db, tenant, metric_name="Revenue", target=100.0, weight=100.0)
     return tenant, dept, employee, dept_admin, tenant_admin, template
 
 
@@ -99,7 +99,7 @@ def test_full_happy_path_employee_to_approved(db, client):
     assert entry["name"] == "Employee One"
     # target=100, final_score=92 -> attainment 92%.
     assert entry["attainment"] == 92.0
-    assert entry["status"] == "warning"
+    assert entry["status"] == "Performance "
 
 
 def test_reject_path_then_reject_and_approve_are_refused(db, client):

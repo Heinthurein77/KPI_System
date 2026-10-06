@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -10,6 +11,12 @@ from app.models.user import User, UserRole
 from app.services import audit_service
 from app.services.audit_service import fmt_score
 from app.services.recurring_service import is_template_active_for_period
+
+
+WEIGHT_TOTAL_MESSAGE = (
+    "Weight စုစုပေါင်းသည် 100% ဖြစ်ရပါမည်။ "
+    "(100 ထက် ကျော်လွန်နေပါသည် သို့မဟုတ် 100 မပြည့်သေးပါ)"
+)
 
 
 def _now() -> datetime:
@@ -82,6 +89,37 @@ def own_submissions_query(user: User):
         joinedload(KPISubmission.dept_reviewer),
         joinedload(KPISubmission.final_reviewer),
     ).where(KPISubmission.employee_id == user.id, KPISubmission.tenant_id == user.tenant_id)
+
+
+def validate_period_total_weight(db: Session, employee: User, year: int, period: str) -> None:
+    """Block edits for a period unless its existing KPI weights total exactly 100.
+
+    This guard only reads the current submissions and their existing templates.
+    It deliberately leaves the score calculation, template data, and workflow
+    state untouched.
+    """
+    submissions = db.scalars(
+        select(KPISubmission)
+        .options(joinedload(KPISubmission.kpi_template))
+        .where(
+            KPISubmission.employee_id == employee.id,
+            KPISubmission.year == year,
+            KPISubmission.month_or_quarter == period,
+            KPISubmission.tenant_id == employee.tenant_id,
+        )
+    ).unique().all()
+
+    # Preserve the existing no-submission behavior of the save/submit flows.
+    # There is no assigned weight to validate until a period has KPI rows.
+    if not submissions:
+        return
+
+    total_weight = sum(
+        (Decimal(str(submission.kpi_template.weight)) for submission in submissions),
+        Decimal("0"),
+    )
+    if total_weight != Decimal("100"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, WEIGHT_TOTAL_MESSAGE)
 
 
 def get_submission_scoped(db: Session, user: User, submission_id: int) -> KPISubmission:

@@ -42,6 +42,7 @@ def employee_save_scores(
     if user.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN):
         raise HTTPException(403, "This account type does not self-assess.")
 
+    kpi_service.validate_period_total_weight(db, user, payload.year, payload.period)
     if payload.scores:
         kpi_service.save_self_scores(db, user, {int(k): v for k, v in payload.scores.items()})
 
@@ -57,6 +58,7 @@ def employee_submit(
     if user.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN):
         raise HTTPException(403, "This account type does not self-assess.")
 
+    kpi_service.validate_period_total_weight(db, user, payload.year, payload.period)
     if payload.scores:
         kpi_service.save_self_scores(db, user, {int(k): v for k, v in payload.scores.items()})
 

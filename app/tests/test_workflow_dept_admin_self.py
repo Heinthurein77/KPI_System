@@ -21,7 +21,7 @@ def test_dept_admin_self_assessment_skips_department_review(db, client):
         tenant,
         metric_name="Team Output",
         target=50.0,
-        weight=1.0,
+        weight=100.0,
         department=dept,
         employee=dept_admin,
         locked_year=year,

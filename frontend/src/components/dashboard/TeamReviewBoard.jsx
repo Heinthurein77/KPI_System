@@ -156,8 +156,8 @@ export default function TeamReviewBoard({
                         <p className="text-xs text-slate-500 truncate">
                           {showDepartmentColumn && `${department ?? "Unassigned"} · `}
                           {group.length} metric{group.length !== 1 ? "s" : ""}
-                          {!isOpen && data.employee_combined[employeeId] && (
-                            <> · {data.employee_combined[employeeId].attainment.toFixed(0)}% combined</>
+                          {!isOpen && data.employee_combined[String(employeeId)] && (
+                            <> · {data.employee_combined[String(employeeId)].attainment.toFixed(0)}% combined</>
                           )}
                         </p>
                       </div>
@@ -192,7 +192,7 @@ export default function TeamReviewBoard({
                     <div className="border-t border-slate-100">
                       <div className="flex items-center justify-between gap-3 px-6 py-3 bg-slate-50/60 border-b border-slate-100">
                         <div className="flex-1">
-                          <CombinedScoreCard combined={data.employee_combined[employeeId]} />
+                          <CombinedScoreCard combined={data.employee_combined[String(employeeId)]} />
                         </div>
                         <Link
                           to={`/admin/kpi-trend/${first.employee.id}`}

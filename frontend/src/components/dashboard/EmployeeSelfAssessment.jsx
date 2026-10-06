@@ -8,9 +8,12 @@ import { STYLES as STATUS_STYLES, LABELS as STATUS_LABELS } from "../ui/statusMe
 import { employeeSaveScores, employeeSubmit } from "../../api/kpi";
 import { getErrorMessage } from "../../api/errors";
 import { useToast } from "../../context/ToastContext";
+import { useAuth } from "../../context/AuthContext";
 
 export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI records" }) {
   const toast = useToast();
+  const { user } = useAuth();
+  const isDeptAdmin = user?.role === "dept_admin";
   const [data, setData] = useState(null);
   const [scores, setScores] = useState({});
   const [error, setError] = useState(null);

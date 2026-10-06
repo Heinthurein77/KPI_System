@@ -80,7 +80,12 @@ export default function CombinedScoreCard({ combined }) {
     );
   }
 
-  const tier = TIER[combined.status];
+  const tierKey = {
+    "Need to improve ": "critical",
+    "Normal": "warning",
+    "Performance ": "good",
+  }[combined.status] ?? "warning";
+  const tier = TIER[tierKey];
 
   return (
     <div
@@ -107,7 +112,7 @@ export default function CombinedScoreCard({ combined }) {
         <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2">
           {tier.icon}
         </svg>
-        {tier.label}
+        {combined.status.trim()}
       </span>
     </div>
   );

@@ -5,9 +5,10 @@ const TIER_COLOR = {
   critical: { text: "text-red-600", bg: "bg-red-50", glow: "bg-red-400/25", bar: "bg-red-500" },
 };
 
+// Thresholds match dashboard.py: >75 = "Performance", >50 = "Normal", ≤50 = "Need to improve"
 function scoreTier(attainment) {
-  if (attainment >= 100) return "good";
-  if (attainment >= 85) return "warning";
+  if (attainment > 75) return "good";
+  if (attainment > 50) return "warning";
   return "critical";
 }
 

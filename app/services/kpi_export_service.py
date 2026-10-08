@@ -45,7 +45,7 @@ def build_employee_kpi_report(
     sheet.title = "KPI Report"
     sheet.sheet_view.showGridLines = False
 
-    sheet.merge_cells("A1:H1")
+    sheet.merge_cells("A1:I1")
     sheet["A1"] = "Employee KPI Score Report"
     sheet["A1"].font = _TITLE_FONT
     sheet["A1"].alignment = Alignment(horizontal="left")
@@ -75,6 +75,7 @@ def build_employee_kpi_report(
         "Final Score",
         "Actual Score",
         "Status",
+        "Admin Remark",  # new column
     ]
     for column_number, header in enumerate(headers, start=1):
         cell = sheet.cell(row=7, column=column_number, value=header)
@@ -94,6 +95,7 @@ def build_employee_kpi_report(
             submission.final_score,
             actual_score,
             submission.status.value,
+            submission.remarks or "–",  # new column — fallback "–" when empty/null
         ]
         for column_number, value in enumerate(values, start=1):
             sheet.cell(row=row_number, column=column_number, value=value)
@@ -106,14 +108,14 @@ def build_employee_kpi_report(
         for column in "BCDEFG":
             sheet[f"{column}{row_number}"].number_format = "0.00"
 
-    summary_range = sheet["A3:H5"]
+    summary_range = sheet["A3:I5"]
     for row in summary_range:
         for cell in row:
             cell.fill = _SUMMARY_FILL
             cell.alignment = Alignment(vertical="center")
 
     sheet.freeze_panes = "A8"
-    widths = {"A": 34, "B": 12, "C": 12, "D": 14, "E": 14, "F": 14, "G": 14, "H": 24}
+    widths = {"A": 34, "B": 12, "C": 12, "D": 14, "E": 14, "F": 14, "G": 14, "H": 24, "I": 36}
     for column, width in widths.items():
         sheet.column_dimensions[column].width = width
 
@@ -133,7 +135,7 @@ def _write_annual_month_sheet(
 ) -> None:
     """Write one month of detail inside an employee's annual workbook."""
     sheet.sheet_view.showGridLines = False
-    sheet.merge_cells("A1:H1")
+    sheet.merge_cells("A1:I1")
     sheet["A1"] = f"KPI Score Detail — {month} {year}"
     sheet["A1"].font = _TITLE_FONT
     sheet["A1"].alignment = Alignment(horizontal="left")
@@ -162,6 +164,7 @@ def _write_annual_month_sheet(
         "Final Score",
         "Actual Score",
         "Status",
+        "Admin Remark",  # new column
     ]
     for column_number, header in enumerate(headers, start=1):
         cell = sheet.cell(row=7, column=column_number, value=header)
@@ -171,7 +174,7 @@ def _write_annual_month_sheet(
         cell.border = _THIN_BORDER
 
     if not submissions:
-        sheet.merge_cells("A8:H8")
+        sheet.merge_cells("A8:I8")
         sheet["A8"] = "No KPI records for this month."
         sheet["A8"].alignment = Alignment(horizontal="center")
         sheet["A8"].fill = _ALTERNATE_FILL
@@ -186,6 +189,7 @@ def _write_annual_month_sheet(
                 submission.final_score,
                 submission.effective_score,
                 submission.status.value,
+                submission.remarks or "–",  # new column — fallback "–" when empty/null
             ]
             for column_number, value in enumerate(values, start=1):
                 sheet.cell(row=row_number, column=column_number, value=value)
@@ -198,13 +202,13 @@ def _write_annual_month_sheet(
             for column in "BCDEFG":
                 sheet[f"{column}{row_number}"].number_format = "0.00"
 
-    for row in sheet["A3:H4"]:
+    for row in sheet["A3:I4"]:
         for cell in row:
             cell.fill = _SUMMARY_FILL
             cell.alignment = Alignment(vertical="center")
 
     sheet.freeze_panes = "A8"
-    widths = {"A": 34, "B": 12, "C": 12, "D": 14, "E": 14, "F": 14, "G": 14, "H": 24}
+    widths = {"A": 34, "B": 12, "C": 12, "D": 14, "E": 14, "F": 14, "G": 14, "H": 24, "I": 36}
     for column, width in widths.items():
         sheet.column_dimensions[column].width = width
 

@@ -16,7 +16,6 @@ from app.schemas.audit_log import AuditLogOut
 from app.schemas.kpi import KPISubmissionOut, KpiTrendOut, KpiTrendPointOut
 from app.schemas.kpi_template import (
     CreateCustomTemplateRequest,
-    CreateTemplateRequest,
     KPITemplateOut,
     RunRecurringKpisRequest,
 )
@@ -439,37 +438,6 @@ def list_templates(db: Session = Depends(get_db), user: User = Depends(require_d
         "default_year": default_year,
         "default_period": default_period,
     }
-
-
-@router.post("/templates", response_model=KPITemplateOut)
-def create_template(
-    payload: CreateTemplateRequest, db: Session = Depends(get_db), user: User = Depends(require_dept_admin)
-):
-    if user.role == UserRole.DEPT_ADMIN:
-        resolved_department_id = user.department_id
-    elif payload.department_id is not None:
-        resolved_department_id = get_tenant_scoped_or_404(
-            db, Department, payload.department_id, user.tenant_id, "Department not found."
-        ).id
-    else:
-        resolved_department_id = None
-
-    template = KPITemplate(
-        tenant_id=user.tenant_id,
-        metric_name=payload.metric_name.strip(),
-        target=payload.target,
-        weight=payload.weight,
-        department_id=resolved_department_id,
-    )
-    db.add(template)
-    db.flush()
-    audit_service.log(
-        db, user, "kpi_template_created", "kpi_template", template.id, template.metric_name,
-        f"KPI metric created: target={fmt_score(template.target)}, weight={fmt_score(template.weight)}.",
-        department_id=resolved_department_id,
-    )
-    db.commit()
-    return template
 
 
 @router.post("/templates/custom", response_model=KPITemplateOut)

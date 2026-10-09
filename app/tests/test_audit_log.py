@@ -80,15 +80,24 @@ def test_override_and_reject_record_distinct_actions(db, client):
     assert "kpi_rejected" in actions
 
 
-def test_template_create_and_delete_record_audit_entries(db, client):
+def test_custom_template_create_and_delete_record_audit_entries(db, client):
     tenant = make_tenant(db)
     admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE)
 
     create_resp = client.post(
-        "/api/admin/templates",
-        json={"metric_name": "Revenue", "target": 100.0, "weight": 1.0, "department_id": None},
+        "/api/admin/templates/custom",
+        json={
+            "employee_id": employee.id,
+            "metric_name": "Revenue",
+            "target": 100.0,
+            "weight": 1.0,
+            "year": 2026,
+            "period": "March",
+        },
         headers=auth_headers(admin, tenant),
     )
+    assert create_resp.status_code == 200
     template_id = create_resp.json()["id"]
 
     delete_resp = client.delete(f"/api/admin/templates/{template_id}", headers=auth_headers(admin, tenant))
@@ -130,10 +139,18 @@ def test_audit_log_cross_tenant_isolation(db, client):
     tenant_b = make_tenant(db, name="Globex", slug="globex")
     admin_a = make_user(db, tenant_a, UserRole.TENANT_ADMIN)
     admin_b = make_user(db, tenant_b, UserRole.TENANT_ADMIN)
+    employee_a = make_user(db, tenant_a, UserRole.EMPLOYEE)
 
     client.post(
-        "/api/admin/templates",
-        json={"metric_name": "Acme Only", "target": 1.0, "weight": 1.0, "department_id": None},
+        "/api/admin/templates/custom",
+        json={
+            "employee_id": employee_a.id,
+            "metric_name": "Acme Only",
+            "target": 1.0,
+            "weight": 1.0,
+            "year": 2026,
+            "period": "March",
+        },
         headers=auth_headers(admin_a, tenant_a),
     )
 

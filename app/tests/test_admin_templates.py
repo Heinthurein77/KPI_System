@@ -1,5 +1,5 @@
 """HTTP-level coverage for the KPI template endpoints in app/routers/admin.py:
-GET/POST /api/admin/templates, POST /api/admin/templates/custom,
+GET /api/admin/templates, POST /api/admin/templates/custom, and
 DELETE /api/admin/templates/{id}.
 """
 
@@ -15,37 +15,19 @@ from app.tests.factories import (
 )
 
 
-# ---------- Happy path CRUD ----------
+# ---------- Template listing and custom creation ----------
 
 
-def test_create_template_success_company_wide(db, client):
+def test_standard_template_creation_endpoint_removed(db, client):
     tenant = make_tenant(db)
     admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
 
     resp = client.post(
         "/api/admin/templates",
-        json={"metric_name": "Revenue", "target": 100.0, "weight": 1.0, "department_id": None},
+        json={"metric_name": "Revenue", "target": 100.0, "weight": 1.0},
         headers=auth_headers(admin, tenant),
     )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["metric_name"] == "Revenue"
-    assert body["department_id"] is None
-    assert body["is_custom"] is False
-
-
-def test_create_template_with_department_success(db, client):
-    tenant = make_tenant(db)
-    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
-    dept = make_department(db, tenant)
-
-    resp = client.post(
-        "/api/admin/templates",
-        json={"metric_name": "Bugs Fixed", "target": 10.0, "weight": 0.5, "department_id": dept.id},
-        headers=auth_headers(admin, tenant),
-    )
-    assert resp.status_code == 200
-    assert resp.json()["department_id"] == dept.id
+    assert resp.status_code == 405
 
 
 def test_list_templates_success(db, client):
@@ -144,21 +126,6 @@ def test_delete_template_dept_admin_succeeds_with_only_draft_submissions(db, cli
 # ---------- Dept Admin department-scoping guard ----------
 
 
-def test_create_template_dept_admin_forced_into_own_department(db, client):
-    tenant = make_tenant(db)
-    dept = make_department(db, tenant, name="Mine")
-    other_dept = make_department(db, tenant, name="Theirs")
-    dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
-
-    resp = client.post(
-        "/api/admin/templates",
-        json={"metric_name": "Whatever", "target": 1.0, "weight": 1.0, "department_id": other_dept.id},
-        headers=auth_headers(dept_admin, tenant),
-    )
-    assert resp.status_code == 200
-    assert resp.json()["department_id"] == dept.id
-
-
 def test_list_templates_dept_admin_scoped(db, client):
     tenant = make_tenant(db)
     dept = make_department(db, tenant, name="Mine")
@@ -235,20 +202,6 @@ def test_create_custom_template_tenant_admin_rejects_tenant_admin_target(db, cli
 # ---------- Cross-tenant isolation ----------
 
 
-def test_create_template_cross_tenant_department_id_returns_404(db, client):
-    tenant_a = make_tenant(db, name="Acme", slug="acme")
-    tenant_b = make_tenant(db, name="Globex", slug="globex")
-    admin_a = make_user(db, tenant_a, UserRole.TENANT_ADMIN)
-    dept_b = make_department(db, tenant_b)
-
-    resp = client.post(
-        "/api/admin/templates",
-        json={"metric_name": "Cross", "target": 1.0, "weight": 1.0, "department_id": dept_b.id},
-        headers=auth_headers(admin_a, tenant_a),
-    )
-    assert resp.status_code == 404
-
-
 def test_create_custom_template_cross_tenant_employee_returns_404(db, client):
     tenant_a = make_tenant(db, name="Acme", slug="acme")
     tenant_b = make_tenant(db, name="Globex", slug="globex")
@@ -288,18 +241,6 @@ def test_delete_template_cross_tenant_returns_404(db, client):
 def test_list_templates_requires_auth(client):
     resp = client.get("/api/admin/templates")
     assert resp.status_code == 401
-
-
-def test_create_template_forbidden_for_employee(db, client):
-    tenant = make_tenant(db)
-    employee = make_user(db, tenant, UserRole.EMPLOYEE)
-
-    resp = client.post(
-        "/api/admin/templates",
-        json={"metric_name": "x", "target": 1.0, "weight": 1.0, "department_id": None},
-        headers=auth_headers(employee, tenant),
-    )
-    assert resp.status_code == 403
 
 
 def test_delete_template_forbidden_for_employee(db, client):

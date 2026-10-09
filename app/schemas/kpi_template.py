@@ -21,17 +21,6 @@ class KPITemplateOut(BaseModel):
     is_recurring: bool = False
 
 
-class CreateTemplateRequest(BaseModel):
-    metric_name: str
-    # A metric with a zero or negative target/weight would corrupt the weighted
-    # combined-score math in dashboard.combined_final_score (divide-by-near-zero
-    # attainment, or a negative contribution that pulls the whole weighted
-    # average the wrong way) -- reject it at the door instead.
-    target: float = Field(gt=0)
-    weight: float = Field(gt=0)
-    department_id: int | None = None
-
-
 class CreateCustomTemplateRequest(BaseModel):
     employee_id: int
     metric_name: str

@@ -66,6 +66,10 @@ export function listTemplates() {
   return client.get("/api/admin/templates").then((r) => r.data);
 }
 
+export function createTemplate(payload) {
+  return client.post("/api/admin/templates", payload).then((r) => r.data);
+}
+
 export function createCustomTemplate(payload) {
   return client.post("/api/admin/templates/custom", payload).then((r) => r.data);
 }

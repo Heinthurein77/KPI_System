@@ -62,8 +62,7 @@ npm run dev                   # http://localhost:5173, talks to http://localhost
 ### Bootstrap account
 
 `python -m app.seed` creates **only** a Super Admin — no sample departments, employees,
-or KPI metrics. Create departments and users in the admin UI, then assign custom KPIs
-to individual employees or Department Admins from the KPI page.
+or KPI metrics. Everything else is created from the admin UI after logging in.
 
 | Role | Email | Password |
 |---|---|---|

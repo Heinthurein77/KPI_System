@@ -4,7 +4,7 @@ import PageLoading from "../../components/ui/PageLoading";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { createCustomTemplate, deleteTemplate, listTemplates } from "../../api/admin";
+import { createCustomTemplate, createTemplate, deleteTemplate, listTemplates } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
 
 export default function TemplatesPage() {
@@ -13,6 +13,11 @@ export default function TemplatesPage() {
   const isDeptAdmin = user.role === "dept_admin";
 
   const [data, setData] = useState(null);
+
+  const [metricName, setMetricName] = useState("");
+  const [target, setTarget] = useState("");
+  const [weight, setWeight] = useState("");
+  const [departmentId, setDepartmentId] = useState("");
 
   const [customEmployeeId, setCustomEmployeeId] = useState("");
   const [customMetricName, setCustomMetricName] = useState("");
@@ -37,6 +42,25 @@ export default function TemplatesPage() {
   // ToastContext), so listing it here would refetch on every render.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, []);
+
+  async function handleCreateTemplate(e) {
+    e.preventDefault();
+    try {
+      await createTemplate({
+        metric_name: metricName.trim(),
+        target: Number(target),
+        weight: Number(weight),
+        department_id: isDeptAdmin ? undefined : departmentId || undefined,
+      });
+      toast.success(`Metric "${metricName.trim()}" created.`);
+      setMetricName("");
+      setTarget("");
+      setWeight("");
+      load();
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    }
+  }
 
   async function handleCreateCustom(e) {
     e.preventDefault();
@@ -80,7 +104,7 @@ export default function TemplatesPage() {
   const yearOptions = Array.from({ length: 3 }, (_, i) => data.default_year - 1 + i);
 
   return (
-    <AppShell title={isDeptAdmin ? "My Department KPIs" : "Custom KPI Metrics"}>
+    <AppShell title={isDeptAdmin ? "My Department Metrics" : "KPI Metric Templates"}>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
@@ -164,6 +188,70 @@ export default function TemplatesPage() {
         </div>
 
         <div className="space-y-6">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+            <h2 className="text-sm font-semibold text-slate-900 mb-4">Add Metric</h2>
+            <p className="text-xs text-slate-500 mb-3">
+              Applies every month to {isDeptAdmin ? "your whole team" : "the selected scope"}.
+            </p>
+            <form onSubmit={handleCreateTemplate} className="space-y-3">
+              <input
+                type="text"
+                required
+                placeholder="e.g. Customer Satisfaction Score"
+                value={metricName}
+                onChange={(e) => setMetricName(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+              />
+              <div className="grid grid-cols-2 gap-3">
+                <input
+                  type="number"
+                  step="0.1"
+                  required
+                  placeholder="Target"
+                  value={target}
+                  onChange={(e) => setTarget(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                />
+                <input
+                  type="number"
+                  step="0.1"
+                  required
+                  placeholder="Weight"
+                  value={weight}
+                  onChange={(e) => setWeight(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                />
+              </div>
+              {isDeptAdmin ? (
+                <p className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
+                  Department: <span className="font-medium text-slate-700">{user.department?.name}</span>
+                </p>
+              ) : (
+                <select
+                  value={departmentId}
+                  onChange={(e) => setDepartmentId(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                >
+                  <option value="">All Departments</option>
+                  {data.departments.map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button
+                type="submit"
+                className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
+              >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+                Create Metric
+              </button>
+            </form>
+          </div>
+
           <div className="bg-white rounded-2xl border border-violet-200 shadow-sm p-6">
             <div className="flex items-center gap-2 mb-1">
               <svg className="h-4 w-4 text-violet-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -176,8 +264,8 @@ export default function TemplatesPage() {
               <h2 className="text-sm font-semibold text-slate-900">Add Custom KPI</h2>
             </div>
             <p className="text-xs text-slate-500 mb-4">
-              A custom metric for one {isDeptAdmin ? "employee" : "person"}, starting in the selected month and
-              recurring in following months.
+              A one-off metric for a single {isDeptAdmin ? "employee" : "person"}, for one month only — it won't
+              repeat in other periods.
               {!isDeptAdmin && " A Dept Admin's own KPI skips department review and goes straight to you for final approval."}
             </p>
             <form onSubmit={handleCreateCustom} className="space-y-3">

@@ -1,10 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import AppShell from "../../components/layout/AppShell";
 import PageLoading from "../../components/ui/PageLoading";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { createCustomTemplate, createTemplate, deleteTemplate, listTemplates } from "../../api/admin";
+import { createCustomTemplate, deleteTemplate, listTemplates } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
 
 export default function TemplatesPage() {
@@ -14,17 +14,11 @@ export default function TemplatesPage() {
 
   const [data, setData] = useState(null);
 
-  const [metricName, setMetricName] = useState("");
-  const [target, setTarget] = useState("");
-  const [weight, setWeight] = useState("");
-  const [departmentId, setDepartmentId] = useState("");
-
   const [customEmployeeId, setCustomEmployeeId] = useState("");
   const [customMetricName, setCustomMetricName] = useState("");
   const [customTarget, setCustomTarget] = useState("");
   const [customWeight, setCustomWeight] = useState("");
-  const [customYear, setCustomYear] = useState(null);
-  const [customPeriod, setCustomPeriod] = useState(null);
+  const [weightError, setWeightError] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -32,8 +26,6 @@ export default function TemplatesPage() {
     listTemplates()
       .then((d) => {
         setData(d);
-        setCustomYear((y) => y ?? d.default_year);
-        setCustomPeriod((p) => p ?? d.default_period);
       })
       .catch((err) => toast.error(getErrorMessage(err)));
   }
@@ -43,44 +35,57 @@ export default function TemplatesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, []);
 
-  async function handleCreateTemplate(e) {
-    e.preventDefault();
-    try {
-      await createTemplate({
-        metric_name: metricName.trim(),
-        target: Number(target),
-        weight: Number(weight),
-        department_id: isDeptAdmin ? undefined : departmentId || undefined,
-      });
-      toast.success(`Metric "${metricName.trim()}" created.`);
-      setMetricName("");
-      setTarget("");
-      setWeight("");
-      load();
-    } catch (err) {
-      toast.error(getErrorMessage(err));
-    }
-  }
+  // Compute the sum of existing KPI weights for the currently selected employee.
+  const existingWeightSum = useMemo(() => {
+    if (!data || !customEmployeeId) return 0;
+    return data.kpi_templates
+      .filter(
+        (t) => t.is_custom && t.employee_id === Number(customEmployeeId)
+      )
+      .reduce((sum, t) => sum + Number(t.weight), 0);
+  }, [data, customEmployeeId]);
+
+  const projectedTotal = existingWeightSum + (Number(customWeight) || 0);
 
   async function handleCreateCustom(e) {
     e.preventDefault();
+
+    // Validate that adding this KPI will bring the total weight to exactly 100.
+    if (Math.round(projectedTotal * 100) !== 10000) {
+      const msg = `Weight total would be ${projectedTotal.toFixed(1)}% — it must equal exactly 100%. Adjust weights to continue.`;
+      setWeightError(msg);
+      return;
+    }
+    setWeightError(null);
+
     try {
       await createCustomTemplate({
         employee_id: Number(customEmployeeId),
         metric_name: customMetricName.trim(),
         target: Number(customTarget),
         weight: Number(customWeight),
-        year: Number(customYear),
-        period: customPeriod,
+        year: data.default_year,
+        period: data.default_period,
+        is_recurring: true,
       });
-      toast.success(`Custom KPI "${customMetricName.trim()}" added.`);
+      toast.success(`Custom KPI "${customMetricName.trim()}" added — will auto-carry to future months.`);
       setCustomEmployeeId("");
       setCustomMetricName("");
       setCustomTarget("");
       setCustomWeight("");
+      setWeightError(null);
       load();
     } catch (err) {
       toast.error(getErrorMessage(err));
+    }
+  }
+
+  // Suggest the exact weight needed to reach 100% given current existing sum.
+  function suggestRebalancedWeight() {
+    const needed = 100 - existingWeightSum;
+    if (needed > 0) {
+      setCustomWeight(String(Math.round(needed * 10) / 10));
+      setWeightError(null);
     }
   }
 
@@ -100,8 +105,6 @@ export default function TemplatesPage() {
   }
 
   if (!data) return <AppShell title="KPI Metrics"><PageLoading /></AppShell>;
-
-  const yearOptions = Array.from({ length: 3 }, (_, i) => data.default_year - 1 + i);
 
   return (
     <AppShell title={isDeptAdmin ? "My Department Metrics" : "KPI Metric Templates"}>
@@ -141,7 +144,10 @@ export default function TemplatesPage() {
                                 d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z"
                               />
                             </svg>
-                            {t.employee?.name} · {t.locked_period} {t.locked_year}
+                            {t.employee?.name}
+                            {t.is_recurring && (
+                              <span className="ml-1 text-violet-400 font-normal">· recurring</span>
+                            )}
                           </span>
                         ) : (
                           <span className="text-slate-600">{t.department ? t.department.name : "All Departments"}</span>
@@ -187,71 +193,8 @@ export default function TemplatesPage() {
           </div>
         </div>
 
+        {/* ── Add Custom KPI (only panel) ── */}
         <div className="space-y-6">
-          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
-            <h2 className="text-sm font-semibold text-slate-900 mb-4">Add Metric</h2>
-            <p className="text-xs text-slate-500 mb-3">
-              Applies every month to {isDeptAdmin ? "your whole team" : "the selected scope"}.
-            </p>
-            <form onSubmit={handleCreateTemplate} className="space-y-3">
-              <input
-                type="text"
-                required
-                placeholder="e.g. Customer Satisfaction Score"
-                value={metricName}
-                onChange={(e) => setMetricName(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-              />
-              <div className="grid grid-cols-2 gap-3">
-                <input
-                  type="number"
-                  step="0.1"
-                  required
-                  placeholder="Target"
-                  value={target}
-                  onChange={(e) => setTarget(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-                />
-                <input
-                  type="number"
-                  step="0.1"
-                  required
-                  placeholder="Weight"
-                  value={weight}
-                  onChange={(e) => setWeight(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-                />
-              </div>
-              {isDeptAdmin ? (
-                <p className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
-                  Department: <span className="font-medium text-slate-700">{user.department?.name}</span>
-                </p>
-              ) : (
-                <select
-                  value={departmentId}
-                  onChange={(e) => setDepartmentId(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-                >
-                  <option value="">All Departments</option>
-                  {data.departments.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <button
-                type="submit"
-                className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
-              >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                </svg>
-                Create Metric
-              </button>
-            </form>
-          </div>
-
           <div className="bg-white rounded-2xl border border-violet-200 shadow-sm p-6">
             <div className="flex items-center gap-2 mb-1">
               <svg className="h-4 w-4 text-violet-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -264,15 +207,19 @@ export default function TemplatesPage() {
               <h2 className="text-sm font-semibold text-slate-900">Add Custom KPI</h2>
             </div>
             <p className="text-xs text-slate-500 mb-4">
-              A one-off metric for a single {isDeptAdmin ? "employee" : "person"}, for one month only — it won't
-              repeat in other periods.
+              Assigns a recurring monthly KPI to a specific {isDeptAdmin ? "employee" : "person"} starting from{" "}
+              <span className="font-medium text-slate-700">
+                {data.default_period} {data.default_year}
+              </span>{" "}
+              — it auto-carries forward each month.
               {!isDeptAdmin && " A Dept Admin's own KPI skips department review and goes straight to you for final approval."}
             </p>
+
             <form onSubmit={handleCreateCustom} className="space-y-3">
               <select
                 required
                 value={customEmployeeId}
-                onChange={(e) => setCustomEmployeeId(e.target.value)}
+                onChange={(e) => { setCustomEmployeeId(e.target.value); setWeightError(null); }}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
               >
                 <option value="" disabled>
@@ -285,6 +232,7 @@ export default function TemplatesPage() {
                   </option>
                 ))}
               </select>
+
               <input
                 type="text"
                 required
@@ -293,6 +241,7 @@ export default function TemplatesPage() {
                 onChange={(e) => setCustomMetricName(e.target.value)}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
               />
+
               <div className="grid grid-cols-2 gap-3">
                 <input
                   type="number"
@@ -306,40 +255,65 @@ export default function TemplatesPage() {
                 <input
                   type="number"
                   step="0.1"
+                  min="0.1"
+                  max="100"
                   required
-                  placeholder="Weight"
+                  placeholder="Weight %"
                   value={customWeight}
-                  onChange={(e) => setCustomWeight(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                  onChange={(e) => { setCustomWeight(e.target.value); setWeightError(null); }}
+                  className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 transition ${
+                    weightError
+                      ? "border-red-400 focus:ring-red-400"
+                      : "border-slate-300 focus:ring-brand-500 focus:border-brand-500"
+                  }`}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <select
-                  value={customYear ?? ""}
-                  onChange={(e) => setCustomYear(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-                >
-                  {yearOptions.map((y) => (
-                    <option key={y} value={y}>
-                      {y}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={customPeriod ?? ""}
-                  onChange={(e) => setCustomPeriod(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-                >
-                  {data.months.map((m) => (
-                    <option key={m} value={m}>
-                      {m}
-                    </option>
-                  ))}
-                </select>
-              </div>
+
+              {/* Weight sum indicator */}
+              {customEmployeeId && (
+                <div className={`rounded-lg px-3 py-2 text-xs flex items-center justify-between gap-2 ${
+                  projectedTotal === 100
+                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                    : projectedTotal > 100
+                    ? "bg-red-50 text-red-700 border border-red-200"
+                    : "bg-amber-50 text-amber-700 border border-amber-200"
+                }`}>
+                  <span>
+                    Existing: <strong>{existingWeightSum.toFixed(1)}%</strong>
+                    {customWeight ? (
+                      <>
+                        {" + New: "}
+                        <strong>{(Number(customWeight) || 0).toFixed(1)}%</strong>
+                        {" = "}
+                        <strong>{projectedTotal.toFixed(1)}% / 100%</strong>
+                      </>
+                    ) : (
+                      <> · <strong>{(100 - existingWeightSum).toFixed(1)}%</strong> remaining</>
+                    )}
+                  </span>
+                  {projectedTotal !== 100 && (100 - existingWeightSum) > 0 && (
+                    <button
+                      type="button"
+                      onClick={suggestRebalancedWeight}
+                      className="shrink-0 underline underline-offset-2 text-xs font-semibold hover:opacity-75 transition"
+                    >
+                      Use {(100 - existingWeightSum).toFixed(1)}%
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Weight validation error */}
+              {weightError && (
+                <p className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+                  {weightError}
+                </p>
+              )}
+
               <button
                 type="submit"
-                className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 transition"
+                className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 transition disabled:opacity-60"
+                disabled={!!weightError}
               >
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -364,3 +338,4 @@ export default function TemplatesPage() {
     </AppShell>
   );
 }
+

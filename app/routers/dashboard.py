@@ -1,3 +1,4 @@
+from calendar import monthrange
 from datetime import date
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
@@ -30,6 +31,26 @@ def is_current_or_future_period(year: int, period: str, today: date | None = Non
     but not spontaneously generate draft KPIs for months that have already passed."""
     current_year, current_period = current_month_period(today)
     return (year, MONTH_NAMES.index(period)) >= (current_year, MONTH_NAMES.index(current_period))
+
+
+def is_month_end_period(year: int, period: str, today: date | None = None) -> bool:
+    """Return True when *today* falls within the last 3 calendar days of *period*
+    in *year*.  This drives the month-end lock on the employee self-assessment UI:
+    employees may only enter their actual scores near the end of the month so
+    they're reporting on a full month's performance.
+
+    Only the current month can ever be in its end-of-month window — past months
+    (already closed) and future months are always False.
+    """
+    today = today or date.today()
+    current_year, current_period = current_month_period(today)
+    # Only the live current month can be in its end-of-month window.
+    if (year, period) != (current_year, current_period):
+        return False
+    month_index = MONTH_NAMES.index(period) + 1  # 1-based
+    last_day = monthrange(year, month_index)[1]
+    return today.day >= last_day - 2
+
 
 
 def calculate_kpi(kpi_list: List[Dict[str, Any]]) -> tuple[float, str]:
@@ -140,8 +161,10 @@ def my_kpi(
         "months": MONTH_NAMES,
         "submissions": _serialize(submissions),
         "is_current_period": is_fillable_period,
+        "is_month_end": is_month_end_period(year, period),
         "combined_score": combined_final_score(submissions),
     }
+
 
 
 @router.get("/dashboard")
@@ -184,9 +207,11 @@ def dashboard(
         context.update(
             submissions=_serialize(submissions),
             is_current_period=is_fillable_period,
+            is_month_end=is_month_end_period(year, period),
             combined_score=combined_final_score(submissions),
         )
         return context
+
 
     query = kpi_service.visible_submissions_query(user).where(
         KPISubmission.year == year,

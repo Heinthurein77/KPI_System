@@ -53,7 +53,17 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
 
   if (!data) return <PageLoading />;
 
-  const isEditable = data.is_current_period && data.submissions[0]?.status === "draft";
+  // Editable only when: this is the current month AND we're in the last-3-days
+  // window (month-end lock). Past periods and early-in-month views are read-only.
+  const isEditable =
+    data.is_current_period &&
+    data.is_month_end &&
+    data.submissions[0]?.status === "draft";
+
+  // Show a "not yet open" banner if we're in the current month but before month-end.
+  const isEarlyInMonth =
+    data.is_current_period && !data.is_month_end && data.submissions[0]?.status === "draft";
+
 
   function handleApply(nextParams) {
     setParams(nextParams);
@@ -168,6 +178,22 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
         <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
       )}
 
+      {/* Month-end lock: current month but entry window not open yet */}
+      {isEarlyInMonth && (
+        <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 flex items-start gap-3">
+          <svg className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+          </svg>
+          <div>
+            <p className="text-sm font-semibold text-amber-800">Score entry opens at month-end</p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              KPI scores for <span className="font-medium">{data.active_period} {data.active_year}</span> can only be
+              entered during the last 3 days of the month. Check back then to record your actual scores.
+            </p>
+          </div>
+        </div>
+      )}
+
       {data.submissions.length === 0 ? (
         <EmptyState title={emptyTitle} message={`Nothing found for ${data.active_period} ${data.active_year}.`} />
       ) : (
@@ -230,6 +256,13 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
                 </svg>
               </button>
             </div>
+          ) : isEarlyInMonth ? (
+            <p className="mt-5 flex items-center gap-1.5 text-sm text-slate-500">
+              <svg className="h-4 w-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+              </svg>
+              Score entry opens during the last 3 days of {data.active_period}.
+            </p>
           ) : (
             <p className="mt-5 flex items-center gap-1.5 text-sm text-slate-500">
               <svg className="h-4 w-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
@@ -242,6 +275,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
               This KPI has been submitted and is now read-only. Track its status above.
             </p>
           )}
+
         </>
       )}
     </div>

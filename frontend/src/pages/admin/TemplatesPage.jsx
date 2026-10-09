@@ -4,7 +4,7 @@ import PageLoading from "../../components/ui/PageLoading";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { createCustomTemplate, deleteTemplate, listTemplates } from "../../api/admin";
+import { createCustomTemplate, deleteTemplate, listTemplates, updateTemplateWeight } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
 
 export default function TemplatesPage() {
@@ -14,11 +14,18 @@ export default function TemplatesPage() {
 
   const [data, setData] = useState(null);
 
+  // ── New Custom KPI form state ──
   const [customEmployeeId, setCustomEmployeeId] = useState("");
   const [customMetricName, setCustomMetricName] = useState("");
   const [customTarget, setCustomTarget] = useState("");
   const [customWeight, setCustomWeight] = useState("");
   const [weightError, setWeightError] = useState(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  // ── Inline rebalancer: tracks per-template weight overrides ──
+  // { [templateId: number]: string }  — only populated when admin edits
+  const [adjustedWeights, setAdjustedWeights] = useState({});
+
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -35,30 +42,64 @@ export default function TemplatesPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, []);
 
-  // Compute the sum of existing KPI weights for the currently selected employee.
-  const existingWeightSum = useMemo(() => {
-    if (!data || !customEmployeeId) return 0;
-    return data.kpi_templates
-      .filter(
-        (t) => t.is_custom && t.employee_id === Number(customEmployeeId)
-      )
-      .reduce((sum, t) => sum + Number(t.weight), 0);
+  // All existing recurring custom KPIs for the selected employee.
+  const existingEmployeeKpis = useMemo(() => {
+    if (!data || !customEmployeeId) return [];
+    return data.kpi_templates.filter(
+      (t) => t.is_custom && t.employee_id === Number(customEmployeeId)
+    );
   }, [data, customEmployeeId]);
 
-  const projectedTotal = existingWeightSum + (Number(customWeight) || 0);
+  // Sum of weights using admin's in-form adjustments (falls back to template.weight).
+  const effectiveExistingSum = useMemo(() => {
+    return existingEmployeeKpis.reduce((sum, t) => {
+      const adj = adjustedWeights[t.id];
+      return sum + (adj !== undefined ? Number(adj) || 0 : Number(t.weight));
+    }, 0);
+  }, [existingEmployeeKpis, adjustedWeights]);
+
+  // Live projected total = existing (maybe adjusted) + new KPI weight.
+  const projectedTotal = effectiveExistingSum + (Number(customWeight) || 0);
+
+  // Which existing templates have been changed from their current weight?
+  const changedTemplates = useMemo(() => {
+    return existingEmployeeKpis.filter((t) => {
+      const adj = adjustedWeights[t.id];
+      return adj !== undefined && Math.abs(Number(adj) - Number(t.weight)) > 0.001;
+    });
+  }, [existingEmployeeKpis, adjustedWeights]);
+
+  function resetForm() {
+    setCustomEmployeeId("");
+    setCustomMetricName("");
+    setCustomTarget("");
+    setCustomWeight("");
+    setWeightError(null);
+    setAdjustedWeights({});
+  }
 
   async function handleCreateCustom(e) {
     e.preventDefault();
 
-    // Validate that adding this KPI will bring the total weight to exactly 100.
+    // Final 100% gate.
     if (Math.round(projectedTotal * 100) !== 10000) {
-      const msg = `Weight total would be ${projectedTotal.toFixed(1)}% — it must equal exactly 100%. Adjust weights to continue.`;
-      setWeightError(msg);
+      setWeightError(
+        `Weight total would be ${projectedTotal.toFixed(1)}% — it must equal exactly 100%. ` +
+        `Use the rebalancer below to adjust existing KPI weights.`
+      );
       return;
     }
     setWeightError(null);
+    setSubmitting(true);
 
     try {
+      // 1. PATCH changed template weights (template-only — no submission rows touched).
+      //    Approved/historical records remain immutable; new weight is for future months.
+      for (const t of changedTemplates) {
+        await updateTemplateWeight(t.id, { weight: Number(adjustedWeights[t.id]) });
+      }
+
+      // 2. Create the new recurring custom KPI starting from the current month.
       await createCustomTemplate({
         employee_id: Number(customEmployeeId),
         metric_name: customMetricName.trim(),
@@ -68,25 +109,45 @@ export default function TemplatesPage() {
         period: data.default_period,
         is_recurring: true,
       });
-      toast.success(`Custom KPI "${customMetricName.trim()}" added — will auto-carry to future months.`);
-      setCustomEmployeeId("");
-      setCustomMetricName("");
-      setCustomTarget("");
-      setCustomWeight("");
-      setWeightError(null);
+
+      const rebalanceNote =
+        changedTemplates.length > 0
+          ? ` Rebalanced ${changedTemplates.length} existing KPI weight${changedTemplates.length > 1 ? "s" : ""} (future months only).`
+          : "";
+      toast.success(
+        `Custom KPI "${customMetricName.trim()}" added — will auto-carry to future months.${rebalanceNote}`
+      );
+      resetForm();
       load();
     } catch (err) {
       toast.error(getErrorMessage(err));
+    } finally {
+      setSubmitting(false);
     }
   }
 
-  // Suggest the exact weight needed to reach 100% given current existing sum.
+  // Fill the new-KPI weight field with exactly the remaining budget.
   function suggestRebalancedWeight() {
-    const needed = 100 - existingWeightSum;
+    const needed = 100 - effectiveExistingSum;
     if (needed > 0) {
       setCustomWeight(String(Math.round(needed * 10) / 10));
       setWeightError(null);
     }
+  }
+
+  // Update a single existing template's in-form weight override.
+  function handleAdjustWeight(templateId, value) {
+    setAdjustedWeights((prev) => ({ ...prev, [templateId]: value }));
+    setWeightError(null);
+  }
+
+  // Reset a single template's weight override back to its saved value.
+  function resetAdjustedWeight(templateId) {
+    setAdjustedWeights((prev) => {
+      const next = { ...prev };
+      delete next[templateId];
+      return next;
+    });
   }
 
   async function confirmDelete() {
@@ -109,6 +170,7 @@ export default function TemplatesPage() {
   return (
     <AppShell title={isDeptAdmin ? "My Department Metrics" : "KPI Metric Templates"}>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* ── Template list ── */}
         <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-100">
@@ -193,7 +255,7 @@ export default function TemplatesPage() {
           </div>
         </div>
 
-        {/* ── Add Custom KPI (only panel) ── */}
+        {/* ── Add Custom KPI panel ── */}
         <div className="space-y-6">
           <div className="bg-white rounded-2xl border border-violet-200 shadow-sm p-6">
             <div className="flex items-center gap-2 mb-1">
@@ -216,10 +278,15 @@ export default function TemplatesPage() {
             </p>
 
             <form onSubmit={handleCreateCustom} className="space-y-3">
+              {/* Employee selector */}
               <select
                 required
                 value={customEmployeeId}
-                onChange={(e) => { setCustomEmployeeId(e.target.value); setWeightError(null); }}
+                onChange={(e) => {
+                  setCustomEmployeeId(e.target.value);
+                  setWeightError(null);
+                  setAdjustedWeights({});
+                }}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
               >
                 <option value="" disabled>
@@ -233,6 +300,7 @@ export default function TemplatesPage() {
                 ))}
               </select>
 
+              {/* New KPI name */}
               <input
                 type="text"
                 required
@@ -242,6 +310,7 @@ export default function TemplatesPage() {
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
               />
 
+              {/* Target + Weight */}
               <div className="grid grid-cols-2 gap-3">
                 <input
                   type="number"
@@ -269,17 +338,17 @@ export default function TemplatesPage() {
                 />
               </div>
 
-              {/* Weight sum indicator */}
+              {/* ── Weight sum indicator ── */}
               {customEmployeeId && (
                 <div className={`rounded-lg px-3 py-2 text-xs flex items-center justify-between gap-2 ${
-                  projectedTotal === 100
+                  Math.round(projectedTotal * 10) === 1000
                     ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
                     : projectedTotal > 100
                     ? "bg-red-50 text-red-700 border border-red-200"
                     : "bg-amber-50 text-amber-700 border border-amber-200"
                 }`}>
                   <span>
-                    Existing: <strong>{existingWeightSum.toFixed(1)}%</strong>
+                    Existing: <strong>{effectiveExistingSum.toFixed(1)}%</strong>
                     {customWeight ? (
                       <>
                         {" + New: "}
@@ -288,18 +357,124 @@ export default function TemplatesPage() {
                         <strong>{projectedTotal.toFixed(1)}% / 100%</strong>
                       </>
                     ) : (
-                      <> · <strong>{(100 - existingWeightSum).toFixed(1)}%</strong> remaining</>
+                      <> · <strong>{(100 - effectiveExistingSum).toFixed(1)}%</strong> remaining</>
                     )}
                   </span>
-                  {projectedTotal !== 100 && (100 - existingWeightSum) > 0 && (
+                  {Math.round(projectedTotal * 10) !== 1000 && (100 - effectiveExistingSum) > 0 && (
                     <button
                       type="button"
                       onClick={suggestRebalancedWeight}
                       className="shrink-0 underline underline-offset-2 text-xs font-semibold hover:opacity-75 transition"
                     >
-                      Use {(100 - existingWeightSum).toFixed(1)}%
+                      Use {(100 - effectiveExistingSum).toFixed(1)}%
                     </button>
                   )}
+                </div>
+              )}
+
+              {/* ── Inline Weight Rebalancer ──
+                  Shows whenever the selected employee has existing KPIs.
+                  All edits here ONLY update KPITemplate.weight (future months).
+                  Approved submission records are strictly immutable.          */}
+              {existingEmployeeKpis.length > 0 && (
+                <div className="rounded-lg border border-slate-200 overflow-hidden">
+                  {/* Header */}
+                  <div className="bg-slate-50 px-3 py-2 flex items-center justify-between gap-2 border-b border-slate-200">
+                    <div className="flex items-center gap-1.5">
+                      <svg className="h-3.5 w-3.5 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75" />
+                      </svg>
+                      <span className="text-xs font-semibold text-slate-600">Rebalance Existing KPIs</span>
+                    </div>
+                    <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                      <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
+                      </svg>
+                      Future months only · approved records untouched
+                    </span>
+                  </div>
+
+                  {/* Existing KPI rows with editable weights */}
+                  <div className="divide-y divide-slate-100">
+                    {existingEmployeeKpis.map((t) => {
+                      const currentVal = adjustedWeights[t.id] !== undefined
+                        ? adjustedWeights[t.id]
+                        : t.weight;
+                      const isEdited = adjustedWeights[t.id] !== undefined
+                        && Math.abs(Number(adjustedWeights[t.id]) - Number(t.weight)) > 0.001;
+
+                      return (
+                        <div key={t.id} className="px-3 py-2 flex items-center gap-2 bg-white hover:bg-slate-50/60 transition-colors">
+                          {/* KPI name */}
+                          <span className="flex-1 min-w-0 text-xs text-slate-700 truncate" title={t.metric_name}>
+                            {t.metric_name}
+                          </span>
+
+                          {/* Edited badge */}
+                          {isEdited && (
+                            <span className="shrink-0 inline-flex items-center rounded-full bg-blue-50 px-1.5 py-0.5 text-[10px] font-semibold text-blue-600 ring-1 ring-inset ring-blue-200">
+                              edited
+                            </span>
+                          )}
+
+                          {/* Weight input */}
+                          <input
+                            type="number"
+                            step="0.1"
+                            min="0.1"
+                            max="100"
+                            value={currentVal}
+                            onChange={(e) => handleAdjustWeight(t.id, e.target.value)}
+                            className={`w-16 rounded border px-2 py-1 text-xs text-right tabular-nums focus:outline-none focus:ring-1 transition ${
+                              isEdited
+                                ? "border-blue-300 focus:ring-blue-400 bg-blue-50"
+                                : "border-slate-300 focus:ring-brand-500"
+                            }`}
+                          />
+                          <span className="shrink-0 text-xs text-slate-400">%</span>
+
+                          {/* Reset button — only if edited */}
+                          {isEdited ? (
+                            <button
+                              type="button"
+                              onClick={() => resetAdjustedWeight(t.id)}
+                              title="Reset to saved weight"
+                              className="shrink-0 text-slate-400 hover:text-slate-600 transition"
+                            >
+                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                                <path strokeLinecap="round" strokeLinejoin="round" d="M9 15 3 9m0 0 6-6M3 9h12a6 6 0 0 1 0 12h-3" />
+                              </svg>
+                            </button>
+                          ) : (
+                            <span className="w-3.5" /> /* spacer to keep alignment */
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {/* Running total bar inside the rebalancer */}
+                  <div className={`px-3 py-1.5 border-t flex items-center justify-between text-[10px] font-medium ${
+                    Math.round(effectiveExistingSum * 10) + Math.round((Number(customWeight) || 0) * 10) === 1000
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                      : "bg-slate-50 text-slate-500 border-slate-200"
+                  }`}>
+                    <span>
+                      Existing subtotal: <strong>{effectiveExistingSum.toFixed(1)}%</strong>
+                      {changedTemplates.length > 0 && (
+                        <span className="ml-1 text-blue-500">({changedTemplates.length} pending save)</span>
+                      )}
+                    </span>
+                    {changedTemplates.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setAdjustedWeights({})}
+                        className="text-slate-400 hover:text-slate-600 underline underline-offset-1 transition"
+                      >
+                        Reset all
+                      </button>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -310,16 +485,39 @@ export default function TemplatesPage() {
                 </p>
               )}
 
+              {/* Submit */}
               <button
                 type="submit"
+                disabled={submitting || !!weightError}
                 className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 transition disabled:opacity-60"
-                disabled={!!weightError}
               >
-                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                </svg>
-                Add Custom KPI
+                {submitting ? (
+                  <>
+                    <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                    </svg>
+                    Saving…
+                  </>
+                ) : (
+                  <>
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                    </svg>
+                    {changedTemplates.length > 0
+                      ? `Save Weights & Add KPI`
+                      : `Add Custom KPI`}
+                  </>
+                )}
               </button>
+
+              {/* Contextual hint when rebalance changes are pending */}
+              {changedTemplates.length > 0 && (
+                <p className="text-[10px] text-slate-400 text-center leading-relaxed">
+                  Weight changes apply to <strong>future months only</strong>.<br />
+                  Current &amp; past approved records remain immutable.
+                </p>
+              )}
             </form>
           </div>
         </div>
@@ -338,4 +536,3 @@ export default function TemplatesPage() {
     </AppShell>
   );
 }
-

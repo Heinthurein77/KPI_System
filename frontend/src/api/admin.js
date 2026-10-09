@@ -78,6 +78,10 @@ export function deleteTemplate(id) {
   return client.delete(`/api/admin/templates/${id}`).then((r) => r.data);
 }
 
+export function updateTemplateWeight(id, payload) {
+  return client.patch(`/api/admin/templates/${id}/weight`, payload).then((r) => r.data);
+}
+
 export function getAuditLog(limit) {
   return client.get("/api/admin/audit-log", { params: limit ? { limit } : {} }).then((r) => r.data);
 }

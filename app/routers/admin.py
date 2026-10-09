@@ -19,6 +19,7 @@ from app.schemas.kpi_template import (
     CreateTemplateRequest,
     KPITemplateOut,
     RunRecurringKpisRequest,
+    UpdateTemplateWeightRequest,
 )
 from app.schemas.user import (
     CreateDepartmentRequest,
@@ -495,6 +496,66 @@ def create_custom_template(
         payload.year, payload.period, is_recurring=payload.is_recurring,
     )
     return submission.kpi_template
+
+
+@router.patch("/templates/{template_id}/weight", response_model=KPITemplateOut)
+def update_template_weight(
+    template_id: int,
+    payload: UpdateTemplateWeightRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_dept_admin),
+):
+    """Update only the weight on a recurring custom KPI template.
+
+    This is a *template-only* change: only KPITemplate.weight is written.
+    No KPISubmission rows are read, written, or recalculated.
+
+    Approved/historical submission scores are therefore strictly immutable —
+    they store the actual evaluated score values independently of the template
+    weight.  The new weight takes effect starting from the next recurring
+    period that the carry-forward service materialises.
+
+    Access rules mirror create_custom_template:
+      - Tenant Admin: any recurring custom template in their tenant.
+      - Dept Admin: only templates belonging to their own department.
+    """
+    template = get_tenant_scoped_or_404(
+        db, KPITemplate, template_id, user.tenant_id, "Template not found."
+    )
+
+    if not template.is_custom:
+        raise HTTPException(
+            400,
+            "Weight rebalancing via this endpoint is only available for custom "
+            "(employee-scoped) KPI templates.",
+        )
+    if not template.is_recurring:
+        raise HTTPException(
+            400,
+            f'"{template.metric_name}" is a one-off template. Only recurring '
+            "custom templates support inline weight rebalancing.",
+        )
+
+    if user.role == UserRole.DEPT_ADMIN and template.department_id != user.department_id:
+        raise HTTPException(
+            403, "Cannot manage templates outside your department."
+        )
+
+    old_weight = template.weight
+    template.weight = payload.weight
+
+    audit_service.log(
+        db, user,
+        "kpi_template_weight_updated", "kpi_template",
+        template.id, template.metric_name,
+        f"Template weight updated for future periods: "
+        f"{fmt_score(old_weight)} → {fmt_score(payload.weight)}. "
+        "Approved/historical submission records are unchanged.",
+        department_id=template.department_id,
+    )
+    db.commit()
+    db.refresh(template)
+    return template
 
 
 @router.post("/recurring/run")

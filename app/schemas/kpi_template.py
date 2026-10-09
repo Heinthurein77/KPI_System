@@ -49,3 +49,15 @@ class RunRecurringKpisRequest(BaseModel):
 
     year: int = Field(ge=1)
     period: str
+
+
+class UpdateTemplateWeightRequest(BaseModel):
+    """Narrow weight-only update for a recurring custom KPI template.
+
+    Only the KPITemplate.weight field is changed — no KPISubmission rows
+    are touched.  Approved/historical records remain strictly immutable;
+    the new weight takes effect from the next recurring period onward.
+    """
+
+    weight: float = Field(gt=0, le=100,
+                          description="New weight percentage (0 < weight ≤ 100).")

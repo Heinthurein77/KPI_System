@@ -14,8 +14,8 @@ from app.services.recurring_service import is_template_active_for_period
 
 
 WEIGHT_TOTAL_MESSAGE = (
-    "Weight စုစုပေါင်းသည် 100% ဖြစ်ရပါမည်။ "
-    "(100 ထက် ကျော်လွန်နေပါသည် သို့မဟုတ် 100 မပြည့်သေးပါ)"
+    "Weight စုစုပေါင်း 100% ကျော်လွန်နေပါသည်။ "
+    "Total KPI weights must not exceed 100%. Please reduce weights before saving."
 )
 
 
@@ -92,11 +92,15 @@ def own_submissions_query(user: User):
 
 
 def validate_period_total_weight(db: Session, employee: User, year: int, period: str) -> None:
-    """Block edits for a period unless its existing KPI weights total exactly 100.
+    """Block save/submit if the period's KPI weights total more than 100.
 
-    This guard only reads the current submissions and their existing templates.
-    It deliberately leaves the score calculation, template data, and workflow
-    state untouched.
+    Individual metrics may carry less than 100% weight — the only hard rule
+    is that the combined total must not exceed 100.  Under-allocation is
+    intentional and valid (e.g. a new KPI added mid-year starts contributing
+    from its first full period).
+
+    This guard only reads existing submissions and their templates; it does
+    not modify any data, scores, or workflow state.
     """
     submissions = db.scalars(
         select(KPISubmission)
@@ -110,7 +114,6 @@ def validate_period_total_weight(db: Session, employee: User, year: int, period:
     ).unique().all()
 
     # Preserve the existing no-submission behavior of the save/submit flows.
-    # There is no assigned weight to validate until a period has KPI rows.
     if not submissions:
         return
 
@@ -118,8 +121,9 @@ def validate_period_total_weight(db: Session, employee: User, year: int, period:
         (Decimal(str(submission.kpi_template.weight)) for submission in submissions),
         Decimal("0"),
     )
-    if total_weight != Decimal("100"):
+    if total_weight > Decimal("100"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, WEIGHT_TOTAL_MESSAGE)
+
 
 
 def get_submission_scoped(db: Session, user: User, submission_id: int) -> KPISubmission:

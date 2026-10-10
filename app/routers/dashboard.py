@@ -1,4 +1,3 @@
-from calendar import monthrange
 from datetime import date
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
@@ -27,29 +26,28 @@ def current_month_period(today: date | None = None) -> tuple[int, str]:
 
 
 def is_current_or_future_period(year: int, period: str, today: date | None = None) -> bool:
-    """Employees may fill in the current month or get a head start on future months —
-    but not spontaneously generate draft KPIs for months that have already passed."""
+    """True for the current month and any future month (used by recurring service helpers)."""
     current_year, current_period = current_month_period(today)
     return (year, MONTH_NAMES.index(period)) >= (current_year, MONTH_NAMES.index(current_period))
 
 
-def is_month_end_period(year: int, period: str, today: date | None = None) -> bool:
-    """Return True when *today* falls within the last 3 calendar days of *period*
-    in *year*.  This drives the month-end lock on the employee self-assessment UI:
-    employees may only enter their actual scores near the end of the month so
-    they're reporting on a full month's performance.
+def is_exact_current_month(year: int, period: str, today: date | None = None) -> bool:
+    """True ONLY when year/period matches today's calendar month.
 
-    Only the current month can ever be in its end-of-month window — past months
-    (already closed) and future months are always False.
+    Used to decide whether employees may enter scores and whether draft
+    submissions should be auto-created.  Employees can update scores at
+    any point during the current month; future months are locked.
     """
-    today = today or date.today()
     current_year, current_period = current_month_period(today)
-    # Only the live current month can be in its end-of-month window.
-    if (year, period) != (current_year, current_period):
-        return False
-    month_index = MONTH_NAMES.index(period) + 1  # 1-based
-    last_day = monthrange(year, month_index)[1]
-    return today.day >= last_day - 2
+    return year == current_year and period == current_period
+
+
+def is_future_month(year: int, period: str, today: date | None = None) -> bool:
+    """True when year/period is strictly after the current calendar month."""
+    current_year, current_period = current_month_period(today)
+    return (year, MONTH_NAMES.index(period)) > (current_year, MONTH_NAMES.index(current_period))
+
+
 
 
 
@@ -144,7 +142,7 @@ def my_kpi(
     year = year or default_year
     period = period or default_period
 
-    is_fillable_period = is_current_or_future_period(year, period)
+    is_fillable_period = is_exact_current_month(year, period)
     if is_fillable_period:
         submissions = kpi_service.ensure_period_submissions(db, user, year, period)
     else:
@@ -161,9 +159,11 @@ def my_kpi(
         "months": MONTH_NAMES,
         "submissions": _serialize(submissions),
         "is_current_period": is_fillable_period,
-        "is_month_end": is_month_end_period(year, period),
+        "is_month_end": is_fillable_period,        # True for the entire current month
+        "is_future_period": is_future_month(year, period),
         "combined_score": combined_final_score(submissions),
     }
+
 
 
 
@@ -194,7 +194,7 @@ def dashboard(
     }
 
     if user.role == UserRole.EMPLOYEE:
-        is_fillable_period = is_current_or_future_period(year, period)
+        is_fillable_period = is_exact_current_month(year, period)
         if is_fillable_period:
             submissions = kpi_service.ensure_period_submissions(db, user, year, period)
         else:
@@ -207,10 +207,12 @@ def dashboard(
         context.update(
             submissions=_serialize(submissions),
             is_current_period=is_fillable_period,
-            is_month_end=is_month_end_period(year, period),
+            is_month_end=is_fillable_period,           # True for the entire current month
+            is_future_period=is_future_month(year, period),
             combined_score=combined_final_score(submissions),
         )
         return context
+
 
 
     query = kpi_service.visible_submissions_query(user).where(

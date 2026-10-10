@@ -81,11 +81,11 @@ export default function TemplatesPage() {
   async function handleCreateCustom(e) {
     e.preventDefault();
 
-    // Final 100% gate.
-    if (Math.round(projectedTotal * 100) !== 10000) {
+    // Block submission only if total would EXCEED 100% — under-allocation is valid.
+    if (projectedTotal > 100) {
       setWeightError(
-        `Weight total would be ${projectedTotal.toFixed(1)}% — it must equal exactly 100%. ` +
-        `Use the rebalancer below to adjust existing KPI weights.`
+        `Weight total would be ${projectedTotal.toFixed(1)}% — the combined total must not exceed 100%. ` +
+        `Use the rebalancer below to reduce existing KPI weights.`
       );
       return;
     }
@@ -126,7 +126,7 @@ export default function TemplatesPage() {
     }
   }
 
-  // Fill the new-KPI weight field with exactly the remaining budget.
+  // Suggest the exact weight needed to fill remaining budget (100 - existing sum).
   function suggestRebalancedWeight() {
     const needed = 100 - effectiveExistingSum;
     if (needed > 0) {
@@ -134,6 +134,7 @@ export default function TemplatesPage() {
       setWeightError(null);
     }
   }
+
 
   // Update a single existing template's in-form weight override.
   function handleAdjustWeight(templateId, value) {
@@ -341,11 +342,9 @@ export default function TemplatesPage() {
               {/* ── Weight sum indicator ── */}
               {customEmployeeId && (
                 <div className={`rounded-lg px-3 py-2 text-xs flex items-center justify-between gap-2 ${
-                  Math.round(projectedTotal * 10) === 1000
-                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                    : projectedTotal > 100
+                  projectedTotal > 100
                     ? "bg-red-50 text-red-700 border border-red-200"
-                    : "bg-amber-50 text-amber-700 border border-amber-200"
+                    : "bg-emerald-50 text-emerald-700 border border-emerald-200"
                 }`}>
                   <span>
                     Existing: <strong>{effectiveExistingSum.toFixed(1)}%</strong>

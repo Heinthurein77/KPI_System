@@ -53,17 +53,15 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
 
   if (!data) return <PageLoading />;
 
-  // Editable only when: this is the current month AND we're in the last-3-days
-  // window (month-end lock). Past periods and early-in-month views are read-only.
+  // Editable when: this is the exact current month AND submission is still a draft.
+  // is_month_end is now True for the entire current month (not just last 3 days).
   const isEditable =
     data.is_current_period &&
     data.is_month_end &&
     data.submissions[0]?.status === "draft";
 
-  // Show a "not yet open" banner if we're in the current month but before month-end.
-  const isEarlyInMonth =
-    data.is_current_period && !data.is_month_end && data.submissions[0]?.status === "draft";
-
+  // Future months are locked — employees cannot enter scores in advance.
+  const isFutureLocked = !!data.is_future_period;
 
   function handleApply(nextParams) {
     setParams(nextParams);
@@ -125,9 +123,10 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
       (sum, submission) => sum + Number(submission.kpi_template.weight),
       0
     );
-    if (totalWeight !== 100) {
+    if (totalWeight > 100) {
       setError(WEIGHT_TOTAL_MESSAGE);
       toast.error(WEIGHT_TOTAL_MESSAGE);
+
       return false;
     }
     return true;
@@ -178,17 +177,31 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
         <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
       )}
 
-      {/* Month-end lock: current month but entry window not open yet */}
-      {isEarlyInMonth && (
+      {/* Info banner: current month — scores open all month */}
+      {data.is_current_period && !isFutureLocked && (
         <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 flex items-start gap-3">
           <svg className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" />
+          </svg>
+          <p className="text-sm text-amber-800">
+            You can update actual scores for{" "}
+            <span className="font-semibold">{data.active_period} {data.active_year}</span>{" "}
+            at any time during this month. Future months remain locked until they begin.
+          </p>
+        </div>
+      )}
+
+      {/* Locked banner: future month navigation */}
+      {isFutureLocked && (
+        <div className="mb-4 rounded-lg bg-slate-50 border border-slate-200 px-4 py-3 flex items-start gap-3">
+          <svg className="h-5 w-5 text-slate-400 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 9.75h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
           </svg>
           <div>
-            <p className="text-sm font-semibold text-amber-800">Score entry opens at month-end</p>
-            <p className="text-xs text-amber-700 mt-0.5">
-              KPI scores for <span className="font-medium">{data.active_period} {data.active_year}</span> can only be
-              entered during the last 3 days of the month. Check back then to record your actual scores.
+            <p className="text-sm font-semibold text-slate-600">Future month — score entry locked</p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Scores for <span className="font-medium">{data.active_period} {data.active_year}</span> will
+              unlock automatically when that month begins.
             </p>
           </div>
         </div>
@@ -256,12 +269,12 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
                 </svg>
               </button>
             </div>
-          ) : isEarlyInMonth ? (
+          ) : isFutureLocked ? (
             <p className="mt-5 flex items-center gap-1.5 text-sm text-slate-500">
-              <svg className="h-4 w-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+              <svg className="h-4 w-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 9.75h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
               </svg>
-              Score entry opens during the last 3 days of {data.active_period}.
+              Future month — score entry unlocks when {data.active_period} begins.
             </p>
           ) : (
             <p className="mt-5 flex items-center gap-1.5 text-sm text-slate-500">

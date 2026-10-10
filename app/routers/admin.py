@@ -491,11 +491,35 @@ def create_custom_template(
         if employee.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN):
             raise HTTPException(400, "Custom KPIs can only be assigned to Employees or Department Admins.")
 
+    # Determine effective start period.
+    # If the employee's current month is already fully FINAL_APPROVED, adding a
+    # new KPI to that locked month would retroactively change an approved record.
+    # Instead, auto-shift the effective start to the 1st of next month so that
+    # approved data remains strictly immutable.
+    effective_year, effective_period = payload.year, payload.period
+    cur_year, cur_period = current_month_period()
+    current_month_subs = db.scalars(
+        select(KPISubmission).where(
+            KPISubmission.employee_id == employee.id,
+            KPISubmission.year == cur_year,
+            KPISubmission.month_or_quarter == cur_period,
+            KPISubmission.tenant_id == employee.tenant_id,
+        )
+    ).all()
+    if current_month_subs and all(s.status == KPIStatus.APPROVED for s in current_month_subs):
+        # Current month is fully FINAL_APPROVED → start new KPI from next month.
+        cur_idx = MONTH_NAMES.index(cur_period)
+        if cur_idx == 11:  # December → January next year
+            effective_year, effective_period = cur_year + 1, MONTH_NAMES[0]
+        else:
+            effective_year, effective_period = cur_year, MONTH_NAMES[cur_idx + 1]
+
     submission = kpi_service.create_custom_employee_kpi(
         db, user, employee, payload.metric_name.strip(), payload.target, payload.weight,
-        payload.year, payload.period, is_recurring=payload.is_recurring,
+        effective_year, effective_period, is_recurring=payload.is_recurring,
     )
     return submission.kpi_template
+
 
 
 @router.patch("/templates/{template_id}/weight", response_model=KPITemplateOut)

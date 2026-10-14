@@ -206,3 +206,52 @@ def test_template_download(client, db, dept_admin):
     assert r.status_code == 200
     assert "spreadsheetml.sheet" in r.headers["content-type"]
     assert len(r.content) > 0
+
+
+def test_upload_unauthenticated_401(client):
+    r = client.post(
+        "/api/admin/import/upload",
+        params={"dry_run": True},
+        files={"file": ("import.xlsx", _valid_contents(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert r.status_code == 401
+
+
+def test_upload_employee_forbidden(client, db):
+    tenant = make_tenant(db)
+    emp = make_user(db, tenant, UserRole.EMPLOYEE, name="Emp")
+    r = client.post(
+        "/api/admin/import/upload",
+        params={"dry_run": True},
+        files={"file": ("import.xlsx", _valid_contents(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=auth_headers(emp, tenant),
+    )
+    assert r.status_code == 403
+
+
+def test_upload_rejects_non_xlsx(client, db, dept_admin):
+    tenant, _, admin = dept_admin
+    r = client.post(
+        "/api/admin/import/upload",
+        params={"dry_run": True},
+        files={"file": ("evil.txt", b"not an excel file", "text/plain")},
+        headers=auth_headers(admin, tenant),
+    )
+    assert r.status_code == 400
+
+
+def test_upload_rejects_garbage_xlsx(client, db, dept_admin):
+    tenant, _, admin = dept_admin
+    r = client.post(
+        "/api/admin/import/upload",
+        params={"dry_run": True},
+        files={"file": ("fake.xlsx", b"\x00\x01\x02not a workbook", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=auth_headers(admin, tenant),
+    )
+    assert r.status_code == 200
+    assert r.json()["ok"] is False
+    assert any("Not a valid Excel" in e["message"] for e in r.json()["errors"])
+
+
+def test_template_unauthenticated_401(client):
+    assert client.get("/api/admin/import/template").status_code == 401

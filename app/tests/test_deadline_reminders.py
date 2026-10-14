@@ -106,3 +106,32 @@ def test_tenant_scoping(db):
     assert result.reminded == 1
     assert _notified_user_ids(db, tenant_a) == set()
     assert _notified_user_ids(db, tenant_b) == {emp_b.id}
+
+
+def test_reminder_endpoint_employee_forbidden(client, db):
+    from app.tests.factories import auth_headers
+
+    tenant = make_tenant(db)
+    emp = make_user(db, tenant, UserRole.EMPLOYEE, name="Emp")
+    r = client.post("/api/admin/reminders/deadline", headers=auth_headers(emp, tenant))
+    assert r.status_code == 403
+
+
+def test_reminder_endpoint_unauthenticated_401(client):
+    assert client.post("/api/admin/reminders/deadline").status_code == 401
+
+
+def test_reminder_endpoint_tenant_admin_ok(client, db):
+    from app.tests.factories import auth_headers
+
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Boss")
+    # Outside the reminder window -> window_open false, nothing sent.
+    import datetime
+    from unittest.mock import patch
+
+    with patch("app.services.deadline_reminder_service.date") as mock_date:
+        mock_date.today.return_value = datetime.date(2026, 10, 1)
+        r = client.post("/api/admin/reminders/deadline", headers=auth_headers(admin, tenant))
+    assert r.status_code == 200
+    assert r.json()["window_open"] is False

@@ -96,3 +96,16 @@ def test_trend_returns_monthly_points(client, setup_data):
     assert by_key[(2026, "October")]["avg_score"] == pytest.approx(75.0)
     assert by_key[(2026, "October")]["submitted_count"] == 2
     assert by_key[(2026, "September")]["avg_score"] == pytest.approx(80.0)
+
+
+def test_analytics_unauthenticated_401(client):
+    assert client.get("/api/analytics/overview").status_code == 401
+    assert client.get("/api/analytics/trend").status_code == 401
+
+
+def test_analytics_dept_admin_forbidden(client, db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    da = make_user(db, tenant, UserRole.DEPT_ADMIN, name="DA", department=dept)
+    r = client.get("/api/analytics/overview", headers=auth_headers(da, tenant))
+    assert r.status_code == 403

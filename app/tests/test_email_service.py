@@ -112,3 +112,34 @@ def test_inactive_user_gets_no_email(db):
         with patch.object(email_service, "_send_in_background") as mock_bg:
             email_service.send_for_notifications(db, [n])
             mock_bg.assert_not_called()
+
+
+def test_send_welcome_email_content(db):
+    with patch.object(email_service, "settings", _configured_settings()):
+        with patch("smtplib.SMTP") as mock_smtp_cls:
+            mock_smtp = mock_smtp_cls.return_value
+            with patch.object(
+                email_service,
+                "_send_in_background",
+                side_effect=lambda payloads: email_service._run_sender(payloads),
+            ):
+                email_service.send_welcome_email("new@example.com", "New Hire", "Secret123!")
+
+            mock_smtp.send_message.assert_called_once()
+            sent = mock_smtp.send_message.call_args[0][0]
+            assert sent["To"] == "new@example.com"
+            assert sent["Subject"] == "[KPI] Your KPI account is ready"
+            body = sent.get_content()
+            assert "https://kpi.example.com/login" in body
+            assert "new@example.com" in body
+            assert "Secret123!" in body
+            assert "New Hire" in body
+
+
+def test_send_welcome_email_skipped_when_unconfigured():
+    s = _configured_settings()
+    s.smtp_configured = False
+    with patch.object(email_service, "settings", s):
+        with patch("smtplib.SMTP") as mock_smtp:
+            email_service.send_welcome_email("new@example.com", "New Hire", "Secret123!")
+            mock_smtp.assert_not_called()

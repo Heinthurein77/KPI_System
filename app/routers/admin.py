@@ -31,7 +31,7 @@ from app.schemas.user import (
     UserOut,
     UserSummaryOut,
 )
-from app.services import audit_service, kpi_export_service, kpi_service, recurring_service
+from app.services import audit_service, email_service, kpi_export_service, kpi_service, recurring_service
 from app.services.audit_service import fmt_score
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -358,6 +358,8 @@ def create_user(
     )
     db.add(target)
     db.commit()
+    # Welcome email with login details (best-effort; skipped when SMTP unconfigured).
+    email_service.send_welcome_email(email, target.name, payload.password)
     return target
 
 

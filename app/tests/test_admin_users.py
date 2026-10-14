@@ -532,3 +532,20 @@ def test_create_dept_admin_with_department_succeeds(db, client):
     )
     assert resp.status_code == 200
     assert resp.json()["department_id"] == dept.id
+
+
+def test_create_user_sends_welcome_email(db, client):
+    from unittest.mock import patch
+
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    dept = make_department(db, tenant)
+
+    with patch("app.routers.admin.email_service.send_welcome_email") as mock_welcome:
+        resp = client.post(
+            "/api/admin/users",
+            json=_user_payload(email="welcome@example.com", department_id=dept.id, password="InitPass123!"),
+            headers=auth_headers(admin, tenant),
+        )
+    assert resp.status_code == 200
+    mock_welcome.assert_called_once_with("welcome@example.com", "New Hire", "InitPass123!")

@@ -95,3 +95,26 @@ def send_for_notifications(db: Session, notifications: list[Notification]) -> No
         return
     if payloads:
         _send_in_background(payloads)
+
+
+def send_welcome_email(to_email: str, name: str, password: str) -> None:
+    """Send a new user their login details. Call AFTER the user row is committed.
+
+    Best-effort: does nothing when SMTP is unconfigured, never raises.
+    """
+    if not settings.smtp_configured:
+        return
+    if settings.APP_BASE_URL:
+        login_url = f"{settings.APP_BASE_URL.rstrip('/')}/login"
+    else:
+        login_url = "the KPI login page"
+    body = (
+        f"Hi {name},\n\n"
+        f"Your KPI account has been created.\n\n"
+        f"Login: {login_url}\n"
+        f"Email: {to_email}\n"
+        f"Password: {password}\n\n"
+        f"Please change your password after your first login "
+        f"(Account -> Change Password)."
+    )
+    _send_in_background([(to_email, "Your KPI account is ready", body, None)])

@@ -47,7 +47,7 @@ from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
 from app.models.user import User, UserRole
-from app.services import kpi_service
+from app.services import email_service, kpi_service
 
 SHEET_IMPORT = "Import"
 
@@ -268,6 +268,10 @@ def execute_import(db: Session, dept_admin: User, parsed: ParsedImport) -> Impor
     db.commit()
     for user in created_users.values():
         db.refresh(user)
+
+    # Welcome emails with login details (best-effort; skipped when SMTP unconfigured).
+    for imp_user in parsed.users:
+        email_service.send_welcome_email(imp_user.email, imp_user.name, DEFAULT_PASSWORD)
 
     kpis_created = 0
     for kpi in parsed.kpis:

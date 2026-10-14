@@ -255,3 +255,18 @@ def test_upload_rejects_garbage_xlsx(client, db, dept_admin):
 
 def test_template_unauthenticated_401(client):
     assert client.get("/api/admin/import/template").status_code == 401
+
+
+def test_execute_sends_welcome_emails(db, dept_admin):
+    from unittest.mock import patch
+
+    tenant, _, admin = dept_admin
+    parsed = bulk_import_service.parse_import_file(_valid_contents(), db, tenant.id)
+    assert parsed.ok
+    with patch("app.services.bulk_import_service.email_service.send_welcome_email") as mock_welcome:
+        bulk_import_service.execute_import(db, admin, parsed)
+    assert mock_welcome.call_count == 2
+    sent_to = {c.args[0] for c in mock_welcome.call_args_list}
+    assert sent_to == {"aung@example.com", "may@example.com"}
+    for c in mock_welcome.call_args_list:
+        assert c.args[2] == "password"

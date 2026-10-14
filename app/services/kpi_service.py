@@ -145,7 +145,10 @@ def get_submission_scoped(db: Session, user: User, submission_id: int) -> KPISub
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your submission.")
     if user.role == UserRole.DEPT_ADMIN and submission.department_id != user.department_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Submission outside your department.")
-    if submission.employee_id == user.id:
+    # A Dept Admin may review their own submission at the department stage (self
+    # approval) — it still needs the Tenant Admin's final approval afterwards.
+    # Everyone else remains blocked from reviewing their own KPI.
+    if submission.employee_id == user.id and user.role != UserRole.DEPT_ADMIN:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot review your own KPI submission.")
 
     return submission
@@ -328,20 +331,15 @@ def submit_for_dept_approval(db: Session, employee: User, year: int, period: str
     if missing:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Please score every metric before submitting.")
 
-    # A Dept Admin's own KPI (e.g. a custom metric Super Admin assigned them) skips
-    # department-level review — they'd otherwise be reviewing themselves — and goes
-    # straight to the Super Admin for final approval.
-    next_status = (
-        KPIStatus.PENDING_FINAL_APPROVAL if employee.role == UserRole.DEPT_ADMIN else KPIStatus.PENDING_DEPT_APPROVAL
-    )
-
-    stage = "final approval" if next_status == KPIStatus.PENDING_FINAL_APPROVAL else "department approval"
+    # Every submission — including a Dept Admin's own — goes through department
+    # review first. A Dept Admin self-approves their own KPI at this stage
+    # (self approval), which forwards it to the Tenant Admin for final approval.
     for submission in submissions:
-        submission.status = next_status
+        submission.status = KPIStatus.PENDING_DEPT_APPROVAL
         submission.submitted_at = _now()
         audit_service.log(
             db, employee, "kpi_submitted", "kpi_submission", submission.id, _entity_label(submission),
-            f"Submitted (self score {fmt_score(submission.self_score)}) for {stage}.",
+            f"Submitted (self score {fmt_score(submission.self_score)}) for department approval.",
             department_id=submission.department_id,
         )
     db.commit()
@@ -393,9 +391,10 @@ def dept_approve(
     submission.status = KPIStatus.PENDING_FINAL_APPROVAL
     submission.dept_reviewed_by_id = reviewer.id
     submission.dept_reviewed_at = _now()
+    is_self_approval = reviewer.id == submission.employee_id
     audit_service.log(
         db, reviewer, "kpi_dept_approved", "kpi_submission", submission.id, _entity_label(submission),
-        f"Dept approved (score {fmt_score(old_score)} → {fmt_score(submission.dept_score)}), "
+        f"{'Self-approved' if is_self_approval else 'Dept approved'} (score {fmt_score(old_score)} → {fmt_score(submission.dept_score)}), "
         "forwarded for final approval.",
         department_id=submission.department_id,
     )

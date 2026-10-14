@@ -11,10 +11,11 @@ public services:
 
 File format (single sheet)
 ---------------------------
-Import:  name | email | metric | target | weight
+Import:  name | email | position | metric | target | weight
 
 One row per KPI; user info repeats on each of their rows. The email is the
-user's identity — the name must be identical on all rows with the same email.
+user's identity — the name and position must be identical on all rows with
+the same email. Position is optional.
 
 - Every imported user becomes an EMPLOYEE in the importing dept admin's own
   department, with the initial password ``"password"`` (they change it
@@ -50,7 +51,7 @@ from app.services import kpi_service
 
 SHEET_IMPORT = "Import"
 
-IMPORT_HEADERS = ("name", "email", "metric", "target", "weight")
+IMPORT_HEADERS = ("name", "email", "position", "metric", "target", "weight")
 
 #: Initial password for every imported user (they change it themselves).
 DEFAULT_PASSWORD = "password"
@@ -74,6 +75,7 @@ class ImportRowError:
 class ImportUser:
     name: str
     email: str
+    position: str | None
 
 
 @dataclass
@@ -142,11 +144,11 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
         parsed.errors.append(ImportRowError(sheet=sheet, row=0, message="The sheet is empty."))
         return parsed
     header = [_norm_header(v) for v in rows[0]]
-    if header[:5] != list(IMPORT_HEADERS):
+    if header[:6] != list(IMPORT_HEADERS):
         parsed.errors.append(
             ImportRowError(
                 sheet=sheet, row=1,
-                message=f'Header must be "name | email | metric | target | weight", got {list(rows[0][:5])}.',
+                message=f'Header must be "name | email | position | metric | target | weight", got {list(rows[0][:6])}.',
             )
         )
         return parsed
@@ -156,14 +158,15 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
         for e in db.scalars(select(User.email).where(User.tenant_id == tenant_id)).all()
     }
 
-    users_by_email: dict[str, str] = {}
+    users_by_email: dict[str, ImportUser] = {}
     seen_metrics: set[tuple[str, str]] = set()
     for idx, row in enumerate(rows[1:], start=2):
-        if _is_empty_row(row[:5]):
+        if _is_empty_row(row[:6]):
             continue
         name = str(row[0] or "").strip()
         email = str(row[1] or "").strip().lower()
-        metric = str(row[2] or "").strip()
+        position = str(row[2] or "").strip() or None
+        metric = str(row[3] or "").strip()
 
         if not name:
             parsed.errors.append(ImportRowError(sheet, idx, "Name is required."))
@@ -176,20 +179,22 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
                 ImportRowError(sheet, idx, f'Email "{email}" already exists in the system.')
             )
             continue
-        if email in users_by_email and users_by_email[email] != name:
-            parsed.errors.append(
-                ImportRowError(
-                    sheet, idx,
-                    f'Email "{email}" has two different names: "{users_by_email[email]}" and "{name}".',
+        if email in users_by_email:
+            prev = users_by_email[email]
+            if prev.name != name or prev.position != position:
+                parsed.errors.append(
+                    ImportRowError(
+                        sheet, idx,
+                        f'Email "{email}" has inconsistent name/position across rows.',
+                    )
                 )
-            )
-            continue
+                continue
         if not metric:
             parsed.errors.append(ImportRowError(sheet, idx, "Metric name is required."))
             continue
         try:
-            target = _as_number(row[3], "Target")
-            weight = _as_number(row[4], "Weight")
+            target = _as_number(row[4], "Target")
+            weight = _as_number(row[5], "Weight")
         except ValueError as exc:
             parsed.errors.append(ImportRowError(sheet, idx, str(exc)))
             continue
@@ -204,11 +209,11 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
                 ImportRowError(sheet, idx, f'Duplicate metric "{metric}" for {email}.')
             )
             continue
-        users_by_email.setdefault(email, name)
+        users_by_email.setdefault(email, ImportUser(name=name, email=email, position=position))
         seen_metrics.add((email, metric.lower()))
         parsed.kpis.append(ImportKpi(email=email, metric_name=metric, target=target, weight=weight))
 
-    parsed.users = [ImportUser(name=name, email=email) for email, name in users_by_email.items()]
+    parsed.users = list(users_by_email.values())
 
     if not parsed.users:
         parsed.errors.append(ImportRowError(sheet, 0, "No valid rows found."))
@@ -255,6 +260,7 @@ def execute_import(db: Session, dept_admin: User, parsed: ParsedImport) -> Impor
             password_hash=password_hash,
             role=UserRole.EMPLOYEE,
             department_id=dept_admin.department_id,
+            position=imp_user.position,
             is_active=True,
         )
         db.add(user)
@@ -293,11 +299,11 @@ def build_import_template() -> BytesIO:
 
     ws = wb.active
     ws.title = SHEET_IMPORT
-    ws.append(["name", "email", "metric", "target", "weight"])
-    ws.append(["Aung Aung", "aung.aung@example.com", "Monthly Sales", 100, 60])
-    ws.append(["Aung Aung", "aung.aung@example.com", "Customer Visits", 40, 40])
-    ws.append(["May May", "may.may@example.com", "Monthly Sales", 100, 100])
-    for col, width in zip("ABCDE", (20, 30, 24, 12, 12)):
+    ws.append(["name", "email", "position", "metric", "target", "weight"])
+    ws.append(["Aung Aung", "aung.aung@example.com", "Sales Executive", "Monthly Sales", 100, 60])
+    ws.append(["Aung Aung", "aung.aung@example.com", "Sales Executive", "Customer Visits", 40, 40])
+    ws.append(["May May", "may.may@example.com", "Sales Executive", "Monthly Sales", 100, 100])
+    for col, width in zip("ABCDEF", (20, 30, 20, 24, 12, 12)):
         ws.column_dimensions[col].width = width
 
     help_ws = wb.create_sheet("Read me")
@@ -306,7 +312,8 @@ def build_import_template() -> BytesIO:
         "Bulk import instructions (for Department Admins)",
         "",
         "1. One row per KPI. If an employee has 2 KPIs, write 2 rows with the same",
-        "   name and email (the email identifies the person - the name must match).",
+        "   name, email and position (the email identifies the person - name and",
+        "   position must match on all their rows). Position is optional.",
         "2. Everyone is added as an Employee in YOUR department with the initial",
         "   password: password (ask them to change it on first login via the",
         "   Change Password page).",

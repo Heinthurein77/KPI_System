@@ -28,7 +28,7 @@ def _workbook(rows):
     wb = Workbook()
     ws = wb.active
     ws.title = "Import"
-    ws.append(["name", "email", "metric", "target", "weight"])
+    ws.append(["name", "email", "position", "metric", "target", "weight"])
     for r in rows:
         ws.append(r)
     buf = BytesIO()
@@ -40,9 +40,9 @@ def _workbook(rows):
 def _valid_contents():
     return _workbook(
         [
-            ["Aung Aung", "aung@example.com", "Sales", 100, 60],
-            ["Aung Aung", "aung@example.com", "Visits", 40, 40],
-            ["May May", "may@example.com", "Sales", 100, 100],
+            ["Aung Aung", "aung@example.com", "Sales Executive", "Sales", 100, 60],
+            ["Aung Aung", "aung@example.com", "Sales Executive", "Visits", 40, 40],
+            ["May May", "may@example.com", "Senior Sales", "Sales", 100, 100],
         ]
     )
 
@@ -67,21 +67,21 @@ def test_parse_duplicate_email_with_different_name(db, dept_admin):
     tenant, _, _ = dept_admin
     contents = _workbook(
         [
-            ["Aung", "aung@example.com", "Sales", 100, 100],
-            ["Aung 2", "aung@example.com", "Visits", 40, 100],
+            ["Aung", "aung@example.com", "Exec", "Sales", 100, 100],
+            ["Aung 2", "aung@example.com", "Exec", "Visits", 40, 100],
         ]
     )
     parsed = bulk_import_service.parse_import_file(contents, db, tenant.id)
     assert not parsed.ok
-    assert any("two different names" in e.message for e in parsed.errors)
+    assert any("inconsistent name/position" in e.message for e in parsed.errors)
 
 
 def test_parse_duplicate_metric(db, dept_admin):
     tenant, _, _ = dept_admin
     contents = _workbook(
         [
-            ["Aung", "aung@example.com", "Sales", 100, 50],
-            ["Aung", "aung@example.com", "Sales", 100, 50],
+            ["Aung", "aung@example.com", "Exec", "Sales", 100, 50],
+            ["Aung", "aung@example.com", "Exec", "Sales", 100, 50],
         ]
     )
     parsed = bulk_import_service.parse_import_file(contents, db, tenant.id)
@@ -101,7 +101,7 @@ def test_parse_kpi_for_unknown_email(db, dept_admin):
     # Every row carries its own user info now, so an "unknown email" case is
     # simply a row whose user fails validation (e.g. bad email format).
     tenant, _, _ = dept_admin
-    contents = _workbook([["Ghost", "not-an-email", "Sales", 100, 100]])
+    contents = _workbook([["Ghost", "not-an-email", "", "Sales", 100, 100]])
     parsed = bulk_import_service.parse_import_file(contents, db, tenant.id)
     assert not parsed.ok
     assert any("Invalid email" in e.message for e in parsed.errors)
@@ -109,7 +109,7 @@ def test_parse_kpi_for_unknown_email(db, dept_admin):
 
 def test_parse_weights_must_total_100(db, dept_admin):
     tenant, _, _ = dept_admin
-    contents = _workbook([["Aung", "aung@example.com", "Sales", 100, 60]])
+    contents = _workbook([["Aung", "aung@example.com", "", "Sales", 100, 60]])
     parsed = bulk_import_service.parse_import_file(contents, db, tenant.id)
     assert not parsed.ok
     assert any("must total 100" in e.message for e in parsed.errors)
@@ -128,6 +128,9 @@ def test_execute_creates_users_templates_and_drafts(db, dept_admin):
     for u in users:
         assert u.department_id == dept.id
         assert verify_password("password", u.password_hash)
+    by_email = {u.email: u for u in users}
+    assert by_email["aung@example.com"].position == "Sales Executive"
+    assert by_email["may@example.com"].position == "Senior Sales"
 
     templates = db.query(KPITemplate).filter(KPITemplate.tenant_id == tenant.id).all()
     assert len(templates) == 3
@@ -174,7 +177,7 @@ def test_upload_executes_and_reports(client, db, dept_admin):
 
 def test_upload_with_errors_returns_422(client, db, dept_admin):
     tenant, _, admin = dept_admin
-    contents = _workbook([["Aung", "bad-email", "Sales", 100, 100]])
+    contents = _workbook([["Aung", "bad-email", "", "Sales", 100, 100]])
     r = client.post(
         "/api/admin/import/upload",
         params={"dry_run": False},

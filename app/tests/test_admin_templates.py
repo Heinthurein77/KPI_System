@@ -3,6 +3,7 @@ GET/POST /api/admin/templates, POST /api/admin/templates/custom,
 DELETE /api/admin/templates/{id}.
 """
 
+from app.models.kpi_template import KPITemplate
 from app.models.user import UserRole
 from app.models.kpi_submission import KPIStatus
 from app.tests.factories import (
@@ -311,3 +312,35 @@ def test_delete_template_forbidden_for_employee(db, client):
         f"/api/admin/templates/{template.id}", headers=auth_headers(employee, tenant)
     )
     assert resp.status_code == 403
+
+
+def test_delete_template_dept_admin_cannot_delete_own_assigned_template(db, client):
+    """A Dept Admin may not delete a KPI metric assigned to them personally,
+    even when it sits in their own department and has no history."""
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
+    template = make_template(db, tenant, department=dept, employee=dept_admin)
+
+    resp = client.delete(
+        f"/api/admin/templates/{template.id}", headers=auth_headers(dept_admin, tenant)
+    )
+    assert resp.status_code == 403
+    assert "assigned to you" in resp.json()["detail"]
+
+    # The template still exists.
+    assert db.get(KPITemplate, template.id) is not None
+
+
+def test_delete_template_tenant_admin_can_delete_personal_template(db, client):
+    """Tenant Admin keeps full delete power, including personally-assigned templates."""
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
+    template = make_template(db, tenant, department=dept, employee=dept_admin)
+
+    resp = client.delete(
+        f"/api/admin/templates/{template.id}", headers=auth_headers(admin, tenant)
+    )
+    assert resp.status_code == 200

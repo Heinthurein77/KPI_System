@@ -4,6 +4,7 @@ from app.models.kpi_submission import KPISubmission, KPIStatus
 from app.models.kpi_template import KPITemplate
 from app.models.user import User, UserRole
 from app.models.audit_log import AuditLog
+from app.models.notification import Notification
 
 __all__ = [
     "Tenant",
@@ -15,4 +16,5 @@ __all__ = [
     "User",
     "UserRole",
     "AuditLog",
+    "Notification",
 ]

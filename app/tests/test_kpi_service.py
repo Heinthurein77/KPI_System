@@ -193,6 +193,29 @@ def test_save_self_scores_raises_400_if_not_draft(db):
     assert exc_info.value.status_code == 400
 
 
+def test_save_self_scores_allows_edit_after_reject(db):
+    """After a rejection the employee can fix their scores, then resubmit."""
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant)
+    submission = make_submission(
+        db, tenant, employee, template, period="August",
+        status=KPIStatus.REJECTED, self_score=70.0,
+    )
+
+    kpi_service.save_self_scores(db, employee, {submission.id: 95.0})
+
+    db.refresh(submission)
+    assert submission.self_score == 95.0
+    assert submission.status == KPIStatus.REJECTED
+
+    # And the corrected scores can be resubmitted.
+    kpi_service.submit_for_dept_approval(db, employee, 2026, "August")
+    db.refresh(submission)
+    assert submission.status == KPIStatus.PENDING_DEPT_APPROVAL
+
+
 # ---------------------------------------------------------------------------
 # submit_for_dept_approval
 # ---------------------------------------------------------------------------

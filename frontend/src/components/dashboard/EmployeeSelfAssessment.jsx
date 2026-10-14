@@ -53,12 +53,15 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
 
   if (!data) return <PageLoading />;
 
-  // Editable when: this is the exact current month AND submission is still a draft.
+  // Editable when: this is the exact current month AND submission is still a draft
+  // or was rejected (rejected KPIs can be corrected and resubmitted).
   // is_month_end is now True for the entire current month (not just last 3 days).
+  const firstStatus = data.submissions[0]?.status;
   const isEditable =
     data.is_current_period &&
     data.is_month_end &&
-    data.submissions[0]?.status === "draft";
+    (firstStatus === "draft" || firstStatus === "rejected");
+  const isResubmit = firstStatus === "rejected";
 
   // Future months are locked — employees cannot enter scores in advance.
   const isFutureLocked = !!data.is_future_period;
@@ -263,7 +266,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
                 onClick={handleSubmit}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition disabled:opacity-60"
               >
-                Submit for Department Approval
+                {isResubmit ? "Resubmit for Department Approval" : "Submit for Department Approval"}
                 <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                   <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
                 </svg>

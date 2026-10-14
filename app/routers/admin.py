@@ -661,6 +661,11 @@ def delete_template(template_id: int, db: Session = Depends(get_db), user: User 
         kpi_service.force_delete_template(db, user, template)
         return {"status": "ok"}
 
+    # A Dept Admin may never delete a KPI metric assigned to them personally —
+    # those are set by the Super Admin / Tenant Admin and must stay intact.
+    if template.employee_id == user.id:
+        raise HTTPException(403, "You cannot delete a KPI metric assigned to you.")
+
     if template.department_id != user.department_id:
         raise HTTPException(403, "Cannot manage metrics outside your department.")
 

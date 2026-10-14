@@ -9,6 +9,7 @@ from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.kpi_template import KPITemplate
 from app.models.user import User, UserRole
 from app.services import audit_service
+from app.services import notification_service
 from app.services.audit_service import fmt_score
 from app.services.recurring_service import is_template_active_for_period
 
@@ -309,7 +310,7 @@ def save_self_scores(db: Session, employee: User, scores: dict[int, float]) -> N
         )
     ).all()
     for submission in submissions:
-        if submission.status != KPIStatus.DRAFT:
+        if submission.status not in (KPIStatus.DRAFT, KPIStatus.REJECTED):
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, "Cannot edit a submission that has already been submitted."
             )
@@ -357,6 +358,17 @@ def submit_for_dept_approval(db: Session, employee: User, year: int, period: str
             db, employee, "kpi_submitted", "kpi_submission", submission.id, _entity_label(submission),
             f"Submitted (self score {fmt_score(submission.self_score)}) for department approval.",
             department_id=submission.department_id,
+        )
+    if employee.department_id is not None:
+        notification_service.notify_dept_admins(
+            db,
+            tenant_id=employee.tenant_id,
+            department_id=employee.department_id,
+            exclude_user_id=employee.id,
+            type="kpi_submitted",
+            title=f"{employee.name} submitted KPI for {period} {year}",
+            message=f"{employee.name} submitted their {period} {year} KPI for department review.",
+            link=f"/dashboard?year={year}&period={period}",
         )
     db.commit()
 
@@ -427,6 +439,27 @@ def dept_approve(
         "forwarded for final approval.",
         department_id=submission.department_id,
     )
+    dashboard_link = f"/dashboard?year={submission.year}&period={submission.month_or_quarter}"
+    if not is_self_approval:
+        notification_service.notify_user(
+            db,
+            tenant_id=submission.tenant_id,
+            user_id=submission.employee_id,
+            type="kpi_dept_approved",
+            title=f"Your {submission.month_or_quarter} {submission.year} KPI was approved",
+            message=f"{reviewer.name} approved your KPI; it is now awaiting final approval.",
+            link=dashboard_link,
+        )
+    notification_service.notify_tenant_admins(
+        db,
+        tenant_id=submission.tenant_id,
+        exclude_user_id=reviewer.id,
+        type="kpi_dept_approved",
+        title=f"{submission.employee.name}'s KPI needs final approval",
+        message=f"{submission.employee.name}'s {submission.month_or_quarter} {submission.year} KPI passed "
+        "department review and awaits final approval.",
+        link=dashboard_link,
+    )
     db.commit()
 
 
@@ -454,6 +487,16 @@ def final_approve(
         f"Final approved at {fmt_score(submission.final_score)}.",
         department_id=submission.department_id,
     )
+    if reviewer.id != submission.employee_id:
+        notification_service.notify_user(
+            db,
+            tenant_id=submission.tenant_id,
+            user_id=submission.employee_id,
+            type="kpi_final_approved",
+            title=f"Your {submission.month_or_quarter} {submission.year} KPI was approved",
+            message=f"{reviewer.name} gave final approval at {fmt_score(submission.final_score)}.",
+            link=f"/dashboard?year={submission.year}&period={submission.month_or_quarter}",
+        )
     db.commit()
 
 
@@ -476,6 +519,16 @@ def tenant_admin_override(
         f"Score overridden: {fmt_score(old_score)} → {fmt_score(final_score)}.",
         department_id=submission.department_id,
     )
+    if admin.id != submission.employee_id:
+        notification_service.notify_user(
+            db,
+            tenant_id=submission.tenant_id,
+            user_id=submission.employee_id,
+            type="kpi_overridden",
+            title=f"Your {submission.month_or_quarter} {submission.year} KPI was overridden",
+            message=f"{admin.name} overrode your KPI score to {fmt_score(final_score)}.",
+            link=f"/dashboard?year={submission.year}&period={submission.month_or_quarter}",
+        )
     db.commit()
 
 
@@ -492,4 +545,15 @@ def reject_submission(
         "Submission rejected.",
         department_id=submission.department_id,
     )
+    if reviewer.id != submission.employee_id:
+        reason = f" Reason: {remarks}" if remarks else ""
+        notification_service.notify_user(
+            db,
+            tenant_id=submission.tenant_id,
+            user_id=submission.employee_id,
+            type="kpi_rejected",
+            title=f"Your {submission.month_or_quarter} {submission.year} KPI was rejected",
+            message=f"{reviewer.name} rejected your KPI.{reason} You can correct your scores and resubmit.",
+            link=f"/dashboard?year={submission.year}&period={submission.month_or_quarter}",
+        )
     db.commit()

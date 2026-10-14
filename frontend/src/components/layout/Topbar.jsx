@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
+import NotificationBell from "./NotificationBell";
 
 export default function Topbar({ title, onMenuClick }) {
   const { user, logout } = useAuth();
@@ -22,6 +23,7 @@ export default function Topbar({ title, onMenuClick }) {
         </div>
       </div>
       <div className="flex items-center gap-2 shrink-0">
+        <NotificationBell />
         <Link
           to="/account/password"
           title="Change password"

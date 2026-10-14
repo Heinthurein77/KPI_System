@@ -218,7 +218,8 @@ export default function TemplatesPage() {
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
-                          {!isDeptAdmin || t.department_id === user.department_id ? (
+                          {(!isDeptAdmin || t.department_id === user.department_id) &&
+                          !(isDeptAdmin && t.employee_id === user.id) ? (
                             <button
                               type="button"
                               onClick={() => setPendingDelete(t)}

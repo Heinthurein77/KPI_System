@@ -270,3 +270,4 @@ def test_execute_sends_welcome_emails(db, dept_admin):
     assert sent_to == {"aung@example.com", "may@example.com"}
     for c in mock_welcome.call_args_list:
         assert c.args[2] == "password"
+        assert c.kwargs["org_name"] == "Acme"

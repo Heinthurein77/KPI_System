@@ -46,6 +46,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.models.tenant import Tenant
 from app.models.user import User, UserRole
 from app.services import email_service, kpi_service
 
@@ -270,8 +271,10 @@ def execute_import(db: Session, dept_admin: User, parsed: ParsedImport) -> Impor
         db.refresh(user)
 
     # Welcome emails with login details (best-effort; skipped when SMTP unconfigured).
+    tenant = db.get(Tenant, dept_admin.tenant_id)
+    org_name = tenant.name if tenant else None
     for imp_user in parsed.users:
-        email_service.send_welcome_email(imp_user.email, imp_user.name, DEFAULT_PASSWORD)
+        email_service.send_welcome_email(imp_user.email, imp_user.name, DEFAULT_PASSWORD, org_name=org_name)
 
     kpis_created = 0
     for kpi in parsed.kpis:

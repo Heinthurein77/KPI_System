@@ -10,6 +10,7 @@ from app.models.audit_log import AuditLog
 from app.models.department import Department
 from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.kpi_template import KPITemplate
+from app.models.tenant import Tenant
 from app.models.user import User, UserRole
 from app.routers.dashboard import MONTH_NAMES, combined_final_score, current_month_period
 from app.schemas.audit_log import AuditLogOut
@@ -359,7 +360,10 @@ def create_user(
     db.add(target)
     db.commit()
     # Welcome email with login details (best-effort; skipped when SMTP unconfigured).
-    email_service.send_welcome_email(email, target.name, payload.password)
+    tenant = db.get(Tenant, user.tenant_id)
+    email_service.send_welcome_email(
+        email, target.name, payload.password, org_name=tenant.name if tenant else None
+    )
     return target
 
 

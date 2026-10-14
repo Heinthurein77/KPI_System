@@ -548,4 +548,6 @@ def test_create_user_sends_welcome_email(db, client):
             headers=auth_headers(admin, tenant),
         )
     assert resp.status_code == 200
-    mock_welcome.assert_called_once_with("welcome@example.com", "New Hire", "InitPass123!")
+    mock_welcome.assert_called_once_with(
+        "welcome@example.com", "New Hire", "InitPass123!", org_name="Acme"
+    )

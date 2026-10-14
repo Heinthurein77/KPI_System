@@ -20,6 +20,7 @@ class UserOut(BaseModel):
     email: str
     role: UserRole
     is_active: bool
+    position: str | None = None
     tenant_id: int | None
     department_id: int | None
     department: DepartmentOut | None = None
@@ -32,6 +33,7 @@ class UserSummaryOut(BaseModel):
     name: str
     email: str
     role: UserRole
+    position: str | None = None
 
 
 class CreateUserRequest(BaseModel):
@@ -40,6 +42,7 @@ class CreateUserRequest(BaseModel):
     password: str
     role: UserRole
     department_id: int | None = None
+    position: str | None = None
 
 
 class UpdateUserRequest(BaseModel):
@@ -47,6 +50,7 @@ class UpdateUserRequest(BaseModel):
     email: str
     role: UserRole
     department_id: int | None = None
+    position: str | None = None
     password: str | None = None
 
 

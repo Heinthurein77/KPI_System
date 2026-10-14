@@ -332,6 +332,7 @@ def create_user(
         email=payload.email.strip().lower(),
         password_hash=hash_password(payload.password),
         role=payload.role,
+        position=payload.position.strip() if payload.position else None,
         department_id=resolved_department_id if payload.role != UserRole.TENANT_ADMIN else None,
     )
     db.add(target)
@@ -371,6 +372,7 @@ def edit_user(
     target.name = payload.name.strip()
     target.email = payload.email.strip().lower()
     target.role = payload.role
+    target.position = payload.position.strip() if payload.position else None
     if payload.department_id and payload.role != UserRole.TENANT_ADMIN:
         target.department_id = get_tenant_scoped_or_404(
             db, Department, payload.department_id, user.tenant_id, "Department not found."

@@ -23,6 +23,7 @@ export default function UsersPage() {
   const [password, setPassword] = useState("");
   const [role, setRole] = useState("employee");
   const [departmentId, setDepartmentId] = useState("");
+  const [position, setPosition] = useState("");
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
@@ -46,10 +47,12 @@ export default function UsersPage() {
         password,
         role: isDeptAdmin ? "employee" : role,
         department_id: isDeptAdmin ? undefined : departmentId || undefined,
+        position: position.trim() || undefined,
       });
       setName("");
       setEmail("");
       setPassword("");
+      setPosition("");
       toast.success(isDeptAdmin ? "Employee added." : "User created.");
       load();
     } catch (err) {
@@ -95,6 +98,7 @@ export default function UsersPage() {
                   <th className="px-6 py-3 text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Name</th>
                   <th className="px-6 py-3 text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Email</th>
                   <th className="px-6 py-3 text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Role</th>
+                  <th className="px-6 py-3 text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Position</th>
                   <th className="px-6 py-3 text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Department</th>
                   <th className="px-6 py-3 text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Status</th>
                   <th className="px-6 py-3"></th>
@@ -103,7 +107,7 @@ export default function UsersPage() {
               <tbody className="divide-y divide-slate-100">
                 {data.users.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-10 text-center text-sm text-slate-400">
+                    <td colSpan={7} className="px-6 py-10 text-center text-sm text-slate-400">
                       No users yet.
                     </td>
                   </tr>
@@ -120,6 +124,7 @@ export default function UsersPage() {
                       </td>
                       <td className="px-6 py-4 text-sm text-slate-500">{u.email}</td>
                       <td className="px-6 py-4 text-sm text-slate-600">{titleCase(u.role)}</td>
+                      <td className="px-6 py-4 text-sm text-slate-600">{u.position || "—"}</td>
                       <td className="px-6 py-4 text-sm text-slate-600">{u.department ? u.department.name : "—"}</td>
                       <td className="px-6 py-4 text-sm">
                         {u.is_active ? (
@@ -236,6 +241,13 @@ export default function UsersPage() {
               placeholder="Temporary password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+            />
+            <input
+              type="text"
+              placeholder="Position (e.g. Accountant, HR Manager)"
+              value={position}
+              onChange={(e) => setPosition(e.target.value)}
               className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
             />
 

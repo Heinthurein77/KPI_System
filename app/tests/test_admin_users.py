@@ -103,6 +103,20 @@ def test_toggle_user_active_success_as_tenant_admin(db, client):
     assert resp2.json()["is_active"] is True
 
 
+def test_toggle_user_active_self_is_blocked(db, client):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN, is_active=True)
+
+    resp = client.post(
+        f"/api/admin/users/{admin.id}/toggle-active", headers=auth_headers(admin, tenant)
+    )
+    assert resp.status_code == 400
+    assert "own account" in resp.json()["detail"]
+
+    db.refresh(admin)
+    assert admin.is_active is True
+
+
 def test_delete_user_success(db, client):
     tenant = make_tenant(db)
     admin = make_user(db, tenant, UserRole.TENANT_ADMIN)

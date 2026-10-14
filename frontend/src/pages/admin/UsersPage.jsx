@@ -233,7 +233,7 @@ export default function UsersPage() {
                             </Link>
                           )}
 
-                          {(!isDeptAdmin || u.role === "employee") && (
+                          {(!isDeptAdmin || u.role === "employee") && u.id !== currentUser.id && (
                             <button
                               type="button"
                               onClick={() => handleToggle(u)}

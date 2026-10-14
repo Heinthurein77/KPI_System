@@ -349,6 +349,9 @@ def toggle_user_active(user_id: int, db: Session = Depends(get_db), user: User =
     ):
         raise HTTPException(403, "Cannot manage users outside your department.")
 
+    if target.id == user.id:
+        raise HTTPException(400, "You cannot disable your own account.")
+
     target.is_active = not target.is_active
     db.commit()
     return target

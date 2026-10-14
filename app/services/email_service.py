@@ -89,6 +89,9 @@ def send_for_notifications(db: Session, notifications: list[Notification]) -> No
             user = db.get(User, n.user_id)
             if user is None or not user.email or not user.is_active:
                 continue
+            if not user.email_notifications:
+                # User opted out of notification emails; in-app copy is unaffected.
+                continue
             payloads.append((user.email, n.title, n.message, n.link))
     except Exception:
         logger.exception("Failed to prepare notification emails")

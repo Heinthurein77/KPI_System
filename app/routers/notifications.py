@@ -30,6 +30,33 @@ class NotificationListOut(BaseModel):
     unread_count: int
 
 
+class NotificationSettingsOut(BaseModel):
+    email_enabled: bool
+
+
+class NotificationSettingsUpdate(BaseModel):
+    email_enabled: bool
+
+
+@router.get("/settings", response_model=NotificationSettingsOut)
+def get_notification_settings(user: User = Depends(get_current_user)):
+    """The current user's notification preferences."""
+    return NotificationSettingsOut(email_enabled=user.email_notifications)
+
+
+@router.put("/settings", response_model=NotificationSettingsOut)
+def update_notification_settings(
+    payload: NotificationSettingsUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Toggle workflow notification emails (in-app notifications are unaffected)."""
+    user.email_notifications = payload.email_enabled
+    db.commit()
+    db.refresh(user)
+    return NotificationSettingsOut(email_enabled=user.email_notifications)
+
+
 @router.get("", response_model=NotificationListOut)
 def list_notifications(
     limit: int = 50, db: Session = Depends(get_db), user: User = Depends(get_current_user)

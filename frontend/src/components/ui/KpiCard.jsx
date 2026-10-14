@@ -1,6 +1,7 @@
 import { useState } from "react";
 import StatusBadge from "./StatusBadge";
 import ScoreBadge from "./ScoreBadge";
+import ReviewNotes from "./ReviewNotes";
 import { useToast } from "../../context/ToastContext";
 
 const TARGET_EXCEEDED_MESSAGE = "Target ထက်ကျော်နေပါ၍ပြန်ထည့်ရန်";
@@ -149,6 +150,8 @@ export default function KpiCard({
           )}
         </div>
       )}
+
+      <ReviewNotes submissionId={s.id} ownerId={s.employee?.id} />
 
       {onDeptApprove && s.status === "pending_dept_approval" && (
         <div className="pt-1 border-t border-slate-100 space-y-2 mt-auto">

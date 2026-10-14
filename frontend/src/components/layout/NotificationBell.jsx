@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
+  getNotificationSettings,
   listNotifications,
   markAllNotificationsRead,
   markNotificationRead,
+  updateNotificationSettings,
 } from "../../api/notifications";
 import { getErrorMessage } from "../../api/errors";
 
@@ -26,6 +28,7 @@ export default function NotificationBell() {
   const [open, setOpen] = useState(false);
   const [items, setItems] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
+  const [emailEnabled, setEmailEnabled] = useState(true);
   const panelRef = useRef(null);
 
   async function refresh() {
@@ -38,6 +41,25 @@ export default function NotificationBell() {
     }
   }
 
+  async function loadSettings() {
+    try {
+      const data = await getNotificationSettings();
+      setEmailEnabled(data.email_enabled ?? true);
+    } catch {
+      // Settings are best-effort — keep the default on failure.
+    }
+  }
+
+  async function handleToggleEmail() {
+    const next = !emailEnabled;
+    setEmailEnabled(next);
+    try {
+      await updateNotificationSettings(next);
+    } catch {
+      setEmailEnabled(!next);
+    }
+  }
+
   useEffect(() => {
     refresh();
     const timer = setInterval(refresh, POLL_INTERVAL_MS);
@@ -46,6 +68,7 @@ export default function NotificationBell() {
 
   useEffect(() => {
     if (!open) return;
+    loadSettings();
     function handleClick(e) {
       if (panelRef.current && !panelRef.current.contains(e.target)) setOpen(false);
     }
@@ -146,6 +169,28 @@ export default function NotificationBell() {
                 </button>
               ))
             )}
+          </div>
+          <div className="border-t border-slate-100 px-4 py-2.5">
+            <button
+              type="button"
+              onClick={handleToggleEmail}
+              role="switch"
+              aria-checked={emailEnabled}
+              className="flex w-full items-center justify-between gap-3"
+            >
+              <span className="text-xs text-slate-600">Email notifications</span>
+              <span
+                className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+                  emailEnabled ? "bg-brand-600" : "bg-slate-300"
+                }`}
+              >
+                <span
+                  className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
+                    emailEnabled ? "translate-x-4" : "translate-x-0.5"
+                  }`}
+                />
+              </span>
+            </button>
           </div>
         </div>
       )}

@@ -24,17 +24,13 @@ MONTH_NAMES = (
 )
 
 
-def _workbook(users_rows, kpis_rows):
+def _workbook(rows):
     wb = Workbook()
     ws = wb.active
-    ws.title = "Users"
-    ws.append(["name", "email"])
-    for r in users_rows:
+    ws.title = "Import"
+    ws.append(["name", "email", "metric", "target", "weight"])
+    for r in rows:
         ws.append(r)
-    ws2 = wb.create_sheet("KPIs")
-    ws2.append(["email", "metric", "target", "weight"])
-    for r in kpis_rows:
-        ws2.append(r)
     buf = BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -43,12 +39,11 @@ def _workbook(users_rows, kpis_rows):
 
 def _valid_contents():
     return _workbook(
-        [["Aung Aung", "aung@example.com"], ["May May", "may@example.com"]],
         [
-            ["aung@example.com", "Sales", 100, 60],
-            ["aung@example.com", "Visits", 40, 40],
-            ["may@example.com", "Sales", 100, 100],
-        ],
+            ["Aung Aung", "aung@example.com", "Sales", 100, 60],
+            ["Aung Aung", "aung@example.com", "Visits", 40, 40],
+            ["May May", "may@example.com", "Sales", 100, 100],
+        ]
     )
 
 
@@ -68,15 +63,30 @@ def test_parse_valid_file(db, dept_admin):
     assert len(parsed.kpis) == 3
 
 
-def test_parse_duplicate_email(db, dept_admin):
+def test_parse_duplicate_email_with_different_name(db, dept_admin):
     tenant, _, _ = dept_admin
     contents = _workbook(
-        [["Aung", "aung@example.com"], ["Aung 2", "aung@example.com"]],
-        [["aung@example.com", "Sales", 100, 100]],
+        [
+            ["Aung", "aung@example.com", "Sales", 100, 100],
+            ["Aung 2", "aung@example.com", "Visits", 40, 100],
+        ]
     )
     parsed = bulk_import_service.parse_import_file(contents, db, tenant.id)
     assert not parsed.ok
-    assert any("Duplicate email" in e.message for e in parsed.errors)
+    assert any("two different names" in e.message for e in parsed.errors)
+
+
+def test_parse_duplicate_metric(db, dept_admin):
+    tenant, _, _ = dept_admin
+    contents = _workbook(
+        [
+            ["Aung", "aung@example.com", "Sales", 100, 50],
+            ["Aung", "aung@example.com", "Sales", 100, 50],
+        ]
+    )
+    parsed = bulk_import_service.parse_import_file(contents, db, tenant.id)
+    assert not parsed.ok
+    assert any("Duplicate metric" in e.message for e in parsed.errors)
 
 
 def test_parse_existing_email_rejected(db, dept_admin):
@@ -88,22 +98,18 @@ def test_parse_existing_email_rejected(db, dept_admin):
 
 
 def test_parse_kpi_for_unknown_email(db, dept_admin):
+    # Every row carries its own user info now, so an "unknown email" case is
+    # simply a row whose user fails validation (e.g. bad email format).
     tenant, _, _ = dept_admin
-    contents = _workbook(
-        [["Aung", "aung@example.com"]],
-        [["ghost@example.com", "Sales", 100, 100]],
-    )
+    contents = _workbook([["Ghost", "not-an-email", "Sales", 100, 100]])
     parsed = bulk_import_service.parse_import_file(contents, db, tenant.id)
     assert not parsed.ok
-    assert any("not in the Users sheet" in e.message for e in parsed.errors)
+    assert any("Invalid email" in e.message for e in parsed.errors)
 
 
 def test_parse_weights_must_total_100(db, dept_admin):
     tenant, _, _ = dept_admin
-    contents = _workbook(
-        [["Aung", "aung@example.com"]],
-        [["aung@example.com", "Sales", 100, 60]],
-    )
+    contents = _workbook([["Aung", "aung@example.com", "Sales", 100, 60]])
     parsed = bulk_import_service.parse_import_file(contents, db, tenant.id)
     assert not parsed.ok
     assert any("must total 100" in e.message for e in parsed.errors)
@@ -168,7 +174,7 @@ def test_upload_executes_and_reports(client, db, dept_admin):
 
 def test_upload_with_errors_returns_422(client, db, dept_admin):
     tenant, _, admin = dept_admin
-    contents = _workbook([["Aung", "bad-email"]], [])
+    contents = _workbook([["Aung", "bad-email", "Sales", 100, 100]])
     r = client.post(
         "/api/admin/import/upload",
         params={"dry_run": False},

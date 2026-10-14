@@ -118,6 +118,21 @@ export default function Sidebar({ open = false, onClose }) {
                 >
                   {user.role === "dept_admin" ? "My Team" : "Users"}
                 </NavLink>
+                {user.role === "dept_admin" && (
+                  <NavLink
+                    to="/admin/bulk-import"
+                    active={pathname.startsWith("/admin/bulk-import")}
+                    icon={
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M12 16V4m0 0 4 4m-4-4L8 8m8 8H6a2 2 0 0 0-2 2v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1a2 2 0 0 0-2-2Z"
+                      />
+                    }
+                  >
+                    Bulk Import
+                  </NavLink>
+                )}
                 <NavLink
                   to="/admin/templates"
                   active={pathname.startsWith("/admin/templates")}

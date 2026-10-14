@@ -13,7 +13,7 @@ from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.core.tenant import TenantResolutionMiddleware
 from app.database import engine
-from app.routers import admin, analytics, auth, dashboard, kpi, notifications, platform, reminders
+from app.routers import admin, analytics, auth, dashboard, importer, kpi, notifications, platform, reminders
 logger = logging.getLogger("kpi_system")
 
 if settings.is_production and settings.SECRET_KEY == "change-this-secret-key-in-production":
@@ -109,6 +109,7 @@ app.include_router(platform.router)
 app.include_router(notifications.router)
 app.include_router(reminders.router)
 app.include_router(analytics.router)
+app.include_router(importer.router)
 
 
 @app.get("/healthz")

@@ -13,6 +13,7 @@ import KpiDownloadPage from "../pages/admin/KpiDownloadPage";
 import TemplatesPage from "../pages/admin/TemplatesPage";
 import AuditLogPage from "../pages/admin/AuditLogPage";
 import AnalyticsPage from "../pages/admin/AnalyticsPage";
+import BulkImportPage from "../pages/admin/BulkImportPage";
 import PlatformLoginPage from "../pages/platform/PlatformLoginPage";
 import TenantsPage from "../pages/platform/TenantsPage";
 import NotFoundPage from "../pages/NotFoundPage";
@@ -126,6 +127,14 @@ export default function AppRoutes() {
         element={
           <ProtectedRoute roles={["tenant_admin"]}>
             <AnalyticsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/admin/bulk-import"
+        element={
+          <ProtectedRoute roles={["dept_admin"]}>
+            <BulkImportPage />
           </ProtectedRoute>
         }
       />

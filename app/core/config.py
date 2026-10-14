@@ -46,6 +46,27 @@ class Settings(BaseSettings):
     # resolution works regardless of this setting.
     TENANT_BASE_DOMAIN: str | None = None
 
+    # Outgoing email (SMTP) for notification emails. When unset, only in-app
+    # notifications are delivered — email sending is skipped silently.
+    # For Gmail: host=smtp.gmail.com, port=587, username=your Gmail address,
+    # password=a Gmail App Password (NOT your regular password).
+    SMTP_HOST: str | None = None
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str | None = None
+    SMTP_PASSWORD: str | None = None
+    SMTP_USE_TLS: bool = True
+    # Public base URL of the app, used to build clickable links in emails
+    # (e.g. "https://kpi.example.com"). Unset → emails omit the link.
+    APP_BASE_URL: str | None = None
+
+    @property
+    def smtp_configured(self) -> bool:
+        return bool(self.SMTP_HOST and self.SMTP_USERNAME and self.SMTP_PASSWORD)
+
+    @property
+    def smtp_from(self) -> str | None:
+        return self.SMTP_USERNAME
+
     @property
     def sqlalchemy_database_url(self) -> str:
         if self.DATABASE_URL:

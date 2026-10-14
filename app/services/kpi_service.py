@@ -9,6 +9,7 @@ from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.kpi_template import KPITemplate
 from app.models.user import User, UserRole
 from app.services import audit_service
+from app.services import email_service
 from app.services import notification_service
 from app.services.audit_service import fmt_score
 from app.services.recurring_service import is_template_active_for_period
@@ -360,7 +361,7 @@ def submit_for_dept_approval(db: Session, employee: User, year: int, period: str
             department_id=submission.department_id,
         )
     if employee.department_id is not None:
-        notification_service.notify_dept_admins(
+        emailed = notification_service.notify_dept_admins(
             db,
             tenant_id=employee.tenant_id,
             department_id=employee.department_id,
@@ -370,7 +371,10 @@ def submit_for_dept_approval(db: Session, employee: User, year: int, period: str
             message=f"{employee.name} submitted their {period} {year} KPI for department review.",
             link=f"/dashboard?year={year}&period={period}",
         )
+    else:
+        emailed = []
     db.commit()
+    email_service.send_for_notifications(db, emailed)
 
 
 def _entity_label(submission: KPISubmission) -> str:
@@ -440,8 +444,9 @@ def dept_approve(
         department_id=submission.department_id,
     )
     dashboard_link = f"/dashboard?year={submission.year}&period={submission.month_or_quarter}"
+    emailed = []
     if not is_self_approval:
-        notification_service.notify_user(
+        emailed += notification_service.notify_user(
             db,
             tenant_id=submission.tenant_id,
             user_id=submission.employee_id,
@@ -450,7 +455,7 @@ def dept_approve(
             message=f"{reviewer.name} approved your KPI; it is now awaiting final approval.",
             link=dashboard_link,
         )
-    notification_service.notify_tenant_admins(
+    emailed += notification_service.notify_tenant_admins(
         db,
         tenant_id=submission.tenant_id,
         exclude_user_id=reviewer.id,
@@ -461,6 +466,7 @@ def dept_approve(
         link=dashboard_link,
     )
     db.commit()
+    email_service.send_for_notifications(db, emailed)
 
 
 def final_approve(
@@ -488,7 +494,7 @@ def final_approve(
         department_id=submission.department_id,
     )
     if reviewer.id != submission.employee_id:
-        notification_service.notify_user(
+        emailed = notification_service.notify_user(
             db,
             tenant_id=submission.tenant_id,
             user_id=submission.employee_id,
@@ -497,7 +503,10 @@ def final_approve(
             message=f"{reviewer.name} gave final approval at {fmt_score(submission.final_score)}.",
             link=f"/dashboard?year={submission.year}&period={submission.month_or_quarter}",
         )
+    else:
+        emailed = []
     db.commit()
+    email_service.send_for_notifications(db, emailed)
 
 
 def tenant_admin_override(
@@ -520,7 +529,7 @@ def tenant_admin_override(
         department_id=submission.department_id,
     )
     if admin.id != submission.employee_id:
-        notification_service.notify_user(
+        emailed = notification_service.notify_user(
             db,
             tenant_id=submission.tenant_id,
             user_id=submission.employee_id,
@@ -529,7 +538,10 @@ def tenant_admin_override(
             message=f"{admin.name} overrode your KPI score to {fmt_score(final_score)}.",
             link=f"/dashboard?year={submission.year}&period={submission.month_or_quarter}",
         )
+    else:
+        emailed = []
     db.commit()
+    email_service.send_for_notifications(db, emailed)
 
 
 def reject_submission(
@@ -547,7 +559,7 @@ def reject_submission(
     )
     if reviewer.id != submission.employee_id:
         reason = f" Reason: {remarks}" if remarks else ""
-        notification_service.notify_user(
+        emailed = notification_service.notify_user(
             db,
             tenant_id=submission.tenant_id,
             user_id=submission.employee_id,
@@ -556,4 +568,7 @@ def reject_submission(
             message=f"{reviewer.name} rejected your KPI.{reason} You can correct your scores and resubmit.",
             link=f"/dashboard?year={submission.year}&period={submission.month_or_quarter}",
         )
+    else:
+        emailed = []
     db.commit()
+    email_service.send_for_notifications(db, emailed)

@@ -22,17 +22,17 @@ def _add(
     title: str,
     message: str,
     link: str | None = None,
-) -> None:
-    db.add(
-        Notification(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            type=type,
-            title=title,
-            message=message,
-            link=link,
-        )
+) -> Notification:
+    notification = Notification(
+        tenant_id=tenant_id,
+        user_id=user_id,
+        type=type,
+        title=title,
+        message=message,
+        link=link,
     )
+    db.add(notification)
+    return notification
 
 
 def _active_role_users(
@@ -63,9 +63,9 @@ def notify_user(
     title: str,
     message: str,
     link: str | None = None,
-) -> None:
-    """Notify one specific user."""
-    _add(db, tenant_id=tenant_id, user_id=user_id, type=type, title=title, message=message, link=link)
+) -> list[Notification]:
+    """Notify one specific user. Returns the created notification."""
+    return [_add(db, tenant_id=tenant_id, user_id=user_id, type=type, title=title, message=message, link=link)]
 
 
 def notify_dept_admins(
@@ -78,10 +78,14 @@ def notify_dept_admins(
     title: str,
     message: str,
     link: str | None = None,
-) -> None:
+) -> list[Notification]:
     """Notify active Dept Admins of one department (optionally excluding the actor)."""
+    created = []
     for admin in _active_role_users(db, tenant_id, UserRole.DEPT_ADMIN, department_id, exclude_user_id):
-        _add(db, tenant_id=tenant_id, user_id=admin.id, type=type, title=title, message=message, link=link)
+        created.append(
+            _add(db, tenant_id=tenant_id, user_id=admin.id, type=type, title=title, message=message, link=link)
+        )
+    return created
 
 
 def notify_tenant_admins(
@@ -93,7 +97,11 @@ def notify_tenant_admins(
     title: str,
     message: str,
     link: str | None = None,
-) -> None:
+) -> list[Notification]:
     """Notify all active Tenant Admins of a tenant."""
+    created = []
     for admin in _active_role_users(db, tenant_id, UserRole.TENANT_ADMIN, None, exclude_user_id):
-        _add(db, tenant_id=tenant_id, user_id=admin.id, type=type, title=title, message=message, link=link)
+        created.append(
+            _add(db, tenant_id=tenant_id, user_id=admin.id, type=type, title=title, message=message, link=link)
+        )
+    return created

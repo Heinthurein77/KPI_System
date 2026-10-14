@@ -139,6 +139,21 @@ export default function Sidebar({ open = false, onClose }) {
                 <p className="px-3 pt-4 pb-2 text-[10px] font-semibold uppercase tracking-widest text-slate-500">
                   Insights
                 </p>
+                {user.role === "tenant_admin" && (
+                  <NavLink
+                    to="/admin/analytics"
+                    active={pathname.startsWith("/admin/analytics")}
+                    icon={
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M3 3v16.5A1.5 1.5 0 0 0 4.5 21H21M4 17l5-6 4 3 4-5 3 3"
+                      />
+                    }
+                  >
+                    Analytics
+                  </NavLink>
+                )}
                 <NavLink
                   to="/admin/kpi-trend"
                   active={pathname.startsWith("/admin/kpi-trend")}

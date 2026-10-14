@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     # (e.g. "https://kpi.example.com"). Unset → emails omit the link.
     APP_BASE_URL: str | None = None
 
+    # Deadline reminders: nudge employees with DRAFT/REJECTED submissions when
+    # the end of the current month is this many days away (or less). The
+    # reminder job is meant to run daily (server cron); it sends at most one
+    # reminder per user per period.
+    DEADLINE_REMINDER_ENABLED: bool = True
+    DEADLINE_REMINDER_DAYS_BEFORE: int = 3
+
     @property
     def smtp_configured(self) -> bool:
         return bool(self.SMTP_HOST and self.SMTP_USERNAME and self.SMTP_PASSWORD)

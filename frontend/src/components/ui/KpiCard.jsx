@@ -62,6 +62,9 @@ export default function KpiCard({
 
   const canReject = onReject && (s.status === "pending_dept_approval" || s.status === "pending_final_approval");
   const author = remarkAuthor(s);
+  // A Dept Admin's own submission skips the dept-review display: the middle
+  // DEPT column is redundant for them (self approval), so show only SELF/FINAL.
+  const hideDeptColumn = s.employee?.role === "dept_admin";
 
   function handleScoreChange(setScore, field, value) {
     setScore(value);
@@ -91,7 +94,7 @@ export default function KpiCard({
 
       <StatusBadge status={s.status} />
 
-      <div className="grid grid-cols-3 gap-1.5 rounded-lg bg-slate-50 px-1.5 py-3">
+      <div className={`grid ${hideDeptColumn ? "grid-cols-2" : "grid-cols-3"} gap-1.5 rounded-lg bg-slate-50 px-1.5 py-3`}>
         <div className="text-center">
           <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Self</p>
           {editableSelf ? (
@@ -110,10 +113,12 @@ export default function KpiCard({
             <ScoreBadge value={s.self_score} target={s.kpi_template.target} />
           )}
         </div>
-        <div className="text-center border-x border-slate-200">
-          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Dept</p>
-          <ScoreBadge value={s.dept_score} target={s.kpi_template.target} />
-        </div>
+        {!hideDeptColumn && (
+          <div className="text-center border-x border-slate-200">
+            <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Dept</p>
+            <ScoreBadge value={s.dept_score} target={s.kpi_template.target} />
+          </div>
+        )}
         <div className="text-center">
           <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Final</p>
           <ScoreBadge value={s.final_score} target={s.kpi_template.target} size="md" />

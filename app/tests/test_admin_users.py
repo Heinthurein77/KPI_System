@@ -117,6 +117,73 @@ def test_toggle_user_active_self_is_blocked(db, client):
     assert admin.is_active is True
 
 
+def test_reset_password_success_as_tenant_admin(db, client):
+    from app.core.security import verify_password
+
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    target = make_user(db, tenant, UserRole.EMPLOYEE)
+    old_hash = target.password_hash
+
+    resp = client.post(
+        f"/api/admin/users/{target.id}/reset-password",
+        json={"password": "NewPassword123"},
+        headers=auth_headers(admin, tenant),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["id"] == target.id
+
+    db.refresh(target)
+    assert target.password_hash != old_hash
+    assert verify_password("NewPassword123", target.password_hash)
+
+
+def test_reset_password_rejects_short_password(db, client):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    target = make_user(db, tenant, UserRole.EMPLOYEE)
+
+    resp = client.post(
+        f"/api/admin/users/{target.id}/reset-password",
+        json={"password": "short"},
+        headers=auth_headers(admin, tenant),
+    )
+    assert resp.status_code == 422
+
+
+def test_reset_password_dept_admin_forbidden(db, client):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
+    target = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+
+    resp = client.post(
+        f"/api/admin/users/{target.id}/reset-password",
+        json={"password": "NewPassword123"},
+        headers=auth_headers(dept_admin, tenant),
+    )
+    assert resp.status_code == 403
+
+
+def test_reset_password_tenant_admin_can_reset_dept_admin(db, client):
+    from app.core.security import verify_password
+
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
+
+    resp = client.post(
+        f"/api/admin/users/{dept_admin.id}/reset-password",
+        json={"password": "NewPassword123"},
+        headers=auth_headers(admin, tenant),
+    )
+    assert resp.status_code == 200
+
+    db.refresh(dept_admin)
+    assert verify_password("NewPassword123", dept_admin.password_hash)
+
+
 def test_delete_user_success(db, client):
     tenant = make_tenant(db)
     admin = make_user(db, tenant, UserRole.TENANT_ADMIN)

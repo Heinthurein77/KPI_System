@@ -5,7 +5,7 @@ import PageLoading from "../../components/ui/PageLoading";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { createUser, deleteUser, listUsers, toggleUserActive } from "../../api/admin";
+import { createUser, deleteUser, listUsers, resetUserPassword, toggleUserActive } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
 
 function titleCase(role) {
@@ -26,6 +26,10 @@ export default function UsersPage() {
   const [position, setPosition] = useState("");
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [resetTarget, setResetTarget] = useState(null);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [resetting, setResetting] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [filterDept, setFilterDept] = useState("");
   const [filterRole, setFilterRole] = useState("");
@@ -85,6 +89,40 @@ export default function UsersPage() {
       toast.error(getErrorMessage(err));
     } finally {
       setDeleting(false);
+    }
+  }
+
+  function openResetPassword(u) {
+    setResetTarget(u);
+    setNewPassword("");
+    setConfirmPassword("");
+  }
+
+  function closeResetPassword() {
+    setResetTarget(null);
+    setNewPassword("");
+    setConfirmPassword("");
+  }
+
+  async function confirmResetPassword() {
+    if (!resetTarget) return;
+    if (newPassword.length < 8) {
+      toast.error("Password must be at least 8 characters.");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      toast.error("Passwords do not match.");
+      return;
+    }
+    setResetting(true);
+    try {
+      await resetUserPassword(resetTarget.id, newPassword);
+      toast.success(`Password reset for ${resetTarget.name}.`);
+      closeResetPassword();
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setResetting(false);
     }
   }
 
@@ -231,6 +269,23 @@ export default function UsersPage() {
                                 />
                               </svg>
                             </Link>
+                          )}
+
+                          {!isDeptAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => openResetPassword(u)}
+                              title={`Reset ${u.name}'s password`}
+                              className="inline-flex items-center justify-center h-8 w-8 rounded-lg border border-slate-200 text-slate-500 hover:bg-slate-50 hover:text-slate-700 hover:border-slate-300 transition"
+                            >
+                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M15.75 5.25a3 3 0 0 1 3 3m3 0a6 6 0 0 1-7.029 5.912c-.563-.097-1.159.026-1.563.43L10.5 17.25H8.25v2.25H6v2.25H2.25v-2.818c0-.597.237-1.17.659-1.591l6.499-6.499c.404-.404.527-1 .43-1.563A6 6 0 1 1 21.75 8.25Z"
+                                />
+                              </svg>
+                            </button>
                           )}
 
                           {(!isDeptAdmin || u.role === "employee") && u.id !== currentUser.id && (
@@ -381,6 +436,60 @@ export default function UsersPage() {
         onConfirm={confirmDelete}
         onCancel={() => setPendingDelete(null)}
       />
+
+      {resetTarget !== null && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-sm px-4"
+          onClick={closeResetPassword}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            className="w-full max-w-sm rounded-2xl bg-white shadow-xl p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-base font-semibold text-slate-900">
+              Reset password for {resetTarget.name}
+            </h3>
+            <p className="mt-1.5 text-sm text-slate-500">
+              They will sign in with this new password next time.
+            </p>
+            <div className="mt-4 space-y-3">
+              <input
+                type="password"
+                placeholder="New password (min 8 characters)"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+              />
+              <input
+                type="password"
+                placeholder="Confirm new password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+              />
+            </div>
+            <div className="mt-6 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeResetPassword}
+                className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmResetPassword}
+                disabled={resetting || newPassword.length < 8 || confirmPassword === ""}
+                className="rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition disabled:opacity-60"
+              >
+                {resetting ? "Please wait…" : "Reset password"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </AppShell>
   );
 }

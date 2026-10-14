@@ -26,6 +26,7 @@ from app.schemas.user import (
     CreateUserRequest,
     DepartmentOut,
     DepartmentWithCountOut,
+    ResetPasswordRequest,
     UpdateUserRequest,
     UserOut,
     UserSummaryOut,
@@ -353,6 +354,21 @@ def toggle_user_active(user_id: int, db: Session = Depends(get_db), user: User =
         raise HTTPException(400, "You cannot disable your own account.")
 
     target.is_active = not target.is_active
+    db.commit()
+    return target
+
+
+@router.post("/users/{user_id}/reset-password", response_model=UserOut)
+def reset_user_password(
+    user_id: int,
+    payload: ResetPasswordRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_tenant_admin),
+):
+    """Tenant Admin password reset for any user in their tenant (including Dept Admins)."""
+    target = get_tenant_scoped_or_404(db, User, user_id, user.tenant_id, "User not found.")
+
+    target.password_hash = hash_password(payload.password)
     db.commit()
     return target
 

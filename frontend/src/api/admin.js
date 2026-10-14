@@ -32,6 +32,10 @@ export function toggleUserActive(id) {
   return client.post(`/api/admin/users/${id}/toggle-active`).then((r) => r.data);
 }
 
+export function resetUserPassword(id, password) {
+  return client.post(`/api/admin/users/${id}/reset-password`, { password }).then((r) => r.data);
+}
+
 export function deleteUser(id) {
   return client.delete(`/api/admin/users/${id}`).then((r) => r.data);
 }

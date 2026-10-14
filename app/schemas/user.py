@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.user import UserRole
 
@@ -52,6 +52,10 @@ class UpdateUserRequest(BaseModel):
     department_id: int | None = None
     position: str | None = None
     password: str | None = None
+
+
+class ResetPasswordRequest(BaseModel):
+    password: str = Field(min_length=8, max_length=128)
 
 
 class CreateDepartmentRequest(BaseModel):

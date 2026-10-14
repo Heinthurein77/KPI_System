@@ -493,3 +493,42 @@ def test_create_user_duplicate_email_case_insensitive(db, client):
         headers=auth_headers(admin, tenant),
     )
     assert resp.status_code == 400
+
+
+def test_create_dept_admin_without_department_returns_400(db, client):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+
+    resp = client.post(
+        "/api/admin/users",
+        json={
+            "name": "No Dept Admin",
+            "email": "nodept@example.com",
+            "password": "Password123!",
+            "role": "dept_admin",
+            "department_id": None,
+        },
+        headers=auth_headers(admin, tenant),
+    )
+    assert resp.status_code == 400
+    assert "department" in resp.json()["detail"].lower()
+
+
+def test_create_dept_admin_with_department_succeeds(db, client):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    dept = make_department(db, tenant)
+
+    resp = client.post(
+        "/api/admin/users",
+        json={
+            "name": "Dept Admin",
+            "email": "deptadmin@example.com",
+            "password": "Password123!",
+            "role": "dept_admin",
+            "department_id": dept.id,
+        },
+        headers=auth_headers(admin, tenant),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["department_id"] == dept.id

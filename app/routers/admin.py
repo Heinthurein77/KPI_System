@@ -341,6 +341,12 @@ def create_user(
     else:
         resolved_department_id = None
 
+    # A Dept Admin without a department breaks every department-scoped view:
+    # their KPI never appears under any department filter, and their team
+    # queue can't resolve. Require it at creation.
+    if payload.role == UserRole.DEPT_ADMIN and resolved_department_id is None:
+        raise HTTPException(400, "Department Admins must belong to a department.")
+
     target = User(
         tenant_id=user.tenant_id,
         name=payload.name.strip(),
@@ -417,6 +423,10 @@ def edit_user(
         ).id
     else:
         target.department_id = None
+    # Same invariant as create_user: a Dept Admin must always belong to a
+    # department, otherwise their KPI vanishes from department-scoped views.
+    if target.role == UserRole.DEPT_ADMIN and target.department_id is None:
+        raise HTTPException(400, "Department Admins must belong to a department.")
     if payload.password:
         target.password_hash = hash_password(payload.password)
     db.commit()

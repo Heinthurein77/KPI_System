@@ -276,7 +276,7 @@ export default function TemplatesPage() {
                 {data.default_period} {data.default_year}
               </span>{" "}
               — it auto-carries forward each month.
-              {!isDeptAdmin && " A Dept Admin's own KPI skips department review and goes straight to you for final approval."}
+              {!isDeptAdmin && " A Dept Admin's own KPI first needs their self-approval at department review, then comes to you for final approval."}
             </p>
 
             <form onSubmit={handleCreateCustom} className="space-y-3">

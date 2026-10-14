@@ -122,6 +122,8 @@ export default function UserEditPage() {
               <select
                 value={departmentId}
                 onChange={(e) => setDepartmentId(e.target.value)}
+                required={role === "dept_admin"}
+                title={role === "dept_admin" ? "Department Admins must belong to a department" : undefined}
                 className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
               >
                 <option value="">No department (Tenant Admin)</option>

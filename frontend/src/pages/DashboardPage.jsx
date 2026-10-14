@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import AppShell from "../components/layout/AppShell";
 import EmployeeSelfAssessment from "../components/dashboard/EmployeeSelfAssessment";
 import TeamReviewBoard from "../components/dashboard/TeamReviewBoard";
@@ -198,6 +198,19 @@ export default function DashboardPage() {
       {user.role === "employee" && <EmployeeSelfAssessment fetcher={getDashboard} />}
       {user.role === "dept_admin" && <DeptAdminDashboard initialParams={initialParams} />}
       {user.role === "tenant_admin" && <TenantAdminDashboard user={user} initialParams={initialParams} />}
+      {user.role === "super_admin" && (
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center">
+          <p className="text-sm text-slate-500">
+            Platform admins manage tenants from the platform portal.
+          </p>
+          <Link
+            to="/platform/tenants"
+            className="mt-4 inline-flex items-center rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
+          >
+            Go to platform portal
+          </Link>
+        </div>
+      )}
     </AppShell>
   );
 }

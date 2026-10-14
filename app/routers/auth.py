@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.core.deps import get_current_user
+from app.core.rate_limit import LOGIN_RATE_LIMIT, limiter
 from app.core.security import DUMMY_PASSWORD_HASH, create_session_token, hash_password, verify_password
 from app.core.tenant import get_current_tenant
 from app.database import get_db
@@ -14,7 +15,13 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 
 @router.post("/login", response_model=LoginResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db), tenant: Tenant = Depends(get_current_tenant)):
+@limiter.limit(LOGIN_RATE_LIMIT)
+def login(
+    request: Request,
+    payload: LoginRequest,
+    db: Session = Depends(get_db),
+    tenant: Tenant = Depends(get_current_tenant),
+):
     user = db.scalar(
         select(User).where(User.tenant_id == tenant.id, User.email == payload.email.strip().lower())
     )

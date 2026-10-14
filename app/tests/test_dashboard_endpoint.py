@@ -1,7 +1,7 @@
 """HTTP-level integration tests for GET /api/dashboard and GET /api/my-kpi:
 platform-account role boundaries, the same-name-employee keying regression,
 past-period read-only gating, and the status_filter/department_id query
-params plus the Dept-Admin-excludes-own-row rule.
+params plus the Dept-Admin-includes-own-row rule (for self-approval).
 """
 
 from app.models.kpi_submission import KPIStatus
@@ -158,12 +158,12 @@ def test_dashboard_past_period_with_no_data_does_not_create_drafts(db, client):
 
 
 # ---------------------------------------------------------------------------
-# 7. status_filter / department_id query params, and the Dept-Admin-excludes-
-#    own-row rule on their team dashboard.
+# 7. status_filter / department_id query params, and the Dept-Admin-includes-
+#    own-row rule on their team dashboard (needed for the self-approval step).
 # ---------------------------------------------------------------------------
 
 
-def test_dashboard_status_filter_and_department_filter_and_dept_admin_excludes_self(db, client):
+def test_dashboard_status_filter_and_department_filter_and_dept_admin_includes_self(db, client):
     tenant = make_tenant(db)
     dept1 = make_department(db, tenant, name="Engineering")
     dept2 = make_department(db, tenant, name="Sales")
@@ -219,8 +219,8 @@ def test_dashboard_status_filter_and_department_filter_and_dept_admin_excludes_s
     ids = {s["id"] for s in resp.json()["submissions"]}
     assert ids == {sub_employee1.id, sub_dept_admin1_own.id}
 
-    # Dept Admin's own team view: sees employee1 (same department) but never
-    # their own row, even though it's in-department and would otherwise match.
+    # Dept Admin's own team view: sees employee1 (same department) AND their own
+    # row — the own row must appear so the Dept Admin can self-approve it.
     resp = client.get(
         "/api/dashboard",
         params=params_base,
@@ -229,5 +229,32 @@ def test_dashboard_status_filter_and_department_filter_and_dept_admin_excludes_s
     assert resp.status_code == 200
     dept_admin_body = resp.json()
     ids = {s["id"] for s in dept_admin_body["submissions"]}
-    assert ids == {sub_employee1.id}
-    assert all(s["employee"]["id"] != dept_admin1.id for s in dept_admin_body["submissions"])
+    assert ids == {sub_employee1.id, sub_dept_admin1_own.id}
+
+
+def test_dashboard_rejects_invalid_params_with_422(db, client):
+    tenant = make_tenant(db)
+    tenant_admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+
+    base = {"year": 2026, "period": "April"}
+
+    resp = client.get(
+        "/api/dashboard",
+        params={**base, "period": "NotAMonth"},
+        headers=auth_headers(tenant_admin, tenant),
+    )
+    assert resp.status_code == 422
+
+    resp = client.get(
+        "/api/dashboard",
+        params={**base, "status_filter": "bogus"},
+        headers=auth_headers(tenant_admin, tenant),
+    )
+    assert resp.status_code == 422
+
+    resp = client.get(
+        "/api/dashboard",
+        params={**base, "department_id": "abc"},
+        headers=auth_headers(tenant_admin, tenant),
+    )
+    assert resp.status_code == 422

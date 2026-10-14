@@ -3,7 +3,7 @@ import AppShell from "../../components/layout/AppShell";
 import EmployeeCombobox from "../../components/ui/EmployeeCombobox";
 import PageLoading from "../../components/ui/PageLoading";
 import { downloadEmployeeAnnualKpiReport, downloadEmployeeKpiReport, listUsers } from "../../api/admin";
-import { getErrorMessage } from "../../api/errors";
+import { getBlobErrorMessage, getErrorMessage } from "../../api/errors";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 
@@ -98,7 +98,7 @@ export default function KpiDownloadPage() {
       setTimeout(() => URL.revokeObjectURL(url), 0);
       toast.success(`${reportType === "annual" ? "Annual" : "Monthly"} Excel report for ${employee.name} downloaded.`);
     } catch (err) {
-      toast.error(getErrorMessage(err, "Could not download the Excel report. Please try again."));
+      toast.error(await getBlobErrorMessage(err, "Could not download the Excel report. Please try again."));
     } finally {
       setDownloading(false);
     }

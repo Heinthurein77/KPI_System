@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.deps import require_platform_super_admin
+from app.core.rate_limit import LOGIN_RATE_LIMIT, limiter
 from app.core.security import DUMMY_PASSWORD_HASH, create_session_token, hash_password, verify_password
 from app.database import get_db
 from app.models.tenant import Tenant, TenantStatus
@@ -15,7 +16,8 @@ router = APIRouter(prefix="/api/platform", tags=["platform"])
 
 
 @router.post("/auth/login", response_model=LoginResponse)
-def platform_login(payload: LoginRequest, db: Session = Depends(get_db)):
+@limiter.limit(LOGIN_RATE_LIMIT)
+def platform_login(request: Request, payload: LoginRequest, db: Session = Depends(get_db)):
     """Platform Super Admin login — not tenant-scoped (tenant_id IS NULL), so no
     organization slug is required. Distinct endpoint from /api/auth/login."""
     user = db.scalar(

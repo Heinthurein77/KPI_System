@@ -9,6 +9,7 @@ Override the default bootstrap account via env vars (recommended for production)
 """
 
 import os
+import secrets
 from sqlalchemy import select
 from app.core.security import hash_password
 from app.database import SessionLocal
@@ -16,7 +17,15 @@ from app.models.user import User, UserRole
 
 SUPER_ADMIN_NAME = os.getenv("PLATFORM_SUPER_ADMIN_NAME", "Platform Super Admin")
 SUPER_ADMIN_EMAIL = os.getenv("PLATFORM_SUPER_ADMIN_EMAIL", "platform-admin@kpi.com")
-SUPER_ADMIN_PASSWORD = os.getenv("PLATFORM_SUPER_ADMIN_PASSWORD", "Password123!")
+# Never fall back to a well-known default password: if the env var is not set,
+# generate a one-time random password (printed once below). A publicly-known
+# default would let anyone sign in as platform Super Admin.
+if "PLATFORM_SUPER_ADMIN_PASSWORD" in os.environ:
+    SUPER_ADMIN_PASSWORD = os.environ["PLATFORM_SUPER_ADMIN_PASSWORD"]
+    _generated_password = False
+else:
+    SUPER_ADMIN_PASSWORD = secrets.token_urlsafe(24)
+    _generated_password = True
 
 
 def run() -> None:
@@ -44,8 +53,8 @@ def run() -> None:
         print("Seed complete — platform Super Admin account created:")
         print(f"  Email:    {SUPER_ADMIN_EMAIL}")
         print(f"  Password: {SUPER_ADMIN_PASSWORD}")
-        if SUPER_ADMIN_PASSWORD == "Password123!":
-            print("  WARNING: change this password after first login in production.")
+        if _generated_password:
+            print("  NOTE: this password was randomly generated — save it now, it won't be shown again.")
         print("Sign in at /platform/login and create tenants from the Platform portal.")
     finally:
         db.close()

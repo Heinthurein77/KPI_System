@@ -148,3 +148,19 @@ def test_reject_path_then_reject_and_approve_are_refused(db, client):
         headers=auth_headers(dept_admin, tenant),
     )
     assert resp.status_code == 400
+
+
+def test_employee_save_rejects_non_numeric_score_keys(db, client):
+    from app.routers.dashboard import current_month_period
+
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    year, period = current_month_period()
+
+    resp = client.post(
+        "/api/kpi/employee/save",
+        json={"year": year, "period": period, "scores": {"abc": 80.0}},
+        headers=auth_headers(employee, tenant),
+    )
+    assert resp.status_code == 422

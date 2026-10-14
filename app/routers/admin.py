@@ -51,7 +51,14 @@ def list_departments(db: Session = Depends(get_db), user: User = Depends(require
 def create_department(
     payload: CreateDepartmentRequest, db: Session = Depends(get_db), user: User = Depends(require_tenant_admin)
 ):
-    department = Department(name=payload.name.strip(), tenant_id=user.tenant_id)
+    name = payload.name.strip()
+    existing = db.scalar(
+        select(Department).where(Department.tenant_id == user.tenant_id, Department.name == name)
+    )
+    if existing is not None:
+        raise HTTPException(400, f'A department named "{name}" already exists.')
+
+    department = Department(name=name, tenant_id=user.tenant_id)
     db.add(department)
     db.commit()
     return department
@@ -316,6 +323,13 @@ def create_user(
     if payload.role == UserRole.SUPER_ADMIN:
         raise HTTPException(400, "Cannot assign the platform Super Admin role to a tenant user.")
 
+    email = payload.email.strip().lower()
+    existing = db.scalar(
+        select(User).where(User.tenant_id == user.tenant_id, User.email == email)
+    )
+    if existing is not None:
+        raise HTTPException(400, "A user with this email already exists.")
+
     if user.role == UserRole.DEPT_ADMIN:
         if payload.role != UserRole.EMPLOYEE:
             raise HTTPException(403, "Department Admins can only create Employee accounts.")
@@ -330,7 +344,7 @@ def create_user(
     target = User(
         tenant_id=user.tenant_id,
         name=payload.name.strip(),
-        email=payload.email.strip().lower(),
+        email=email,
         password_hash=hash_password(payload.password),
         role=payload.role,
         position=payload.position.strip() if payload.position else None,
@@ -369,6 +383,11 @@ def reset_user_password(
     target = get_tenant_scoped_or_404(db, User, user_id, user.tenant_id, "User not found.")
 
     target.password_hash = hash_password(payload.password)
+    audit_service.log(
+        db, user, "user_password_reset", "user", target.id, target.name,
+        f"Password reset by {user.name} ({user.role.value}).",
+        department_id=target.department_id,
+    )
     db.commit()
     return target
 

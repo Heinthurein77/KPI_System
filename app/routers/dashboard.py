@@ -48,6 +48,22 @@ def is_future_month(year: int, period: str, today: date | None = None) -> bool:
     return (year, MONTH_NAMES.index(period)) > (current_year, MONTH_NAMES.index(current_period))
 
 
+def _validated_year_period(year: int | None, period: str | None) -> tuple[int, str]:
+    """Apply defaults and reject unknown period names with 422 instead of 500."""
+    default_year, default_period = current_month_period()
+    year = year or default_year
+    period = period or default_period
+    if period not in MONTH_NAMES:
+        raise HTTPException(422, f"Invalid period '{period}'. Must be a full month name.")
+    return year, period
+
+
+def _validated_status_filter(status_filter: str | None) -> None:
+    """Reject unknown status filters with 422 (Postgres enums 500 on bad values)."""
+    if status_filter is not None and status_filter not in {s.value for s in KPIStatus}:
+        raise HTTPException(422, f"Invalid status_filter '{status_filter}'.")
+
+
 
 
 
@@ -138,9 +154,7 @@ def my_kpi(
     if user.role != UserRole.DEPT_ADMIN:
         raise HTTPException(403, "This account type cannot access this view.")
 
-    default_year, default_period = current_month_period()
-    year = year or default_year
-    period = period or default_period
+    year, period = _validated_year_period(year, period)
 
     is_fillable_period = is_exact_current_month(year, period)
     if is_fillable_period:
@@ -172,17 +186,16 @@ def dashboard(
     year: int | None = None,
     period: str | None = None,
     status_filter: str | None = None,
-    department_id: str | None = None,
+    department_id: int | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     if user.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN, UserRole.TENANT_ADMIN):
         raise HTTPException(403, "This account type cannot access the dashboard.")
 
-    default_year, default_period = current_month_period()
-    year = year or default_year
-    period = period or default_period
-    resolved_department_id = int(department_id) if department_id else None
+    year, period = _validated_year_period(year, period)
+    _validated_status_filter(status_filter)
+    resolved_department_id = department_id
 
     context = {
         "role": user.role,
@@ -223,8 +236,9 @@ def dashboard(
         query = query.where(KPISubmission.status == status_filter)
     if resolved_department_id and user.role == UserRole.TENANT_ADMIN:
         query = query.where(KPISubmission.department_id == resolved_department_id)
-    if user.role == UserRole.DEPT_ADMIN:
-        query = query.where(KPISubmission.employee_id != user.id)
+    # NOTE: a Dept Admin's own submissions are intentionally INCLUDED here.
+    # They go through pending_dept_approval and the Dept Admin self-approves
+    # them in this review queue before the Tenant Admin's final approval.
 
     submissions = db.scalars(query).unique().all()
     submissions.sort(key=lambda s: (s.employee.name, s.kpi_template.metric_name))

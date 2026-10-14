@@ -12,3 +12,21 @@ export function getErrorMessage(err, fallback = "Something went wrong. Please tr
   // Only trust `detail` as a message when it's actually a string; otherwise fall back.
   return typeof detail === "string" && detail ? detail : fallback;
 }
+
+
+// Blob-aware variant for endpoints that use responseType: "blob" (Excel
+// downloads). When the backend rejects the request it still returns JSON, but
+// axios hands us a Blob, so the plain getErrorMessage can't read .detail.
+export async function getBlobErrorMessage(err, fallback = "Something went wrong. Please try again.") {
+  const data = err?.response?.data;
+  if (data instanceof Blob) {
+    try {
+      const json = JSON.parse(await data.text());
+      if (typeof json.detail === "string" && json.detail) return json.detail;
+    } catch {
+      // fall through to the generic message below
+    }
+    return fallback;
+  }
+  return getErrorMessage(err, fallback);
+}

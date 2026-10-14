@@ -454,3 +454,42 @@ def test_delete_user_forbidden_for_dept_admin(db, client):
 
     resp = client.delete(f"/api/admin/users/{target.id}", headers=auth_headers(dept_admin, tenant))
     assert resp.status_code == 403
+
+
+def test_create_user_duplicate_email_returns_400(db, client):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    make_user(db, tenant, UserRole.EMPLOYEE, email="dup@example.com")
+
+    resp = client.post(
+        "/api/admin/users",
+        json={
+            "name": "Duplicate",
+            "email": "dup@example.com",
+            "password": "Password123!",
+            "role": "employee",
+            "department_id": None,
+        },
+        headers=auth_headers(admin, tenant),
+    )
+    assert resp.status_code == 400
+    assert "already exists" in resp.json()["detail"]
+
+
+def test_create_user_duplicate_email_case_insensitive(db, client):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    make_user(db, tenant, UserRole.EMPLOYEE, email="dup@example.com")
+
+    resp = client.post(
+        "/api/admin/users",
+        json={
+            "name": "Duplicate",
+            "email": "DUP@EXAMPLE.COM",
+            "password": "Password123!",
+            "role": "employee",
+            "department_id": None,
+        },
+        headers=auth_headers(admin, tenant),
+    )
+    assert resp.status_code == 400

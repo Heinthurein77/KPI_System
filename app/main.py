@@ -6,9 +6,11 @@ from alembic.config import Config
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from slowapi.errors import RateLimitExceeded
 from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.core.tenant import TenantResolutionMiddleware
 from app.database import engine
 from app.routers import admin, auth, dashboard, kpi, platform
@@ -84,6 +86,18 @@ async def handle_unexpected_exception(request: Request, exc: Exception) -> JSONR
     return JSONResponse(
         status_code=500,
         content={"detail": "An unexpected error occurred. Please try again or contact your administrator."},
+    )
+
+
+# Rate limiting (slowapi) — 429s return the same {detail} shape as other errors.
+app.state.limiter = limiter
+
+
+@app.exception_handler(RateLimitExceeded)
+async def handle_rate_limit_exceeded(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Too many attempts. Please wait a minute and try again."},
     )
 
 

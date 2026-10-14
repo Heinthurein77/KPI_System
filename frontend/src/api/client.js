@@ -45,6 +45,19 @@ client.interceptors.response.use(
       // Request never got a response at all: wrong base URL, CORS block, DNS
       // failure, or the server is down — distinct from a 4xx/5xx the API returned.
       error.message = `Could not reach the API at ${API_BASE_URL}. Check the base URL and CORS configuration.`;
+    } else if (error.response.status === 401) {
+      // Session expired, token revoked, or account disabled mid-session: drop
+      // the stale credentials and send the user back to sign in. Skip when the
+      // failing request is itself a login attempt or we're already on a login
+      // page, so failed logins still show their error message.
+      const url = error.config?.url || "";
+      const onLoginPage = /\/login\/?$/.test(window.location.pathname);
+      const isLoginRequest = /\/auth\/login\/?$/.test(url);
+      if (!onLoginPage && !isLoginRequest) {
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("tenant_slug");
+        window.location.href = "/login";
+      }
     }
     return Promise.reject(error);
   }

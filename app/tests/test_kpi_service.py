@@ -251,6 +251,90 @@ def test_submit_for_dept_approval_dept_admin_goes_to_pending_dept_approval(db):
     assert submission.status == KPIStatus.PENDING_DEPT_APPROVAL
 
 
+def test_submit_for_dept_approval_does_not_regress_approved(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant)
+    submission = make_submission(
+        db, tenant, employee, template, period="September",
+        status=KPIStatus.APPROVED, self_score=80.0,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.submit_for_dept_approval(db, employee, 2026, "September")
+
+    assert exc_info.value.status_code == 400
+    db.refresh(submission)
+    assert submission.status == KPIStatus.APPROVED
+
+
+def test_submit_for_dept_approval_allows_resubmit_after_reject(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant)
+    submission = make_submission(
+        db, tenant, employee, template, period="September",
+        status=KPIStatus.REJECTED, self_score=80.0,
+    )
+
+    kpi_service.submit_for_dept_approval(db, employee, 2026, "September")
+
+    db.refresh(submission)
+    assert submission.status == KPIStatus.PENDING_DEPT_APPROVAL
+
+
+def test_scores_above_target_are_rejected(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    reviewer = make_user(db, tenant, UserRole.DEPT_ADMIN, name="Reviewer", department=dept)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Admin")
+    template = make_template(db, tenant, target=100.0)
+    submission = make_submission(
+        db, tenant, employee, template, period="September",
+        status=KPIStatus.PENDING_DEPT_APPROVAL, self_score=80.0,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.dept_save_score(db, reviewer, submission, 150.0, None)
+    assert exc_info.value.status_code == 400
+
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.dept_approve(db, reviewer, submission, 150.0, None)
+    assert exc_info.value.status_code == 400
+
+    submission.status = KPIStatus.PENDING_FINAL_APPROVAL
+    db.commit()
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.final_approve(db, admin, submission, 150.0, None)
+    assert exc_info.value.status_code == 400
+
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.tenant_admin_override(db, admin, submission, 150.0, None)
+    assert exc_info.value.status_code == 400
+
+    db.refresh(submission)
+    assert submission.dept_score is None
+    assert submission.final_score is None
+
+
+def test_self_scores_above_target_are_rejected(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant, target=100.0)
+    submission = make_submission(db, tenant, employee, template, period="September")
+
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.save_self_scores(db, employee, {submission.id: 150.0})
+    assert exc_info.value.status_code == 400
+
+    db.refresh(submission)
+    assert submission.self_score is None
+
+
 # ---------------------------------------------------------------------------
 # dept_save_score / dept_approve / final_approve / reject_submission
 # ---------------------------------------------------------------------------

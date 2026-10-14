@@ -47,6 +47,18 @@ def _clean_tables():
             conn.execute(table.delete())
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """slowapi's in-memory limiter keys by client IP, and every TestClient
+    request comes from the same IP — reset between tests so login attempts
+    in one test don't consume another test's rate-limit budget."""
+    from app.core.rate_limit import limiter
+
+    limiter.reset()
+    yield
+    limiter.reset()
+
+
 @pytest.fixture()
 def db():
     """A raw session for test setup (building fixtures directly), separate

@@ -56,12 +56,26 @@ def _reject_negative_scores(scores: dict[str, float]) -> dict[str, float]:
     return scores
 
 
+def _reject_non_numeric_keys(scores: dict[str, float]) -> dict[str, float]:
+    # Score-dict keys are submission IDs; the router converts them with int(),
+    # so non-numeric keys must be rejected here with a 422 instead of a 500.
+    for key in scores:
+        if not key.isdigit():
+            raise ValueError(f"Invalid submission id: {key!r}.")
+    return scores
+
+
+def _validate_score_keys_and_values(scores: dict[str, float]) -> dict[str, float]:
+    scores = _reject_non_numeric_keys(scores)
+    return _reject_negative_scores(scores)
+
+
 class SaveScoresRequest(BaseModel):
     year: int
     period: str
     scores: dict[str, float] = {}
 
-    _validate_scores = field_validator("scores")(_reject_negative_scores)
+    _validate_scores = field_validator("scores")(_validate_score_keys_and_values)
 
 
 class SubmitRequest(BaseModel):
@@ -69,7 +83,7 @@ class SubmitRequest(BaseModel):
     period: str
     scores: dict[str, float] = {}
 
-    _validate_scores = field_validator("scores")(_reject_negative_scores)
+    _validate_scores = field_validator("scores")(_validate_score_keys_and_values)
 
 
 class DeptSaveRequest(BaseModel):

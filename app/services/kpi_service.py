@@ -300,7 +300,9 @@ def create_custom_employee_kpi(
 
 def save_self_scores(db: Session, employee: User, scores: dict[int, float]) -> None:
     submissions = db.scalars(
-        select(KPISubmission).where(
+        select(KPISubmission)
+        .options(joinedload(KPISubmission.kpi_template))
+        .where(
             KPISubmission.id.in_(scores.keys()),
             KPISubmission.employee_id == employee.id,
             KPISubmission.tenant_id == employee.tenant_id,
@@ -311,6 +313,7 @@ def save_self_scores(db: Session, employee: User, scores: dict[int, float]) -> N
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, "Cannot edit a submission that has already been submitted."
             )
+        _validate_score_within_target(submission, scores[submission.id], "Self score")
         submission.self_score = scores[submission.id]
     db.commit()
 
@@ -327,14 +330,27 @@ def submit_for_dept_approval(db: Session, employee: User, year: int, period: str
     if not submissions:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No draft KPI found for this period.")
 
-    missing = [s for s in submissions if s.self_score is None]
+    # Only DRAFT and REJECTED submissions may (re)enter the approval queue.
+    # Anything already in review or APPROVED must not regress — approved data
+    # is immutable.
+    submittable = [
+        s for s in submissions
+        if s.status in (KPIStatus.DRAFT, KPIStatus.REJECTED)
+    ]
+    if not submittable:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "No draft or rejected KPI found for this period.",
+        )
+
+    missing = [s for s in submittable if s.self_score is None]
     if missing:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Please score every metric before submitting.")
 
     # Every submission — including a Dept Admin's own — goes through department
     # review first. A Dept Admin self-approves their own KPI at this stage
     # (self approval), which forwards it to the Tenant Admin for final approval.
-    for submission in submissions:
+    for submission in submittable:
         submission.status = KPIStatus.PENDING_DEPT_APPROVAL
         submission.submitted_at = _now()
         audit_service.log(
@@ -352,12 +368,24 @@ def _entity_label(submission: KPISubmission) -> str:
     )
 
 
+def _validate_score_within_target(submission: KPISubmission, score: float | None, label: str) -> None:
+    """Reject scores above the metric target — inflated scores poison attainment
+    math and crash dashboard views that refuse actual > target."""
+    if score is not None and score > submission.kpi_template.target:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"{label} ({fmt_score(score)}) cannot exceed the target of "
+            f"{fmt_score(submission.kpi_template.target)}.",
+        )
+
+
 def dept_save_score(
     db: Session, reviewer: User, submission: KPISubmission, dept_score: float, remarks: str | None
 ) -> None:
     """Dept Admin edits the score without forwarding yet."""
     if submission.status != KPIStatus.PENDING_DEPT_APPROVAL:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not awaiting department review.")
+    _validate_score_within_target(submission, dept_score, "Dept score")
     old_score = submission.dept_score
     submission.dept_score = dept_score
     if remarks is not None:
@@ -382,6 +410,7 @@ def dept_approve(
     """Dept Admin approves and forwards to the Super Admin for final review."""
     if submission.status != KPIStatus.PENDING_DEPT_APPROVAL:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not awaiting department review.")
+    _validate_score_within_target(submission, dept_score, "Dept score")
     old_score = submission.dept_score
     submission.dept_score = dept_score if dept_score is not None else (
         submission.dept_score if submission.dept_score is not None else submission.self_score
@@ -411,6 +440,7 @@ def final_approve(
     """Super Admin gives final approval, optionally adjusting the score."""
     if submission.status != KPIStatus.PENDING_FINAL_APPROVAL:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not awaiting final approval.")
+    _validate_score_within_target(submission, final_score, "Final score")
     submission.final_score = final_score if final_score is not None else (
         submission.dept_score if submission.dept_score is not None else submission.self_score
     )
@@ -431,6 +461,7 @@ def tenant_admin_override(
     db: Session, admin: User, submission: KPISubmission, final_score: float, remarks: str | None
 ) -> None:
     """Tenant Admin can override the score and force-approve at any workflow stage."""
+    _validate_score_within_target(submission, final_score, "Override score")
     old_score = submission.final_score if submission.final_score is not None else (
         submission.dept_score if submission.dept_score is not None else submission.self_score
     )

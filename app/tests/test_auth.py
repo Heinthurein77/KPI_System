@@ -193,3 +193,22 @@ def test_tenant_token_without_tenant_header_rejected(db, client):
 
     resp = client.get("/api/auth/me", headers=headers)
     assert resp.status_code == 401
+
+
+def test_login_rate_limit_returns_429_after_10_attempts(db, client):
+    tenant = make_tenant(db)
+    make_user(db, tenant, UserRole.EMPLOYEE, email="limited@example.com")
+
+    headers = {"X-Tenant-Slug": tenant.slug}
+    codes = []
+    for _ in range(11):
+        resp = client.post(
+            "/api/auth/login",
+            json={"email": "limited@example.com", "password": "WrongPassword1!"},
+            headers=headers,
+        )
+        codes.append(resp.status_code)
+
+    assert codes[:10] == [401] * 10
+    assert codes[10] == 429
+    assert "Too many attempts" in resp.json()["detail"]

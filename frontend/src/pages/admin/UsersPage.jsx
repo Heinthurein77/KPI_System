@@ -104,6 +104,15 @@ export default function UsersPage() {
     setConfirmPassword("");
   }
 
+  useEffect(() => {
+    if (resetTarget === null) return;
+    function handleKey(e) {
+      if (e.key === "Escape") closeResetPassword();
+    }
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [resetTarget]);
+
   async function confirmResetPassword() {
     if (!resetTarget) return;
     if (newPassword.length < 8) {

@@ -181,3 +181,15 @@ def test_delete_department_forbidden_for_dept_admin(db, client):
         f"/api/admin/departments/{other_dept.id}", headers=auth_headers(dept_admin, tenant)
     )
     assert resp.status_code == 403
+
+
+def test_create_department_duplicate_name_returns_400(db, client):
+    tenant = make_tenant(db)
+    admin = _tenant_admin(db, tenant)
+    make_department(db, tenant, name="Sales")
+
+    resp = client.post(
+        "/api/admin/departments", json={"name": "Sales"}, headers=auth_headers(admin, tenant)
+    )
+    assert resp.status_code == 400
+    assert "already exists" in resp.json()["detail"]

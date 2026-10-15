@@ -130,3 +130,25 @@ def test_rate_limit_key_uses_x_forwarded_for():
 def test_rate_limit_key_falls_back_to_remote_addr():
     req = _FakeRequest(remote="10.0.0.9")
     assert _client_ip_key(req) == "10.0.0.9"
+
+
+def test_platform_tenant_creation_sets_must_change_password(client, db):
+    from app.models.user import User
+    from sqlalchemy import select
+
+    root = make_user(db, None, UserRole.SUPER_ADMIN, email="root@platform.example.com")
+    resp = client.post(
+        "/api/platform/tenants",
+        json={
+            "name": "Acme Corp",
+            "slug": "acme",
+            "admin_name": "Acme Admin",
+            "admin_email": "admin@acme.example.com",
+            "admin_password": "AcmePass1!",
+        },
+        headers=auth_headers(root),
+    )
+    assert resp.status_code == 200, resp.text
+    tenant_admin = db.scalar(select(User).where(User.email == "admin@acme.example.com"))
+    assert tenant_admin is not None
+    assert tenant_admin.must_change_password is True

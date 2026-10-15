@@ -66,6 +66,7 @@ def create_tenant(
             password_hash=hash_password(payload.admin_password),
             role=UserRole.TENANT_ADMIN,
             department_id=None,
+            must_change_password=True,
         )
     )
     try:

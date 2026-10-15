@@ -132,11 +132,17 @@ if FRONTEND_DIST.is_dir():
 
         candidate = (FRONTEND_DIST / full_path).resolve()
         if full_path and candidate.is_file() and FRONTEND_DIST in candidate.parents:
+            if candidate.name == "index.html":
+                # The entry point references the hashed bundles — never let the
+                # browser keep booting an old app version after a deploy.
+                return FileResponse(candidate, headers={"Cache-Control": "no-cache"})
             return FileResponse(candidate)
 
         # Anything else (including client-side routes like /admin/users) falls
         # back to index.html so React Router can take over.
-        return FileResponse(FRONTEND_DIST / "index.html")
+        return FileResponse(
+            FRONTEND_DIST / "index.html", headers={"Cache-Control": "no-cache"}
+        )
 
 
 if __name__ == "__main__":

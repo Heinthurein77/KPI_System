@@ -1,10 +1,11 @@
 import { useState } from "react";
-import { Link, Navigate, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
 export default function LoginPage() {
   const { user, login } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [orgSlug, setOrgSlug] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -100,6 +101,14 @@ export default function LoginPage() {
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Welcome back</h1>
           <p className="mt-1.5 text-sm text-slate-500">Sign in to manage your KPI submissions.</p>
 
+          {location.state?.passwordChanged && !error && (
+            <div className="mt-5 flex items-start gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-3.5 py-2.5 text-sm text-emerald-700">
+              <svg className="h-4 w-4 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+              </svg>
+              Password changed. Please log in with your new password.
+            </div>
+          )}
           {error && (
             <div className="mt-5 flex items-start gap-2 rounded-lg bg-red-50 border border-red-200 px-3.5 py-2.5 text-sm text-red-700">
               <svg className="h-4 w-4 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">

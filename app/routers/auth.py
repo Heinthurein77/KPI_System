@@ -65,7 +65,10 @@ def me(user: User = Depends(get_current_user)):
 
 @router.post("/change-password", status_code=status.HTTP_204_NO_CONTENT)
 def change_password(
-    payload: ChangePasswordRequest, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    payload: ChangePasswordRequest,
+    response: Response,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     if not verify_password(payload.current_password, user.password_hash):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect.")
@@ -76,3 +79,6 @@ def change_password(
     user.must_change_password = False
     user.token_version = (user.token_version or 0) + 1
     db.commit()
+    # The token_version bump invalidates this session — clear the now-dead
+    # cookie so the SPA doesn't keep sending it. The user logs in again.
+    clear_session_cookie(response)

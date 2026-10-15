@@ -6,20 +6,18 @@ import { getErrorMessage } from "../api/errors";
 import { useAuth } from "../context/AuthContext";
 
 export default function ChangePasswordPage() {
-  const { user, refreshUser } = useAuth();
+  const { user, logout } = useAuth();
   const navigate = useNavigate();
   const mustChange = !!user?.must_change_password;
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
-    setSuccess(false);
 
     if (newPassword.length < 8) {
       setError("New password must be at least 8 characters.");
@@ -34,18 +32,17 @@ export default function ChangePasswordPage() {
     try {
       // Platform super admins have no tenant slug; the tenant-scoped
       // /api/auth/change-password 401s for them (by design).
-      const changeFn = localStorage.getItem("tenant_slug") ? changePassword : platformChangePassword;
+      const isPlatform = !localStorage.getItem("tenant_slug");
+      const changeFn = isPlatform ? platformChangePassword : changePassword;
       await changeFn(currentPassword, newPassword);
-      await refreshUser();
-      setSuccess(true);
-      setCurrentPassword("");
-      setNewPassword("");
-      setConfirmPassword("");
-      if (mustChange) {
-        // Forced change complete — go home now that the ProtectedRoute
-        // gate will let this user through.
-        navigate(user?.role === "super_admin" ? "/platform/tenants" : "/dashboard", { replace: true });
-      }
+      // The password change bumps token_version, which invalidates this
+      // session by design — log out and send the user to log in again with
+      // the new password.
+      await logout();
+      navigate(isPlatform ? "/platform/login" : "/login", {
+        replace: true,
+        state: { passwordChanged: true },
+      });
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -63,11 +60,6 @@ export default function ChangePasswordPage() {
         )}
         {error && (
           <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
-        )}
-        {success && (
-          <div className="mb-4 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm text-emerald-700">
-            Your password has been updated.
-          </div>
         )}
 
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">

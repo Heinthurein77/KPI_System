@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import require_platform_super_admin
 from app.core.rate_limit import LOGIN_RATE_LIMIT, limiter
-from app.core.security import DUMMY_PASSWORD_HASH, _request_is_secure, create_session_token, hash_password, set_session_cookie, verify_password
+from app.core.security import DUMMY_PASSWORD_HASH, _request_is_secure, clear_session_cookie, create_session_token, hash_password, set_session_cookie, verify_password
 from app.database import get_db
 from app.models.tenant import Tenant, TenantStatus
 from app.models.user import User, UserRole
@@ -49,6 +49,7 @@ def platform_me(user: User = Depends(require_platform_super_admin)):
 @router.post("/auth/change-password", status_code=status.HTTP_204_NO_CONTENT)
 def platform_change_password(
     payload: ChangePasswordRequest,
+    response: Response,
     db: Session = Depends(get_db),
     admin: User = Depends(require_platform_super_admin),
 ):
@@ -63,6 +64,9 @@ def platform_change_password(
     admin.must_change_password = False
     admin.token_version = (admin.token_version or 0) + 1
     db.commit()
+    # The token_version bump invalidates this session — clear the now-dead
+    # cookie so the SPA doesn't keep sending it. The admin logs in again.
+    clear_session_cookie(response)
 
 
 @router.get("/tenants", response_model=list[TenantOut])

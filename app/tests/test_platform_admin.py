@@ -89,6 +89,9 @@ def test_platform_change_password_ok(db, client):
         json={"current_password": DEFAULT_PASSWORD, "new_password": "BrandNewPass123"},
     )
     assert r.status_code == 204
+    # The dead session cookie is cleared — the admin logs in again.
+    assert "access_token=" in r.headers.get("set-cookie", "")
+    assert "Max-Age=0" in r.headers["set-cookie"]
     # Old password no longer works; token version was bumped.
     r = client.post("/api/platform/auth/login", json={"email": admin.email, "password": DEFAULT_PASSWORD})
     assert r.status_code == 401

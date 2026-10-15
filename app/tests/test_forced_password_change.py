@@ -67,6 +67,10 @@ def test_change_password_clears_flag(client, db):
     assert resp.status_code == 204
     db.refresh(user)
     assert user.must_change_password is False
+    # The token_version bump kills the session — the dead cookie is cleared so
+    # the SPA doesn't keep sending it; the user logs in again.
+    assert "access_token=" in resp.headers.get("set-cookie", "")
+    assert "Max-Age=0" in resp.headers["set-cookie"]
 
 
 def test_login_response_includes_must_change_password(client, db):

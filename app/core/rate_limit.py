@@ -14,8 +14,12 @@ from slowapi.util import get_remote_address
 def _client_ip_key(request):
     xff = request.headers.get("x-forwarded-for")
     if xff:
-        # Leftmost entry is the original client; proxies append to the right.
-        return xff.split(",")[0].strip()
+        # Rightmost entry is the one appended by OUR reverse proxy (Caddy) —
+        # the only entry an attacker cannot spoof. The leftmost entry is
+        # client-supplied and must never be trusted (it would let an attacker
+        # rotate fake IPs to dodge the rate limit). This assumes a single
+        # trusted proxy hop directly in front of the app.
+        return xff.split(",")[-1].strip()
     return get_remote_address(request)
 
 

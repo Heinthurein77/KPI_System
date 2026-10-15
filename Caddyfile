@@ -18,5 +18,12 @@
 	# Access log with the real client IP (the app itself only ever sees Caddy's).
 	log
 
-	reverse_proxy web:8000
+	reverse_proxy web:8000 {
+		# Overwrite X-Forwarded-For with the real client IP instead of
+		# appending to it: a client-supplied value would otherwise let an
+		# attacker rotate fake leftmost IPs and dodge the app's per-IP rate
+		# limits. The app keys its limiter on the rightmost entry, which is
+		# always the one Caddy itself appended.
+		header_up X-Forwarded-For {remote_host}
+	}
 }

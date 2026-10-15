@@ -39,6 +39,8 @@ class KPISubmissionOut(BaseModel):
     final_score: float | None
     status: KPIStatus
     remarks: str | None
+    weight_snapshot: float | None = None
+    target_snapshot: float | None = None
     submitted_at: datetime | None
     dept_reviewed_at: datetime | None
     final_reviewed_at: datetime | None

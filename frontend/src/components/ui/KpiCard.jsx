@@ -44,7 +44,7 @@ function remarkAuthor(s) {
 // Attainment for the card's hero ring: best available score vs target,
 // capped at 120 like the backend. Prefers the most-finalized score.
 function attainmentFor(s) {
-  const target = Number(s.kpi_template.target);
+  const target = Number(snapTarget);
   const score = s.final_score ?? s.dept_score ?? s.self_score;
   if (score == null || !(target > 0)) return { value: null, label: null };
   const label = s.final_score != null ? "Final" : s.dept_score != null ? "Dept" : "Self";
@@ -76,6 +76,10 @@ export default function KpiCard({
   const [confirm, setConfirm] = useState(null);
 
   const attainment = attainmentFor(s);
+
+  // Target/weight in force when this submission was created (frozen snapshot
+  // with fallback to the live template for pre-migration rows).
+  const snapTarget = s.target_snapshot ?? s.kpi_template.target;
 
   const canReject = onReject && (s.status === "pending_dept_approval" || s.status === "pending_final_approval");
   const author = remarkAuthor(s);
@@ -120,10 +124,10 @@ export default function KpiCard({
 
   function handleScoreChange(setScore, field, value) {
     setScore(value);
-    if (value !== "" && Number(value) > Number(s.kpi_template.target)) {
+    if (value !== "" && Number(value) > Number(snapTarget)) {
       setInvalidScoreField(field);
       toast.error(TARGET_EXCEEDED_MESSAGE);
-    } else if (invalidScoreField === field && value !== "" && Number(value) <= Number(s.kpi_template.target)) {
+    } else if (invalidScoreField === field && value !== "" && Number(value) <= Number(snapTarget)) {
       setInvalidScoreField(null);
     }
   }
@@ -141,7 +145,7 @@ export default function KpiCard({
             {s.kpi_template.metric_name}
           </h4>
           <p className="text-[11px] text-slate-400 mt-0.5">
-            Target {s.kpi_template.target} · Weight {s.kpi_template.weight}
+            Target {snapTarget} · Weight {s.weight_snapshot ?? s.kpi_template.weight}
           </p>
         </div>
         <AttainmentRing value={attainment.value} label={attainment.label} />
@@ -165,18 +169,18 @@ export default function KpiCard({
               className={`w-full rounded-lg border px-1 py-1.5 text-sm text-center tabular-nums focus:outline-none focus:ring-2 ${selfScoreInvalid ? "border-red-500 focus:ring-red-500" : "border-slate-300 focus:ring-brand-500"}`}
             />
           ) : (
-            <ScoreBadge value={s.self_score} target={s.kpi_template.target} />
+            <ScoreBadge value={s.self_score} target={snapTarget} />
           )}
         </div>
         {!hideDeptColumn && (
           <div className="text-center border-x border-slate-200">
             <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Dept</p>
-            <ScoreBadge value={s.dept_score} target={s.kpi_template.target} />
+            <ScoreBadge value={s.dept_score} target={snapTarget} />
           </div>
         )}
         <div className="text-center">
           <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Final</p>
-          <ScoreBadge value={s.final_score} target={s.kpi_template.target} size="md" />
+          <ScoreBadge value={s.final_score} target={snapTarget} size="md" />
         </div>
       </div>
 
@@ -230,7 +234,7 @@ export default function KpiCard({
           <div className="flex items-center gap-1.5">
             <button
               type="button"
-              disabled={!isValidScore(deptScore, s.kpi_template.target)}
+              disabled={!isValidScore(deptScore, snapTarget)}
               onClick={() => onDeptSave(s.id, Number(deptScore), deptRemarks || undefined)}
               className="rounded-md border border-slate-300 px-2.5 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 hover:border-slate-400 transition disabled:opacity-60"
             >
@@ -238,7 +242,7 @@ export default function KpiCard({
             </button>
             <button
               type="button"
-              disabled={!isValidScore(deptScore, s.kpi_template.target)}
+              disabled={!isValidScore(deptScore, snapTarget)}
               onClick={() => setConfirm({ kind: "deptApprove" })}
               className="flex-1 inline-flex items-center justify-center gap-1 rounded-md bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-brand-700 transition disabled:opacity-60"
             >
@@ -280,7 +284,7 @@ export default function KpiCard({
               />
               <button
                 type="button"
-                disabled={!isValidScore(finalScore, s.kpi_template.target)}
+                disabled={!isValidScore(finalScore, snapTarget)}
                 onClick={() => setConfirm({ kind: "finalApprove" })}
                 className="w-full inline-flex items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 transition whitespace-nowrap disabled:opacity-60"
               >
@@ -338,7 +342,7 @@ export default function KpiCard({
                   />
                   <button
                     type="button"
-                    disabled={!isValidScore(overrideScore, s.kpi_template.target)}
+                    disabled={!isValidScore(overrideScore, snapTarget)}
                     onClick={() => setConfirm({ kind: "override" })}
                     className="w-full rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800 transition disabled:opacity-60"
                   >

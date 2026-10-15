@@ -139,3 +139,44 @@ def test_overview_includes_dept_admins(client, db):
     by_dept = {d["department_name"]: d for d in data["by_department"]}
     assert by_dept["Engineering"]["employee_count"] == 2
     assert by_dept["Engineering"]["avg_score"] == pytest.approx(90.0)
+
+
+def test_overview_scores_use_approved_only(client, db):
+    """In-flight (pending) self-scores must not move analytics averages;
+    submission compliance still counts them as submitted."""
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant, name="Engineering")
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Boss")
+    emp1 = make_user(db, tenant, UserRole.EMPLOYEE, name="Approved One", department=dept)
+    emp2 = make_user(db, tenant, UserRole.EMPLOYEE, name="Pending One", department=dept)
+    tpl = make_template(db, tenant)
+    make_submission(db, tenant, emp1, tpl, year=2026, period="October",
+                    status=KPIStatus.APPROVED, final_score=80, department=dept)
+    make_submission(db, tenant, emp2, tpl, year=2026, period="October",
+                    status=KPIStatus.PENDING_DEPT_APPROVAL, self_score=20, department=dept)
+    db.commit()
+
+    r = client.get(
+        "/api/analytics/overview",
+        params={"year": 2026, "period": "October"},
+        headers=auth_headers(admin, tenant),
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    # Only the approved 80 counts toward scores…
+    assert data["avg_score"] == pytest.approx(80.0)
+    assert data["buckets"] == {"Need to improve": 0, "Normal": 0, "Performance": 1}
+    # …but both members submitted.
+    assert data["employee_count"] == 2
+    assert data["submitted_count"] == 2
+    assert data["approved_count"] == 1
+    assert data["pending_count"] == 0
+
+    t = client.get(
+        "/api/analytics/trend",
+        params={"periods": 1},
+        headers=auth_headers(admin, tenant),
+    )
+    assert t.status_code == 200
+    # Trend point is for the current month; just assert shape here.
+    assert isinstance(t.json(), list)

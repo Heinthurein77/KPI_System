@@ -51,6 +51,13 @@ class KPISubmission(Base):
     dept_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     final_score: Mapped[float | None] = mapped_column(Float, nullable=True)
 
+    # Frozen copies of the template's weight/target taken when the submission
+    # was created. Score math reads these, so later template edits only affect
+    # future submissions ("future months only"). Nullable for rows predating
+    # migration 0014 (backfilled there); readers fall back to the live template.
+    weight_snapshot: Mapped[float | None] = mapped_column(Float, nullable=True)
+    target_snapshot: Mapped[float | None] = mapped_column(Float, nullable=True)
+
     status: Mapped[KPIStatus] = mapped_column(
         Enum(KPIStatus), nullable=False, default=KPIStatus.DRAFT
     )
@@ -86,3 +93,22 @@ class KPISubmission(Base):
         return self.final_score if self.final_score is not None else (
             self.dept_score if self.dept_score is not None else self.self_score
         )
+
+    @property
+    def effective_weight(self) -> float:
+        """Weight in force when this submission was created.
+
+        Reads the frozen snapshot; falls back to the live template only for
+        rows predating migration 0014. Template weight edits therefore affect
+        future submissions, never already-created ones.
+        """
+        if self.weight_snapshot is not None:
+            return self.weight_snapshot
+        return float(self.kpi_template.weight or 0.0) if self.kpi_template else 0.0
+
+    @property
+    def effective_target(self) -> float | None:
+        """Target in force when this submission was created (snapshot w/ fallback)."""
+        if self.target_snapshot is not None:
+            return self.target_snapshot
+        return self.kpi_template.target if self.kpi_template else None

@@ -120,7 +120,7 @@ def validate_period_total_weight(db: Session, employee: User, year: int, period:
         return
 
     total_weight = sum(
-        (Decimal(str(submission.kpi_template.weight)) for submission in submissions),
+        (Decimal(str(submission.effective_weight)) for submission in submissions),
         Decimal("0"),
     )
     if total_weight > Decimal("100"):
@@ -221,6 +221,8 @@ def ensure_period_submissions(
             year=year,
             month_or_quarter=period,
             status=KPIStatus.DRAFT,
+            weight_snapshot=template.weight,
+            target_snapshot=template.target,
         )
         db.add(submission)
         created.append(submission)
@@ -287,6 +289,8 @@ def create_custom_employee_kpi(
         year=year,
         month_or_quarter=period,
         status=KPIStatus.DRAFT,
+        weight_snapshot=template.weight,
+        target_snapshot=template.target,
     )
     db.add(submission)
     recurring_note = " Marked as monthly recurring." if is_recurring else ""
@@ -401,11 +405,11 @@ def _entity_label(submission: KPISubmission) -> str:
 def _validate_score_within_target(submission: KPISubmission, score: float | None, label: str) -> None:
     """Reject scores above the metric target — inflated scores poison attainment
     math and crash dashboard views that refuse actual > target."""
-    if score is not None and score > submission.kpi_template.target:
+    if score is not None and score > submission.effective_target:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
             f"{label} ({fmt_score(score)}) cannot exceed the target of "
-            f"{fmt_score(submission.kpi_template.target)}.",
+            f"{fmt_score(submission.effective_target)}.",
         )
 
 

@@ -185,6 +185,8 @@ def materialise_recurring_for_period(
             year=year,
             month_or_quarter=period,
             status=KPIStatus.DRAFT,
+            weight_snapshot=template.weight,
+            target_snapshot=template.target,
             # All score fields default to None — employee fills them in.
         )
         db.add(new_submission)

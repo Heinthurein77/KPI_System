@@ -344,3 +344,64 @@ def test_delete_template_tenant_admin_can_delete_personal_template(db, client):
         f"/api/admin/templates/{template.id}", headers=auth_headers(admin, tenant)
     )
     assert resp.status_code == 200
+
+
+# ---------- Weight/target snapshots (M2) ----------
+
+
+def test_weight_edit_does_not_rewrite_existing_scores(client, db):
+    """Editing a template's weight must not change already-created
+    submissions' combined scores (snapshot, not live template)."""
+    from app.routers.dashboard import combined_final_score
+
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Boss")
+    emp = make_user(db, tenant, UserRole.EMPLOYEE, name="Emp", department=dept)
+    tpl = make_template(db, tenant, target=100, weight=50, department=dept, employee=emp, is_recurring=True)
+    sub = make_submission(db, tenant, emp, tpl, status=KPIStatus.APPROVED, final_score=80)
+    # Factory bypasses the service layer: set the snapshot like creation does.
+    sub.weight_snapshot = tpl.weight
+    sub.target_snapshot = tpl.target
+    db.commit()
+
+    before = combined_final_score([sub])["attainment"]
+
+    resp = client.patch(
+        f"/api/admin/templates/{tpl.id}/weight",
+        json={"weight": 100},
+        headers=auth_headers(admin, tenant),
+    )
+    assert resp.status_code == 200
+    db.refresh(sub)
+    db.refresh(tpl)
+    assert tpl.weight == 100
+
+    after = combined_final_score([sub])["attainment"]
+    assert after == before
+    assert sub.weight_snapshot == 50  # frozen at creation
+
+
+def test_new_submissions_get_current_weight(client, db):
+    """Submissions created after a weight edit pick up the new weight."""
+    from app.services import kpi_service
+
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Boss")
+    emp = make_user(db, tenant, UserRole.EMPLOYEE, name="Emp", department=dept)
+    tpl = make_template(db, tenant, target=100, weight=50, department=dept, employee=emp,
+                         is_recurring=True, locked_year=2026, locked_period="January")
+
+    resp = client.patch(
+        f"/api/admin/templates/{tpl.id}/weight",
+        json={"weight": 70},
+        headers=auth_headers(admin, tenant),
+    )
+    assert resp.status_code == 200
+    db.refresh(tpl)  # the PATCH ran in another session; drop the stale identity-map copy
+
+    subs = kpi_service.ensure_period_submissions(db, emp, 2026, "November")
+    assert len(subs) == 1
+    assert subs[0].weight_snapshot == 70
+    assert subs[0].target_snapshot == 100

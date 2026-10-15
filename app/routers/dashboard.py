@@ -106,13 +106,14 @@ def combined_final_score(submissions: List[Any]) -> Optional[Dict[str, Any]]:
     """
     valid_items = []
     for s in submissions:
-        if s.final_score is None or not s.kpi_template or not s.kpi_template.target:
+        target = s.effective_target
+        if s.final_score is None or not s.kpi_template or not target:
             continue
 
         valid_items.append({
             "actual": float(s.final_score),
-            "target": float(s.kpi_template.target),
-            "weight": float(s.kpi_template.weight or 0.0),
+            "target": float(target),
+            "weight": float(s.effective_weight),
         })
 
     if not valid_items:

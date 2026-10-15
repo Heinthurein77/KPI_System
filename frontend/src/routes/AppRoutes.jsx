@@ -52,7 +52,7 @@ export default function AppRoutes() {
       <Route
         path="/my-trend"
         element={
-          <ProtectedRoute roles={["employee"]}>
+          <ProtectedRoute roles={["employee", "dept_admin"]}>
             <MyKpiTrendPage />
           </ProtectedRoute>
         }

@@ -69,6 +69,7 @@ class OverviewOut(BaseModel):
     period: str
     employee_count: int
     submitted_count: int
+    approved_count: int
     pending_count: int
     submission_rate: float
     avg_score: float | None
@@ -125,24 +126,30 @@ def analytics_overview(
     submissions = _period_submissions(db, user.tenant_id, year, period)
 
     # Per-member aggregation: a person with 5 KPIs gets ONE score (the
-    # mean of their submitted effective scores), so they cast exactly one
+    # mean of their approved effective scores), so they cast exactly one
     # bucket vote and one department vote — previously each submission voted
     # separately, overweighting people with more KPIs.
-    employee_scores: dict[int, list[float]] = {}
+    #
+    # Scores use APPROVED submissions only: in-flight (pending) or rejected
+    # self-scores are not official numbers and must not move tenant averages,
+    # buckets, or the trend. Submission compliance (submitted/pending counts)
+    # separately tracks anything past DRAFT.
+    approved_scores: dict[int, list[float]] = {}
     submitted_members: set[int] = set()
     for sub in submissions:
         if sub.employee_id not in members:
             continue
         if _submitted(sub):
             submitted_members.add(sub.employee_id)
-            score = sub.effective_score
-            if score is not None:
-                employee_scores.setdefault(sub.employee_id, []).append(score)
+            if sub.status == KPIStatus.APPROVED:
+                score = sub.effective_score
+                if score is not None:
+                    approved_scores.setdefault(sub.employee_id, []).append(score)
 
     buckets: dict[str, int] = {label: 0 for label in BUCKET_LABELS}
     all_scores: list[float] = []
     dept_scores: dict[int | None, list[float]] = {}
-    for emp_id, scores in employee_scores.items():
+    for emp_id, scores in approved_scores.items():
         mean_score = sum(scores) / len(scores)
         all_scores.append(mean_score)
         buckets[_bucket(mean_score)] += 1
@@ -171,6 +178,7 @@ def analytics_overview(
         period=period,
         employee_count=member_count,
         submitted_count=submitted_count,
+        approved_count=len(approved_scores),
         pending_count=member_count - submitted_count,
         submission_rate=round(submitted_count / member_count * 100, 1) if member_count else 0.0,
         avg_score=round(sum(all_scores) / len(all_scores), 2) if all_scores else None,
@@ -200,18 +208,19 @@ def analytics_trend(
     points: list[TrendPointOut] = []
     for year, period in months:
         submissions = _period_submissions(db, user.tenant_id, year, period)
+        # Trend shows official numbers only — approved submissions.
         scores = [
             s.effective_score
             for s in submissions
-            if _submitted(s) and s.effective_score is not None
+            if s.status == KPIStatus.APPROVED and s.effective_score is not None
         ]
-        submitted_employees = {s.employee_id for s in submissions if _submitted(s)}
+        submitted_members = {s.employee_id for s in submissions if _submitted(s)}
         points.append(
             TrendPointOut(
                 year=year,
                 period=period,
                 avg_score=round(sum(scores) / len(scores), 2) if scores else None,
-                submitted_count=len(submitted_employees),
+                submitted_count=len(submitted_members),
             )
         )
     return points

@@ -75,7 +75,7 @@ export default function Sidebar({ open = false, onClose }) {
             >
               Dashboard
             </NavLink>
-            {user.role === "employee" && (
+            {(user.role === "employee" || user.role === "dept_admin") && (
               <NavLink
                 to="/my-trend"
                 active={pathname === "/my-trend"}

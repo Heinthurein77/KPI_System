@@ -100,7 +100,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     const exceeded = data.submissions.find((submission) => {
       const value = nextScores[submission.id];
       return value !== "" && value !== null && value !== undefined
-        && Number(value) > Number(submission.kpi_template.target);
+        && Number(value) > Number(submission.target_snapshot ?? submission.kpi_template.target);
     });
 
     if (exceeded) {
@@ -121,7 +121,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
         && previousInvalidValue !== ""
         && previousInvalidValue !== null
         && previousInvalidValue !== undefined
-        && Number(previousInvalidValue) <= Number(previousInvalidSubmission.kpi_template.target)
+        && Number(previousInvalidValue) <= Number(previousInvalidSubmission.target_snapshot ?? previousInvalidSubmission.kpi_template.target)
       ) {
         setInvalidScoreId(null);
         if (error === TARGET_EXCEEDED_MESSAGE) setError(null);
@@ -148,7 +148,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
 
   function validateTotalWeight() {
     const totalWeight = data.submissions.reduce(
-      (sum, submission) => sum + Number(submission.kpi_template.weight),
+      (sum, submission) => sum + Number(submission.weight_snapshot ?? submission.kpi_template.weight),
       0
     );
     if (totalWeight > 100) {

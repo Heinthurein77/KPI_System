@@ -12,6 +12,7 @@ from app.tests.factories import (
     auth_headers,
     make_department,
     make_tenant,
+    make_template,
     make_user,
 )
 
@@ -127,8 +128,11 @@ class _FakeRequest:
 
 
 def test_rate_limit_key_uses_x_forwarded_for():
+    # Rightmost entry: the one appended by our own reverse proxy (Caddy),
+    # the only entry an attacker cannot spoof. Leftmost is client-supplied
+    # and must never be trusted.
     req = _FakeRequest(headers={"x-forwarded-for": "203.0.113.7, 10.0.0.1"})
-    assert _client_ip_key(req) == "203.0.113.7"
+    assert _client_ip_key(req) == "10.0.0.1"
 
 
 def test_rate_limit_key_falls_back_to_remote_addr():
@@ -156,3 +160,47 @@ def test_platform_tenant_creation_sets_must_change_password(client, db):
     tenant_admin = db.scalar(select(User).where(User.email == "admin@acme.example.com"))
     assert tenant_admin is not None
     assert tenant_admin.must_change_password is True
+
+
+def test_must_change_password_blocks_api_access(client, db):
+    """Server-side enforcement: a flagged user gets 403 (code
+    password_change_required) on normal endpoints, but can still reach
+    /me and /change-password."""
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    user = make_user(db, tenant, UserRole.EMPLOYEE, name="Flagged", department=dept)
+    user.must_change_password = True
+    make_template(db, tenant)
+    db.commit()
+    headers = auth_headers(user, tenant)
+
+    blocked = client.get("/api/dashboard", headers=headers)
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"]["code"] == "password_change_required"
+
+    me = client.get("/api/auth/me", headers=headers)
+    assert me.status_code == 200
+
+    # After changing the password the flag clears and access is restored.
+    # (Password change bumps token_version, killing the old session — log in
+    # again like the SPA does.)
+    resp = client.post(
+        "/api/auth/change-password",
+        json={"current_password": DEFAULT_PASSWORD, "new_password": "BrandNewPass1!"},
+        headers=headers,
+    )
+    assert resp.status_code == 204
+    db.refresh(user)
+    assert user.must_change_password is False
+    login = client.post(
+        "/api/auth/login",
+        json={"email": user.email, "password": "BrandNewPass1!"},
+        headers={"X-Tenant-Slug": tenant.slug},
+    )
+    assert login.status_code == 200
+    fresh_headers = {
+        "Authorization": f"Bearer {login.json()['access_token']}",
+        "X-Tenant-Slug": tenant.slug,
+    }
+    unblocked = client.get("/api/dashboard", headers=fresh_headers)
+    assert unblocked.status_code == 200

@@ -152,16 +152,20 @@ def get_user_kpi_trend(
     """12-month (Jan-Dec) combined KPI attainment for one employee in a given
     year, for the trend view — missing months come back as null-scored
     points rather than being omitted, so the chart always spans the full year.
-    Dept Admin is scoped to their own department's Employees, same as
-    everywhere else in this file; Tenant Admin sees anyone in the tenant.
-    Employees may view only their own trend."""
+    Dept Admin is scoped to their own department's Employees (plus their own
+    trend via /my-trend), same as everywhere else in this file; Tenant Admin
+    sees anyone in the tenant. Employees may view only their own trend."""
     target = get_tenant_scoped_or_404(db, User, user_id, user.tenant_id, "User not found.")
 
     if user.role == UserRole.EMPLOYEE:
         if target.id != user.id:
             raise HTTPException(403, "You can only view your own KPI trend.")
     elif user.role == UserRole.DEPT_ADMIN:
-        if target.department_id != user.department_id or target.role != UserRole.EMPLOYEE:
+        # Dept admins may view their own trend (via /my-trend) in addition to
+        # their department's employees.
+        if target.id != user.id and (
+            target.department_id != user.department_id or target.role != UserRole.EMPLOYEE
+        ):
             raise HTTPException(403, "Cannot view KPI trend outside your department.")
     elif user.role != UserRole.TENANT_ADMIN:
         raise HTTPException(403, "Not allowed.")
@@ -232,7 +236,9 @@ def get_user_submissions_for_period(
         if target.id != user.id:
             raise HTTPException(403, "You can only view your own KPI data.")
     elif user.role == UserRole.DEPT_ADMIN:
-        if target.department_id != user.department_id or target.role != UserRole.EMPLOYEE:
+        if target.id != user.id and (
+            target.department_id != user.department_id or target.role != UserRole.EMPLOYEE
+        ):
             raise HTTPException(403, "Cannot view KPI data outside your department.")
     elif user.role != UserRole.TENANT_ADMIN:
         raise HTTPException(403, "Not allowed.")

@@ -49,13 +49,16 @@ client.interceptors.response.use(
       // cookie itself is httpOnly, so only the server can clear it — a fresh
       // login replaces it. Skip when the failing request is itself a login
       // attempt or we're already on a login page, so failed logins still
-      // show their error message.
+      // show their error message. Platform admins go to their own login —
+      // org credentials don't work there and vice versa.
       const url = error.config?.url || "";
-      const onLoginPage = /\/login\/?$/.test(window.location.pathname);
+      const pathname = window.location.pathname;
+      const onLoginPage = /\/login\/?$/.test(pathname);
       const isLoginRequest = /\/auth\/login\/?$/.test(url);
+      const isPlatform = pathname.startsWith("/platform") || !localStorage.getItem("tenant_slug");
       if (!onLoginPage && !isLoginRequest) {
         localStorage.removeItem("tenant_slug");
-        window.location.href = "/login";
+        window.location.href = isPlatform ? "/platform/login" : "/login";
       }
     }
     return Promise.reject(error);

@@ -44,6 +44,8 @@ export default function UsersPage() {
   const [departmentId, setDepartmentId] = useState("");
   const [position, setPosition] = useState("");
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [pendingToggle, setPendingToggle] = useState(null);
+  const [toggling, setToggling] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [resetTarget, setResetTarget] = useState(null);
   const [newPassword, setNewPassword] = useState("");
@@ -93,13 +95,19 @@ export default function UsersPage() {
     }
   }
 
-  async function handleToggle(u) {
+  async function confirmToggle() {
+    if (!pendingToggle) return;
+    const u = pendingToggle;
+    setToggling(true);
     try {
       await toggleUserActive(u.id);
       toast.success(u.is_active ? `${u.name}'s account disabled.` : `${u.name}'s account re-enabled.`);
+      setPendingToggle(null);
       load();
     } catch (err) {
       toast.error(getErrorMessage(err));
+    } finally {
+      setToggling(false);
     }
   }
 
@@ -332,7 +340,7 @@ export default function UsersPage() {
                           {(!isDeptAdmin || u.role === "employee") && u.id !== currentUser.id && (
                             <button
                               type="button"
-                              onClick={() => handleToggle(u)}
+                              onClick={() => setPendingToggle(u)}
                               title={u.is_active ? `Disable ${u.name}'s account` : `Re-enable ${u.name}'s account`}
                               className={
                                 u.is_active
@@ -478,6 +486,20 @@ export default function UsersPage() {
         submitting={deleting}
         onConfirm={confirmDelete}
         onCancel={() => setPendingDelete(null)}
+      />
+      <ConfirmDialog
+        open={pendingToggle !== null}
+        title={pendingToggle?.is_active ? `Disable ${pendingToggle?.name}'s account?` : `Re-enable ${pendingToggle?.name}'s account?`}
+        message={
+          pendingToggle?.is_active
+            ? "They will be signed out and unable to log in until re-enabled."
+            : "They will be able to log in again."
+        }
+        danger={pendingToggle?.is_active}
+        confirmLabel={pendingToggle?.is_active ? "Disable" : "Re-enable"}
+        submitting={toggling}
+        onConfirm={confirmToggle}
+        onCancel={() => setPendingToggle(null)}
       />
 
       {resetTarget !== null && (

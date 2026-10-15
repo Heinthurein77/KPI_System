@@ -2,10 +2,11 @@
 logic and is_current_or_future_period.
 
 combined_final_score takes `submissions: List[Any]` and only touches
-`.final_score` and `.kpi_template` (itself only needing `.target`, `.weight`,
-and optionally `.is_lower_better`) -- so plain SimpleNamespace stubs are used
-here instead of real ORM rows/DB fixtures, which is the most direct way to
-exercise this pure function's branches.
+`.final_score`, `.effective_target` and `.effective_weight` (which on real ORM
+rows resolve to the frozen snapshot with fallback to `.kpi_template`) -- so
+plain SimpleNamespace stubs are used here instead of real ORM rows/DB
+fixtures, which is the most direct way to exercise this pure function's
+branches.
 """
 
 from datetime import date
@@ -22,7 +23,14 @@ def _template(target=100.0, weight=1.0, is_lower_better=None):
 
 
 def _submission(final_score, template):
-    return SimpleNamespace(final_score=final_score, kpi_template=template)
+    return SimpleNamespace(
+        final_score=final_score,
+        kpi_template=template,
+        # Mirrors KPISubmission.effective_target/effective_weight: the frozen
+        # snapshot when present, else the live template value.
+        effective_target=template.target,
+        effective_weight=float(template.weight or 0.0),
+    )
 
 
 # ---------------------------------------------------------------------------

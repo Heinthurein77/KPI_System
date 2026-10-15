@@ -70,6 +70,22 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
         # rather than falling through to platform-account semantics.
         raise NotAuthenticated()
 
+    # Forced password change is enforced server-side, not just in the SPA.
+    # A flagged user may only reach the password-change flow (plus session
+    # introspection/logout) until the password is actually changed — otherwise
+    # anyone holding a known initial password (e.g. bulk import's documented
+    # "password") could use the account indefinitely via direct API calls.
+    if user.must_change_password:
+        path = request.url.path.rstrip("/")
+        if not path.endswith(("/change-password", "/me", "/logout")):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "password_change_required",
+                    "message": "You must change your password before continuing.",
+                },
+            )
+
     return user
 
 

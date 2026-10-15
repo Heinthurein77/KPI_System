@@ -140,7 +140,7 @@ export default function AnalyticsPage() {
                 <StatCard
                   label="Avg Score"
                   value={overview.avg_score ?? "—"}
-                  detail={`${overview.submitted_count} submitted`}
+                  detail={`${overview.approved_count ?? 0} approved`}
                 />
                 <StatCard
                   label="Submission Rate"

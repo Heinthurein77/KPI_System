@@ -15,6 +15,8 @@ export default function TenantsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [pendingToggle, setPendingToggle] = useState(null);
+  const [toggling, setToggling] = useState(false);
   const [loadError, setLoadError] = useState(null);
 
   function load() {
@@ -50,14 +52,20 @@ export default function TenantsPage() {
     }
   }
 
-  async function toggle(tenant) {
+  async function confirmToggle() {
+    if (!pendingToggle) return;
+    const tenant = pendingToggle;
     const action = tenant.status === "active" ? suspendTenant : activateTenant;
+    setToggling(true);
     try {
       await action(tenant.id);
       toast.success(tenant.status === "active" ? `"${tenant.name}" suspended.` : `"${tenant.name}" activated.`);
+      setPendingToggle(null);
       load();
     } catch (err) {
       toast.error(getErrorMessage(err));
+    } finally {
+      setToggling(false);
     }
   }
 
@@ -141,7 +149,7 @@ export default function TenantsPage() {
                   <td className="px-6 py-4 text-right space-x-3">
                     <button
                       type="button"
-                      onClick={() => toggle(t)}
+                      onClick={() => setPendingToggle(t)}
                       className="text-xs font-semibold text-brand-700 hover:underline"
                     >
                       {t.status === "active" ? "Suspend" : "Activate"}
@@ -220,6 +228,20 @@ export default function TenantsPage() {
         submitting={deleting}
         onConfirm={confirmDelete}
         onCancel={() => setPendingDelete(null)}
+      />
+      <ConfirmDialog
+        open={pendingToggle !== null}
+        title={pendingToggle?.status === "active" ? `Suspend "${pendingToggle?.name}"?` : `Activate "${pendingToggle?.name}"?`}
+        message={
+          pendingToggle?.status === "active"
+            ? "Every user of this organization will be locked out immediately."
+            : "Users of this organization will be able to log in again."
+        }
+        danger={pendingToggle?.status === "active"}
+        confirmLabel={pendingToggle?.status === "active" ? "Suspend" : "Activate"}
+        submitting={toggling}
+        onConfirm={confirmToggle}
+        onCancel={() => setPendingToggle(null)}
       />
     </AppShell>
   );

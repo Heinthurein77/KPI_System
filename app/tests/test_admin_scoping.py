@@ -214,3 +214,35 @@ def test_user_submissions_allowed_for_own_employee(db, client):
     )
     assert resp.status_code == 200
     assert {s["id"] for s in resp.json()["submissions"]} == {submission.id}
+
+
+def test_kpi_trend_dept_admin_own_trend_success(db, client):
+    """Dept admins can view their own trend (M10) — both endpoints."""
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
+
+    trend = client.get(
+        f"/api/admin/users/{dept_admin.id}/kpi-trend", headers=auth_headers(dept_admin, tenant)
+    )
+    assert trend.status_code == 200
+
+    subs = client.get(
+        f"/api/admin/users/{dept_admin.id}/submissions",
+        params={"year": 2026, "period": "October"},
+        headers=auth_headers(dept_admin, tenant),
+    )
+    assert subs.status_code == 200
+
+
+def test_kpi_trend_dept_admin_other_dept_admin_forbidden(db, client):
+    """Dept admins still cannot view another dept admin's trend."""
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
+    other_da = make_user(db, tenant, UserRole.DEPT_ADMIN, name="Other DA", department=dept)
+
+    resp = client.get(
+        f"/api/admin/users/{other_da.id}/kpi-trend", headers=auth_headers(dept_admin, tenant)
+    )
+    assert resp.status_code == 403

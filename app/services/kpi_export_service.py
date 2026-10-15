@@ -65,7 +65,7 @@ def build_employee_kpi_report(
     _write_summary_cell(sheet, "D3", "E3", "Month", month)
     _write_summary_cell(sheet, "D4", "E4", "Year", year)
 
-    total_weight = sum(float(submission.kpi_template.weight) for submission in submissions)
+    total_weight = sum(float(submission.effective_weight) for submission in submissions)
     final_attainment = combined_score["attainment"] if combined_score else "N/A"
     final_status = combined_score["status"] if combined_score else "Not finalized"
     _write_summary_cell(sheet, "D5", "E5", "Total Weight", total_weight)
@@ -97,8 +97,8 @@ def build_employee_kpi_report(
         actual_score = submission.effective_score
         values = [
             submission.kpi_template.metric_name,
-            float(submission.kpi_template.weight),
-            float(submission.kpi_template.target),
+            float(submission.effective_weight),
+            float(submission.effective_target),
             submission.self_score,
             submission.dept_score,
             submission.final_score,
@@ -191,8 +191,8 @@ def _write_annual_month_sheet(
         for row_number, submission in enumerate(submissions, start=8):
             values = [
                 submission.kpi_template.metric_name,
-                float(submission.kpi_template.weight),
-                float(submission.kpi_template.target),
+                float(submission.effective_weight),
+                float(submission.effective_target),
                 submission.self_score,
                 submission.dept_score,
                 submission.final_score,

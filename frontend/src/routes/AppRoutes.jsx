@@ -5,6 +5,7 @@ import LoginPage from "../pages/LoginPage";
 import DashboardPage from "../pages/DashboardPage";
 import ChangePasswordPage from "../pages/ChangePasswordPage";
 import MyKpiPage from "../pages/MyKpiPage";
+import MyKpiTrendPage from "../pages/MyKpiTrendPage";
 import DepartmentsPage from "../pages/admin/DepartmentsPage";
 import UsersPage from "../pages/admin/UsersPage";
 import UserEditPage from "../pages/admin/UserEditPage";
@@ -45,6 +46,14 @@ export default function AppRoutes() {
         element={
           <ProtectedRoute roles={["dept_admin"]}>
             <MyKpiPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/my-trend"
+        element={
+          <ProtectedRoute roles={["employee"]}>
+            <MyKpiTrendPage />
           </ProtectedRoute>
         }
       />

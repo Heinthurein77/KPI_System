@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
-from app.core.deps import require_dept_admin, require_tenant_admin
+from app.core.deps import get_current_user, require_dept_admin, require_tenant_admin
 from app.core.security import hash_password
 from app.core.tenant import get_tenant_scoped_or_404
 from app.database import get_db
@@ -124,19 +124,24 @@ def get_user_kpi_trend(
     user_id: int,
     year: int | None = None,
     db: Session = Depends(get_db),
-    user: User = Depends(require_dept_admin),
+    user: User = Depends(get_current_user),
 ):
     """12-month (Jan-Dec) combined KPI attainment for one employee in a given
-    year, for the admin trend view — missing months come back as null-scored
+    year, for the trend view — missing months come back as null-scored
     points rather than being omitted, so the chart always spans the full year.
     Dept Admin is scoped to their own department's Employees, same as
-    everywhere else in this file; Tenant Admin sees anyone in the tenant."""
+    everywhere else in this file; Tenant Admin sees anyone in the tenant.
+    Employees may view only their own trend."""
     target = get_tenant_scoped_or_404(db, User, user_id, user.tenant_id, "User not found.")
 
-    if user.role == UserRole.DEPT_ADMIN and (
-        target.department_id != user.department_id or target.role != UserRole.EMPLOYEE
-    ):
-        raise HTTPException(403, "Cannot view KPI trend outside your department.")
+    if user.role == UserRole.EMPLOYEE:
+        if target.id != user.id:
+            raise HTTPException(403, "You can only view your own KPI trend.")
+    elif user.role == UserRole.DEPT_ADMIN:
+        if target.department_id != user.department_id or target.role != UserRole.EMPLOYEE:
+            raise HTTPException(403, "Cannot view KPI trend outside your department.")
+    elif user.role != UserRole.TENANT_ADMIN:
+        raise HTTPException(403, "Not allowed.")
 
     submissions = db.scalars(
         select(KPISubmission)
@@ -192,17 +197,22 @@ def get_user_submissions_for_period(
     year: int,
     period: str,
     db: Session = Depends(get_db),
-    user: User = Depends(require_dept_admin),
+    user: User = Depends(get_current_user),
 ):
     """A single employee's KPI submissions for one specific year/period — backs
-    the "expand this month" detail view on the admin KPI Trend page. Same
-    tenant/department scoping as get_user_kpi_trend."""
+    the "expand this month" detail view on the KPI Trend page. Same
+    tenant/department scoping as get_user_kpi_trend; employees may view only
+    their own."""
     target = get_tenant_scoped_or_404(db, User, user_id, user.tenant_id, "User not found.")
 
-    if user.role == UserRole.DEPT_ADMIN and (
-        target.department_id != user.department_id or target.role != UserRole.EMPLOYEE
-    ):
-        raise HTTPException(403, "Cannot view KPI data outside your department.")
+    if user.role == UserRole.EMPLOYEE:
+        if target.id != user.id:
+            raise HTTPException(403, "You can only view your own KPI data.")
+    elif user.role == UserRole.DEPT_ADMIN:
+        if target.department_id != user.department_id or target.role != UserRole.EMPLOYEE:
+            raise HTTPException(403, "Cannot view KPI data outside your department.")
+    elif user.role != UserRole.TENANT_ADMIN:
+        raise HTTPException(403, "Not allowed.")
 
     submissions = db.scalars(
         select(KPISubmission)

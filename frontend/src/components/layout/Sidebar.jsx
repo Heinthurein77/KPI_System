@@ -75,6 +75,21 @@ export default function Sidebar({ open = false, onClose }) {
             >
               Dashboard
             </NavLink>
+            {user.role === "employee" && (
+              <NavLink
+                to="/my-trend"
+                active={pathname === "/my-trend"}
+                icon={
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    d="M2.25 18 9 11.25l4.306 4.306a11.95 11.95 0 0 1 5.814-5.518l2.74-1.22m0 0-5.94-2.281m5.94 2.28-2.28 5.941"
+                  />
+                }
+              >
+                My Trend
+              </NavLink>
+            )}
             {user.role === "dept_admin" && (
               <NavLink
                 to="/my-kpi"

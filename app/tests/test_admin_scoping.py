@@ -184,3 +184,33 @@ def test_user_submissions_forbidden_for_employee(db, client):
         headers=auth_headers(employee, tenant),
     )
     assert resp.status_code == 403
+
+
+def test_kpi_trend_allowed_for_own_employee(db, client):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant, department=dept)
+    make_submission(db, tenant, employee, template, final_score=90.0)
+
+    resp = client.get(
+        f"/api/admin/users/{employee.id}/kpi-trend", headers=auth_headers(employee, tenant)
+    )
+    assert resp.status_code == 200
+    assert resp.json()["employee"]["id"] == employee.id
+
+
+def test_user_submissions_allowed_for_own_employee(db, client):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant, department=dept)
+    submission = make_submission(db, tenant, employee, template, period="January")
+
+    resp = client.get(
+        f"/api/admin/users/{employee.id}/submissions",
+        params={"year": submission.year, "period": "January"},
+        headers=auth_headers(employee, tenant),
+    )
+    assert resp.status_code == 200
+    assert {s["id"] for s in resp.json()["submissions"]} == {submission.id}

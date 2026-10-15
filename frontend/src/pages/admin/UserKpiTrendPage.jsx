@@ -6,6 +6,7 @@ import KpiCard from "../../components/ui/KpiCard";
 import CombinedScoreCard from "../../components/ui/CombinedScoreCard";
 import EmployeeCombobox from "../../components/ui/EmployeeCombobox";
 import { STYLES as STATUS_STYLES, LABELS as STATUS_LABELS } from "../../components/ui/statusMeta";
+import { useAuth } from "../../context/AuthContext";
 import { getUserKpiTrend, getUserSubmissionsForPeriod, listUsers } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
 
@@ -64,6 +65,8 @@ const ICON = {
 export default function UserKpiTrendPage() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user: currentUser } = useAuth();
+  const isDeptAdmin = currentUser.role === "dept_admin";
 
   const [roster, setRoster] = useState(null);
   const [year, setYear] = useState(undefined);
@@ -81,11 +84,11 @@ export default function UserKpiTrendPage() {
   useEffect(() => {
     listUsers()
       .then((d) => {
-        // KPI trends are for the people being reviewed — admins are approvers,
-        // not KPI owners, so they don't appear in the roster. (Dept admins
-        // were already employee-only; this extends it to tenant admins.)
+        // Tenant admins review employees AND dept admins, so both appear;
+        // tenant admins themselves are not KPI owners and stay hidden.
+        // Dept admins see employees only.
         const selectable = d.users
-          .filter((u) => u.role === "employee")
+          .filter((u) => u.role !== "tenant_admin" && (!isDeptAdmin || u.role === "employee"))
           .sort((a, b) => a.name.localeCompare(b.name));
         setRoster(selectable);
       })

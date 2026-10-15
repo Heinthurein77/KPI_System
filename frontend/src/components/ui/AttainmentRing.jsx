@@ -1,7 +1,8 @@
 /**
  * Circular attainment indicator for a KPI card. value is 0-120 (the backend
  * caps attainment at 120); null means no score yet. Colors follow the app's
- * score tiers: emerald at/over target, amber above 50, red below.
+ * score tiers (dashboard.py / ScoreBadge): >75 Performance (emerald),
+ * >50 Normal (amber), otherwise Need to improve (red).
  */
 export default function AttainmentRing({ value, label, size = 60 }) {
   const pct = value == null ? 0 : Math.min(120, Math.max(0, value));
@@ -9,10 +10,11 @@ export default function AttainmentRing({ value, label, size = 60 }) {
   const c = 2 * Math.PI * r;
   const filled = (Math.min(pct, 100) / 100) * c;
 
+  const tier = value == null ? null : pct > 75 ? "good" : pct > 50 ? "warning" : "critical";
   const ringColor =
-    value == null ? "text-slate-200" : pct >= 100 ? "text-emerald-500" : pct > 50 ? "text-amber-500" : "text-red-400";
+    tier === "good" ? "text-emerald-500" : tier === "warning" ? "text-amber-500" : tier === "critical" ? "text-red-400" : "text-slate-200";
   const textColor =
-    value == null ? "text-slate-300" : pct >= 100 ? "text-emerald-600" : pct > 50 ? "text-amber-600" : "text-red-500";
+    tier === "good" ? "text-emerald-600" : tier === "warning" ? "text-amber-600" : tier === "critical" ? "text-red-500" : "text-slate-300";
 
   return (
     <div className="flex shrink-0 flex-col items-center gap-1" title={label ? `Attainment (${label} score)` : "Attainment"}>

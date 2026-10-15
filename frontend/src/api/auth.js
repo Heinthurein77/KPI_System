@@ -14,6 +14,10 @@ export function me() {
   return client.get("/api/auth/me").then((r) => r.data);
 }
 
+export function platformMe() {
+  return client.get("/api/platform/auth/me").then((r) => r.data);
+}
+
 export function logout() {
   return client.post("/api/auth/logout").then((r) => r.data);
 }

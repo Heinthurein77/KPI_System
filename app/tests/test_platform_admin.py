@@ -46,3 +46,35 @@ def test_platform_login_rejects_tenant_scoped_user(db, client):
     )
 
     assert resp.status_code == 401
+
+
+def test_platform_me_returns_super_admin_without_tenant_slug(db, client):
+    """Regression: platform admins were logged out on every page refresh
+    because the tenant-scoped /api/auth/me always 401s for tenant-less
+    accounts. /api/platform/auth/me is the exempt equivalent."""
+    admin = make_user(db, None, UserRole.SUPER_ADMIN, email="root@platform.example.com")
+    # TestClient persists cookies across requests like a browser.
+    r = client.post("/api/platform/auth/login", json={"email": admin.email, "password": DEFAULT_PASSWORD})
+    assert r.status_code == 200
+    # No X-Tenant-Slug header: exactly what a platform session sends.
+    r = client.get("/api/platform/auth/me")
+    assert r.status_code == 200
+    assert r.json()["role"] == "super_admin"
+    assert r.json()["tenant_id"] is None
+
+
+def test_platform_me_rejects_tenant_user(db, client):
+    tenant = make_tenant(db)
+    user = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Boss")
+    r = client.post(
+        "/api/auth/login",
+        json={"email": user.email, "password": DEFAULT_PASSWORD},
+        headers={"X-Tenant-Slug": tenant.slug},
+    )
+    assert r.status_code == 200
+    r = client.get("/api/platform/auth/me", headers={"X-Tenant-Slug": tenant.slug})
+    assert r.status_code in (401, 403)
+
+
+def test_platform_me_unauthenticated_401(db, client):
+    assert client.get("/api/platform/auth/me").status_code == 401

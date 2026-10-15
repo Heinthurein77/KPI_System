@@ -11,6 +11,7 @@ from app.models.tenant import Tenant, TenantStatus
 from app.models.user import User, UserRole
 from app.schemas.auth import LoginRequest, LoginResponse
 from app.schemas.platform import CreateTenantRequest, TenantOut
+from app.schemas.user import UserOut
 
 router = APIRouter(prefix="/api/platform", tags=["platform"])
 
@@ -35,6 +36,14 @@ def platform_login(request: Request, response: Response, payload: LoginRequest, 
     token = create_session_token(user.id, tenant_id=None, token_version=user.token_version or 0)
     set_session_cookie(response, token, secure=_request_is_secure(request))
     return LoginResponse(access_token=token, user=user)
+
+
+@router.get("/auth/me", response_model=UserOut)
+def platform_me(user: User = Depends(require_platform_super_admin)):
+    """Session check for platform super admins. The tenant-scoped
+    /api/auth/me always 401s for tenant-less accounts (by design), so the
+    SPA calls this endpoint instead when no tenant slug is stored."""
+    return user
 
 
 @router.get("/tenants", response_model=list[TenantOut])

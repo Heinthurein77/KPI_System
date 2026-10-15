@@ -10,9 +10,11 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     // Session lives in the httpOnly cookie now; if it's missing/invalid the
-    // server 401s and we land logged-out.
-    authApi
-      .me()
+    // server 401s and we land logged-out. Platform super admins have no
+    // tenant slug and the tenant-scoped /api/auth/me always 401s for them
+    // (by design), so they use the platform endpoint instead.
+    const meCall = localStorage.getItem("tenant_slug") ? authApi.me() : authApi.platformMe();
+    meCall
       .then(setUser)
       .catch(() => {
         localStorage.removeItem("tenant_slug");
@@ -56,7 +58,8 @@ export function AuthProvider({ children }) {
   // clears the must_change_password flag).
   async function refreshUser() {
     try {
-      const me = await authApi.me();
+      const meCall = localStorage.getItem("tenant_slug") ? authApi.me() : authApi.platformMe();
+      const me = await meCall;
       setUser(me);
       return me;
     } catch {

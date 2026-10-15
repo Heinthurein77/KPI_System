@@ -21,7 +21,7 @@ from app.services import bulk_import_service
 router = APIRouter(prefix="/api/admin/import", tags=["import"])
 
 XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-MAX_FILE_BYTES = 5 * 1024 * 1024
+MAX_FILE_BYTES = 10 * 1024 * 1024
 
 
 def _require_importer(user: User) -> User:
@@ -69,7 +69,7 @@ async def upload_import(
     if not contents:
         raise HTTPException(400, "The uploaded file is empty.")
     if len(contents) > MAX_FILE_BYTES:
-        raise HTTPException(400, "File too large (max 5 MB).")
+        raise HTTPException(400, "File too large (max 10 MB).")
 
     parsed = bulk_import_service.parse_import_file(contents, db, user.tenant_id)
 

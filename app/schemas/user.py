@@ -21,6 +21,7 @@ class UserOut(BaseModel):
     role: UserRole
     is_active: bool
     position: str | None = None
+    must_change_password: bool = False
     tenant_id: int | None
     department_id: int | None
     department: DepartmentOut | None = None

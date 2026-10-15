@@ -55,4 +55,5 @@ def change_password(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "New password must be at least 8 characters.")
 
     user.password_hash = hash_password(payload.new_password)
+    user.must_change_password = False
     db.commit()

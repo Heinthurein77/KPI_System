@@ -62,9 +62,9 @@ function DeptAdminDashboard({ initialParams }) {
       toast.error(getErrorMessage(err));
     }
   }
-  async function handleReject(id) {
+  async function handleReject(id, remarks) {
     try {
-      await rejectSubmission(id, { year: data.active_year, period: data.active_period });
+      await rejectSubmission(id, { year: data.active_year, period: data.active_period, remarks: remarks || undefined });
       toast.success("Submission rejected.");
       reload();
     } catch (err) {
@@ -143,9 +143,9 @@ function TenantAdminDashboard({ user, initialParams }) {
       toast.error(getErrorMessage(err));
     }
   }
-  async function handleReject(id) {
+  async function handleReject(id, remarks) {
     try {
-      await rejectSubmission(id, { year: data.active_year, period: data.active_period });
+      await rejectSubmission(id, { year: data.active_year, period: data.active_period, remarks: remarks || undefined });
       toast.success("Submission rejected.");
       reload();
     } catch (err) {

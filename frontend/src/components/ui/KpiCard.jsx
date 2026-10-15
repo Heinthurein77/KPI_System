@@ -1,7 +1,7 @@
 import { useState } from "react";
 import StatusBadge from "./StatusBadge";
 import ScoreBadge from "./ScoreBadge";
-import ReviewNotes from "./ReviewNotes";
+import ConfirmDialog from "./ConfirmDialog";
 import { useToast } from "../../context/ToastContext";
 
 const TARGET_EXCEEDED_MESSAGE = "Target ထက်ကျော်နေပါ၍ပြန်ထည့်ရန်";
@@ -60,12 +60,41 @@ export default function KpiCard({
   const [overrideRemarks, setOverrideRemarks] = useState("");
   const [overrideOpen, setOverrideOpen] = useState(false);
   const [invalidScoreField, setInvalidScoreField] = useState(null);
+  // Pending destructive/confirmatory action: { kind: "deptApprove" | "finalApprove" | "reject" }
+  const [confirm, setConfirm] = useState(null);
 
   const canReject = onReject && (s.status === "pending_dept_approval" || s.status === "pending_final_approval");
   const author = remarkAuthor(s);
   // A Dept Admin's own submission skips the dept-review display: the middle
   // DEPT column is redundant for them (self approval), so show only SELF/FINAL.
   const hideDeptColumn = s.employee?.role === "dept_admin";
+
+  function handleConfirmAction() {
+    if (!confirm) return;
+    if (confirm.kind === "deptApprove") {
+      onDeptApprove(s.id, Number(deptScore), deptRemarks || undefined);
+    } else if (confirm.kind === "finalApprove") {
+      onFinalApprove(s.id, Number(finalScore));
+    } else if (confirm.kind === "reject") {
+      // The remarks field doubles as the rejection reason.
+      onReject(s.id, deptRemarks || undefined);
+    }
+    setConfirm(null);
+  }
+
+  function confirmTitle() {
+    if (confirm?.kind === "reject") return "Reject this submission?";
+    return "Approve this submission?";
+  }
+
+  function confirmMessage() {
+    const metric = s.kpi_template.metric_name;
+    if (confirm?.kind === "reject") {
+      const reason = deptRemarks?.trim();
+      return `The employee will need to revise and resubmit "${metric}".${reason ? `\n\nReason: ${reason}` : ""}`;
+    }
+    return `Approve "${metric}" and move it to the next stage?`;
+  }
 
   function handleScoreChange(setScore, field, value) {
     setScore(value);
@@ -151,8 +180,6 @@ export default function KpiCard({
         </div>
       )}
 
-      <ReviewNotes submissionId={s.id} ownerId={s.employee?.id} />
-
       {onDeptApprove && s.status === "pending_dept_approval" && (
         <div className="pt-1 border-t border-slate-100 space-y-2 mt-auto">
           <div className="flex items-center gap-2 pt-2">
@@ -187,7 +214,7 @@ export default function KpiCard({
             <button
               type="button"
               disabled={!isValidScore(deptScore, s.kpi_template.target)}
-              onClick={() => onDeptApprove(s.id, Number(deptScore), deptRemarks || undefined)}
+              onClick={() => setConfirm({ kind: "deptApprove" })}
               className="flex-1 inline-flex items-center justify-center gap-1 rounded-md bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-brand-700 transition disabled:opacity-60"
             >
               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.4">
@@ -198,8 +225,9 @@ export default function KpiCard({
             {onReject && (
               <button
                 type="button"
-                onClick={() => onReject(s.id)}
+                onClick={() => setConfirm({ kind: "reject" })}
                 title="Reject"
+                aria-label="Reject submission"
                 className="rounded-md border border-red-200 px-2.5 py-1.5 text-red-600 hover:bg-red-50 transition"
               >
                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.4">
@@ -228,7 +256,7 @@ export default function KpiCard({
               <button
                 type="button"
                 disabled={!isValidScore(finalScore, s.kpi_template.target)}
-                onClick={() => onFinalApprove(s.id, Number(finalScore))}
+                onClick={() => setConfirm({ kind: "finalApprove" })}
                 className="w-full inline-flex items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 transition whitespace-nowrap disabled:opacity-60"
               >
                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.4">
@@ -292,7 +320,7 @@ export default function KpiCard({
           {canReject && (
             <button
               type="button"
-              onClick={() => onReject(s.id)}
+              onClick={() => setConfirm({ kind: "reject" })}
               className="text-xs font-medium text-red-600 hover:text-red-700 transition"
             >
               Reject
@@ -300,6 +328,15 @@ export default function KpiCard({
           )}
         </div>
       )}
+      <ConfirmDialog
+        open={!!confirm}
+        title={confirmTitle()}
+        message={confirmMessage()}
+        confirmLabel={confirm?.kind === "reject" ? "Reject" : "Approve"}
+        danger={confirm?.kind === "reject"}
+        onConfirm={handleConfirmAction}
+        onCancel={() => setConfirm(null)}
+      />
     </div>
   );
 }

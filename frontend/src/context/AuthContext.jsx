@@ -53,8 +53,20 @@ export function AuthProvider({ children }) {
     setUser(null);
   }
 
+  // Refresh the user object from the server (e.g. after a password change
+  // clears the must_change_password flag).
+  async function refreshUser() {
+    try {
+      const me = await authApi.me();
+      setUser(me);
+      return me;
+    } catch {
+      return null;
+    }
+  }
+
   return (
-    <AuthContext.Provider value={{ user, loading, login, platformLogin, logout }}>
+    <AuthContext.Provider value={{ user, loading, login, platformLogin, logout, refreshUser }}>
       {children}
     </AuthContext.Provider>
   );

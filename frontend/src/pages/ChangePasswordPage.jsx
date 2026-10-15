@@ -1,9 +1,14 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import AppShell from "../components/layout/AppShell";
 import { changePassword } from "../api/auth";
 import { getErrorMessage } from "../api/errors";
+import { useAuth } from "../context/AuthContext";
 
 export default function ChangePasswordPage() {
+  const { user, refreshUser } = useAuth();
+  const navigate = useNavigate();
+  const mustChange = !!user?.must_change_password;
   const [currentPassword, setCurrentPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -28,10 +33,16 @@ export default function ChangePasswordPage() {
     setSubmitting(true);
     try {
       await changePassword(currentPassword, newPassword);
+      await refreshUser();
       setSuccess(true);
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
+      if (mustChange) {
+        // Forced change complete — go to the dashboard now that the
+        // ProtectedRoute gate will let this user through.
+        navigate("/dashboard", { replace: true });
+      }
     } catch (err) {
       setError(getErrorMessage(err));
     } finally {
@@ -42,6 +53,11 @@ export default function ChangePasswordPage() {
   return (
     <AppShell title="Change Password">
       <div className="max-w-md">
+        {mustChange && (
+          <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 text-sm text-amber-800">
+            Please set a new password before continuing. This is required on your first login.
+          </div>
+        )}
         {error && (
           <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
         )}

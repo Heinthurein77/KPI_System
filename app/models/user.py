@@ -34,6 +34,7 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), nullable=False, default=UserRole.EMPLOYEE)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     email_notifications: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     position: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     tenant_id: Mapped[int | None] = mapped_column(

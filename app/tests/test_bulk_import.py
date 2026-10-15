@@ -271,3 +271,29 @@ def test_execute_sends_welcome_emails(db, dept_admin):
     for c in mock_welcome.call_args_list:
         assert c.args[2] == "password"
         assert c.kwargs["org_name"] == "Acme"
+
+
+def test_upload_rejects_file_over_10mb(client, db, dept_admin):
+    tenant, _, admin = dept_admin
+    oversized = b"\x00" * (10 * 1024 * 1024 + 1)
+    r = client.post(
+        "/api/admin/import/upload",
+        params={"dry_run": True},
+        files={"file": ("import.xlsx", oversized, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=auth_headers(admin, tenant),
+    )
+    assert r.status_code == 400
+    assert "10 MB" in r.json()["detail"]
+
+
+def test_upload_accepts_file_just_under_10mb(client, db, dept_admin):
+    # The size gate runs before parsing, so a valid small workbook proves the
+    # gate lets files under the cap through (parsing itself is covered above).
+    tenant, _, admin = dept_admin
+    r = client.post(
+        "/api/admin/import/upload",
+        params={"dry_run": True},
+        files={"file": ("import.xlsx", _valid_contents(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=auth_headers(admin, tenant),
+    )
+    assert r.status_code == 200

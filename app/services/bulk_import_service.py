@@ -263,6 +263,7 @@ def execute_import(db: Session, dept_admin: User, parsed: ParsedImport) -> Impor
             department_id=dept_admin.department_id,
             position=imp_user.position,
             is_active=True,
+            must_change_password=True,
         )
         db.add(user)
         created_users[imp_user.email] = user

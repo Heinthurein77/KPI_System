@@ -356,6 +356,7 @@ def create_user(
         role=payload.role,
         position=payload.position.strip() if payload.position else None,
         department_id=resolved_department_id if payload.role != UserRole.TENANT_ADMIN else None,
+        must_change_password=True,
     )
     db.add(target)
     db.commit()
@@ -395,6 +396,7 @@ def reset_user_password(
     target = get_tenant_scoped_or_404(db, User, user_id, user.tenant_id, "User not found.")
 
     target.password_hash = hash_password(payload.password)
+    target.must_change_password = True
     audit_service.log(
         db, user, "user_password_reset", "user", target.id, target.name,
         f"Password reset by {user.name} ({user.role.value}).",
@@ -435,6 +437,7 @@ def edit_user(
         raise HTTPException(400, "Department Admins must belong to a department.")
     if payload.password:
         target.password_hash = hash_password(payload.password)
+        target.must_change_password = True
     db.commit()
     return target
 

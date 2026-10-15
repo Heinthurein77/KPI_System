@@ -74,10 +74,11 @@ def test_dept_admin_personal_kpi_visible_in_department_filter(db, client):
     assert resp.status_code == 200
     assert any(s["employee"]["name"] == "DA" for s in resp.json()["submissions"])
 
-    # Dept admin's own review queue includes their submitted KPI (self-approval).
+    # Dept admin's own review queue excludes their own KPI — it lives only in
+    # My KPI and they cannot approve it themselves.
     resp = client.get(
         "/api/dashboard", params={"year": 2026, "period": "October"},
         headers=auth_headers(dept_admin, tenant),
     )
     assert resp.status_code == 200
-    assert any(s["employee"]["name"] == "DA" for s in resp.json()["submissions"])
+    assert not any(s["employee"]["name"] == "DA" for s in resp.json()["submissions"])

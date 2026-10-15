@@ -147,10 +147,9 @@ def get_submission_scoped(db: Session, user: User, submission_id: int) -> KPISub
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your submission.")
     if user.role == UserRole.DEPT_ADMIN and submission.department_id != user.department_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Submission outside your department.")
-    # A Dept Admin may review their own submission at the department stage (self
-    # approval) — it still needs the Tenant Admin's final approval afterwards.
-    # Everyone else remains blocked from reviewing their own KPI.
-    if submission.employee_id == user.id and user.role != UserRole.DEPT_ADMIN:
+    # Nobody may review their own KPI submission — a Dept Admin's own KPI skips
+    # department review entirely and goes straight to the Tenant Admin.
+    if submission.employee_id == user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot review your own KPI submission.")
 
     return submission
@@ -351,18 +350,31 @@ def submit_for_dept_approval(db: Session, employee: User, year: int, period: str
     if missing:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Please score every metric before submitting.")
 
-    # Every submission — including a Dept Admin's own — goes through department
-    # review first. A Dept Admin self-approves their own KPI at this stage
-    # (self approval), which forwards it to the Tenant Admin for final approval.
+    # A Dept Admin cannot review their own KPI, so their own submissions skip
+    # department review and go straight to the Tenant Admin for final approval.
+    # Everyone else goes through department review first.
+    skip_dept_review = employee.role == UserRole.DEPT_ADMIN
+    next_status = KPIStatus.PENDING_FINAL_APPROVAL if skip_dept_review else KPIStatus.PENDING_DEPT_APPROVAL
     for submission in submittable:
-        submission.status = KPIStatus.PENDING_DEPT_APPROVAL
+        submission.status = next_status
         submission.submitted_at = _now()
         audit_service.log(
             db, employee, "kpi_submitted", "kpi_submission", submission.id, _entity_label(submission),
-            f"Submitted (self score {fmt_score(submission.self_score)}) for department approval.",
+            f"Submitted (self score {fmt_score(submission.self_score)}) for "
+            f"{'final' if skip_dept_review else 'department'} approval.",
             department_id=submission.department_id,
         )
-    if employee.department_id is not None:
+    if skip_dept_review:
+        emailed = notification_service.notify_tenant_admins(
+            db,
+            tenant_id=employee.tenant_id,
+            exclude_user_id=employee.id,
+            type="kpi_submitted",
+            title=f"{employee.name} submitted KPI for {period} {year}",
+            message=f"{employee.name} submitted their {period} {year} KPI for final approval.",
+            link=f"/dashboard?year={year}&period={period}",
+        )
+    elif employee.department_id is not None:
         emailed = notification_service.notify_dept_admins(
             db,
             tenant_id=employee.tenant_id,
@@ -428,6 +440,8 @@ def dept_approve(
     """Dept Admin approves and forwards to the Super Admin for final review."""
     if submission.status != KPIStatus.PENDING_DEPT_APPROVAL:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not awaiting department review.")
+    if reviewer.id == submission.employee_id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot approve your own KPI.")
     _validate_score_within_target(submission, dept_score, "Dept score")
     old_score = submission.dept_score
     submission.dept_score = dept_score if dept_score is not None else (
@@ -438,25 +452,22 @@ def dept_approve(
     submission.status = KPIStatus.PENDING_FINAL_APPROVAL
     submission.dept_reviewed_by_id = reviewer.id
     submission.dept_reviewed_at = _now()
-    is_self_approval = reviewer.id == submission.employee_id
     audit_service.log(
         db, reviewer, "kpi_dept_approved", "kpi_submission", submission.id, _entity_label(submission),
-        f"{'Self-approved' if is_self_approval else 'Dept approved'} (score {fmt_score(old_score)} → {fmt_score(submission.dept_score)}), "
+        f"Dept approved (score {fmt_score(old_score)} → {fmt_score(submission.dept_score)}), "
         "forwarded for final approval.",
         department_id=submission.department_id,
     )
     dashboard_link = f"/dashboard?year={submission.year}&period={submission.month_or_quarter}"
-    emailed = []
-    if not is_self_approval:
-        emailed += notification_service.notify_user(
-            db,
-            tenant_id=submission.tenant_id,
-            user_id=submission.employee_id,
-            type="kpi_dept_approved",
-            title=f"Your {submission.month_or_quarter} {submission.year} KPI was approved",
-            message=f"{reviewer.name} approved your KPI; it is now awaiting final approval.",
-            link=dashboard_link,
-        )
+    emailed = notification_service.notify_user(
+        db,
+        tenant_id=submission.tenant_id,
+        user_id=submission.employee_id,
+        type="kpi_dept_approved",
+        title=f"Your {submission.month_or_quarter} {submission.year} KPI was approved",
+        message=f"{reviewer.name} approved your KPI; it is now awaiting final approval.",
+        link=dashboard_link,
+    )
     emailed += notification_service.notify_tenant_admins(
         db,
         tenant_id=submission.tenant_id,

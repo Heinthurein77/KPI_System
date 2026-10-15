@@ -72,22 +72,22 @@ def test_dept_approve_notifies_employee_and_tenant_admins(db):
     assert "final approval" in admin_notes[0].title
 
 
-def test_self_approve_does_not_notify_self_but_notifies_tenant_admins(db):
+def test_dept_admin_submit_notifies_tenant_admins_for_final_approval(db):
     tenant = make_tenant(db)
     dept = make_department(db, tenant)
     dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, name="Dept Admin", department=dept)
     tenant_admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Tenant Admin")
     template = make_template(db, tenant, employee=dept_admin, locked_year=2026, locked_period="September")
-    submission = make_submission(db, tenant, dept_admin, template, period="September", self_score=90.0)
+    make_submission(db, tenant, dept_admin, template, period="September", self_score=90.0)
+
     kpi_service.submit_for_dept_approval(db, dept_admin, 2026, "September")
 
-    kpi_service.dept_approve(db, dept_admin, submission, None, None)
-
-    # No "your KPI was approved" noise for the self-approver's own action...
-    assert [n for n in _notifications_for(db, dept_admin) if n.type == "kpi_dept_approved"] == []
+    # The submitter isn't notified about their own submit...
+    assert [n for n in _notifications_for(db, dept_admin) if n.type == "kpi_submitted"] == []
     # ...but tenant admins learn it needs final approval.
-    admin_notes = [n for n in _notifications_for(db, tenant_admin) if n.type == "kpi_dept_approved"]
+    admin_notes = [n for n in _notifications_for(db, tenant_admin) if n.type == "kpi_submitted"]
     assert len(admin_notes) == 1
+    assert "final approval" in admin_notes[0].message
 
 
 def test_reject_notifies_employee_with_remarks(db):

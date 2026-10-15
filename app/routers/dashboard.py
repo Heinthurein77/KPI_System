@@ -236,9 +236,11 @@ def dashboard(
         query = query.where(KPISubmission.status == status_filter)
     if resolved_department_id and user.role == UserRole.TENANT_ADMIN:
         query = query.where(KPISubmission.department_id == resolved_department_id)
-    # NOTE: a Dept Admin's own submissions are intentionally INCLUDED here.
-    # They go through pending_dept_approval and the Dept Admin self-approves
-    # them in this review queue before the Tenant Admin's final approval.
+    if user.role == UserRole.DEPT_ADMIN:
+        # A Dept Admin's own KPI isn't reviewed here — see /api/my-kpi — so keep
+        # it off their team list. They cannot approve their own KPI; it skips
+        # department review and goes straight to the Tenant Admin.
+        query = query.where(KPISubmission.employee_id != user.id)
 
     submissions = db.scalars(query).unique().all()
     submissions.sort(key=lambda s: (s.employee.name, s.kpi_template.metric_name))

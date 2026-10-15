@@ -1,8 +1,9 @@
 """HTTP-level integration test for a Dept Admin's own self-assessment via
-GET /api/my-kpi, and the two-step approval rule for it:
-a Dept Admin's own submission goes to pending_dept_approval on submit,
-the Dept Admin self-approves it (dept approval), and only then does the
-Tenant Admin give final approval.
+GET /api/my-kpi, and the no-self-approval rule for it:
+a Dept Admin's own submission goes straight to pending_final_approval on
+submit (it skips department review — nobody may approve their own KPI),
+it never appears in the Dept Admin's own review queue, and only the
+Tenant Admin gives final approval.
 """
 
 from app.models.user import UserRole
@@ -10,7 +11,7 @@ from app.routers.dashboard import current_month_period
 from app.tests.factories import auth_headers, make_department, make_tenant, make_template, make_user
 
 
-def test_dept_admin_self_assessment_two_step_approval(db, client):
+def test_dept_admin_self_assessment_skips_dept_review(db, client):
     tenant = make_tenant(db)
     dept = make_department(db, tenant)
     dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, name="Dept Admin", department=dept)
@@ -50,7 +51,7 @@ def test_dept_admin_self_assessment_two_step_approval(db, client):
     assert resp.status_code == 200
     assert resp.json()[0]["self_score"] == 45.0
 
-    # Step 1: POST /api/kpi/employee/submit -> pending_dept_approval (no skip).
+    # Submit -> straight to pending_final_approval (department review is skipped).
     resp = client.post(
         "/api/kpi/employee/submit",
         json={"year": year, "period": period, "scores": {}},
@@ -58,19 +59,28 @@ def test_dept_admin_self_assessment_two_step_approval(db, client):
     )
     assert resp.status_code == 200
     submitted = resp.json()
-    assert submitted[0]["status"] == "pending_dept_approval"
+    assert submitted[0]["status"] == "pending_final_approval"
 
-    # Step 2: the Dept Admin self-approves their own submission at the dept stage.
+    # The Dept Admin's own submission never appears in their review queue.
+    resp = client.get(
+        "/api/dashboard",
+        params={"year": year, "period": period},
+        headers=auth_headers(dept_admin, tenant),
+    )
+    assert resp.status_code == 200
+    ids = {s["id"] for s in resp.json()["submissions"]}
+    assert submission_id not in ids
+
+    # The Dept Admin cannot approve their own KPI — 403, no state change.
     resp = client.post(
         f"/api/kpi/{submission_id}/dept-approve",
         json={"year": year, "period": period, "dept_score": 45.0, "remarks": None},
         headers=auth_headers(dept_admin, tenant),
     )
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "pending_final_approval"
-    assert resp.json()["dept_reviewer"]["id"] == dept_admin.id
+    assert resp.status_code == 403
+    assert resp.json()["detail"] == "You cannot review your own KPI submission."
 
-    # Step 3: the Tenant Admin gives final approval.
+    # The Tenant Admin gives final approval.
     resp = client.post(
         f"/api/kpi/{submission_id}/final-approve",
         json={"year": year, "period": period, "final_score": 45.0, "remarks": None},
@@ -78,4 +88,3 @@ def test_dept_admin_self_assessment_two_step_approval(db, client):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "approved"
-    assert resp.json()["final_reviewer"]["id"] == tenant_admin.id

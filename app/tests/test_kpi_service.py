@@ -261,7 +261,7 @@ def test_submit_for_dept_approval_employee_goes_to_pending_dept_approval(db):
     assert submission.submitted_at is not None
 
 
-def test_submit_for_dept_approval_dept_admin_goes_to_pending_dept_approval(db):
+def test_submit_for_dept_approval_dept_admin_skips_to_pending_final_approval(db):
     tenant = make_tenant(db)
     dept = make_department(db, tenant)
     dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
@@ -271,7 +271,7 @@ def test_submit_for_dept_approval_dept_admin_goes_to_pending_dept_approval(db):
     kpi_service.submit_for_dept_approval(db, dept_admin, 2026, "September")
 
     db.refresh(submission)
-    assert submission.status == KPIStatus.PENDING_DEPT_APPROVAL
+    assert submission.status == KPIStatus.PENDING_FINAL_APPROVAL
 
 
 def test_submit_for_dept_approval_does_not_regress_approved(db):
@@ -553,19 +553,22 @@ def test_get_submission_scoped_dept_admin_outside_department_forbidden(db):
     assert exc_info.value.status_code == 403
 
 
-def test_get_submission_scoped_self_review_allowed_for_dept_admin(db):
+def test_get_submission_scoped_self_review_blocked_for_dept_admin(db):
     tenant = make_tenant(db)
     dept = make_department(db, tenant)
     dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
     template = make_template(db, tenant, employee=dept_admin, locked_year=2026, locked_period="November")
     # Own submission: department matches the Dept Admin's own department.
-    # Dept Admins may self-approve their own KPI at the department stage.
+    # Nobody may review their own KPI — not even a Dept Admin.
     submission = make_submission(
         db, tenant, dept_admin, template, period="November", department=dept,
     )
 
-    scoped = kpi_service.get_submission_scoped(db, dept_admin, submission.id)
-    assert scoped.id == submission.id
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.get_submission_scoped(db, dept_admin, submission.id)
+
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == "You cannot review your own KPI submission."
 
 
 def test_get_submission_scoped_self_review_blocked_for_tenant_admin(db):

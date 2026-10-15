@@ -25,8 +25,9 @@ export default function UserEditPage() {
   const [position, setPosition] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
+  const [loadError, setLoadError] = useState(null);
 
-  useEffect(() => {
+  function load() {
     Promise.all([getUser(id), listDepartments()])
       .then(([u, depts]) => {
         setTarget(u);
@@ -36,8 +37,17 @@ export default function UserEditPage() {
         setRole(u.role);
         setDepartmentId(u.department_id ?? "");
         setPosition(u.position ?? "");
+        setLoadError(null);
       })
-      .catch((err) => toast.error(getErrorMessage(err)));
+      .catch((err) => {
+        const message = getErrorMessage(err);
+        setLoadError(message);
+        toast.error(message);
+      });
+  }
+
+  useEffect(() => {
+    load();
     // `toast` is a plain object re-created every render (not memoized by
     // ToastContext), so listing it here would refetch on every render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -62,7 +72,27 @@ export default function UserEditPage() {
     }
   }
 
-  if (!target) return <AppShell title="Edit User"><PageLoading /></AppShell>;
+  if (!target) {
+    return (
+      <AppShell title="Edit User">
+        {loadError ? (
+          <div className="rounded-2xl bg-white shadow-sm border border-slate-200 px-8 py-10 max-w-md w-full mx-auto text-center">
+            <p className="text-sm font-semibold text-red-600">Couldn't load data</p>
+            <p className="mt-2 text-sm text-slate-500">{loadError}</p>
+            <button
+              type="button"
+              onClick={load}
+              className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
+            >
+              Try again
+            </button>
+          </div>
+        ) : (
+          <PageLoading />
+        )}
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell title="Edit User">

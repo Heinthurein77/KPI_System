@@ -43,12 +43,12 @@ function remarkAuthor(s) {
 
 // Attainment for the card's hero ring: best available score vs target,
 // capped at 120 like the backend. Prefers the most-finalized score.
-function attainmentFor(s) {
-  const target = Number(snapTarget);
+function attainmentFor(s, target) {
+  const t = Number(target);
   const score = s.final_score ?? s.dept_score ?? s.self_score;
-  if (score == null || !(target > 0)) return { value: null, label: null };
+  if (score == null || !(t > 0)) return { value: null, label: null };
   const label = s.final_score != null ? "Final" : s.dept_score != null ? "Dept" : "Self";
-  return { value: Math.min(120, (Number(score) / target) * 100), label };
+  return { value: Math.min(120, (Number(score) / t) * 100), label };
 }
 
 export default function KpiCard({
@@ -75,11 +75,11 @@ export default function KpiCard({
   // Pending destructive/confirmatory action: { kind: "deptApprove" | "finalApprove" | "reject" }
   const [confirm, setConfirm] = useState(null);
 
-  const attainment = attainmentFor(s);
-
   // Target/weight in force when this submission was created (frozen snapshot
   // with fallback to the live template for pre-migration rows).
   const snapTarget = s.target_snapshot ?? s.kpi_template.target;
+
+  const attainment = attainmentFor(s, snapTarget);
 
   const canReject = onReject && (s.status === "pending_dept_approval" || s.status === "pending_final_approval");
   const author = remarkAuthor(s);

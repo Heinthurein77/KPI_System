@@ -4,7 +4,7 @@ import PageLoading from "../../components/ui/PageLoading";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { createCustomTemplate, deleteTemplate, listTemplates, updateTemplateWeight } from "../../api/admin";
+import { createCustomTemplate, createTemplate, deleteTemplate, listTemplates, updateTemplateWeight } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
 
 // Shown when the initial data load fails (instead of an endless spinner).
@@ -38,6 +38,7 @@ export default function TemplatesPage() {
   const [customMetricName, setCustomMetricName] = useState("");
   const [customTarget, setCustomTarget] = useState("");
   const [customWeight, setCustomWeight] = useState("");
+  const [customRecurring, setCustomRecurring] = useState(true);
   const [weightError, setWeightError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -47,6 +48,36 @@ export default function TemplatesPage() {
 
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
+
+  // ── New Org Metric form state (tenant admin only) ──
+  const [orgMetricName, setOrgMetricName] = useState("");
+  const [orgTarget, setOrgTarget] = useState("");
+  const [orgWeight, setOrgWeight] = useState("");
+  const [orgDepartmentId, setOrgDepartmentId] = useState("");
+  const [orgSubmitting, setOrgSubmitting] = useState(false);
+
+  async function handleCreateOrgMetric(e) {
+    e.preventDefault();
+    setOrgSubmitting(true);
+    try {
+      await createTemplate({
+        metric_name: orgMetricName.trim(),
+        target: Number(orgTarget),
+        weight: Number(orgWeight),
+        department_id: orgDepartmentId ? Number(orgDepartmentId) : null,
+      });
+      toast.success(`Metric "${orgMetricName.trim()}" created.`);
+      setOrgMetricName("");
+      setOrgTarget("");
+      setOrgWeight("");
+      setOrgDepartmentId("");
+      load();
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setOrgSubmitting(false);
+    }
+  }
 
   function load() {
     listTemplates()
@@ -98,6 +129,7 @@ export default function TemplatesPage() {
     setCustomMetricName("");
     setCustomTarget("");
     setCustomWeight("");
+    setCustomRecurring(true);
     setWeightError(null);
     setAdjustedWeights({});
   }
@@ -123,7 +155,7 @@ export default function TemplatesPage() {
         await updateTemplateWeight(t.id, { weight: Number(adjustedWeights[t.id]) });
       }
 
-      // 2. Create the new recurring custom KPI starting from the current month.
+      // 2. Create the new custom KPI starting from the current month.
       await createCustomTemplate({
         employee_id: Number(customEmployeeId),
         metric_name: customMetricName.trim(),
@@ -131,7 +163,7 @@ export default function TemplatesPage() {
         weight: Number(customWeight),
         year: data.default_year,
         period: data.default_period,
-        is_recurring: true,
+        is_recurring: customRecurring,
       });
 
       const rebalanceNote =
@@ -139,7 +171,9 @@ export default function TemplatesPage() {
           ? ` Rebalanced ${changedTemplates.length} existing KPI weight${changedTemplates.length > 1 ? "s" : ""} (future months only).`
           : "";
       toast.success(
-        `Custom KPI "${customMetricName.trim()}" added — will auto-carry to future months.${rebalanceNote}`
+        `Custom KPI "${customMetricName.trim()}" added — ${
+          customRecurring ? "will auto-carry to future months." : "one-off for this month only."
+        }${rebalanceNote}`
       );
       resetForm();
       load();
@@ -301,12 +335,12 @@ export default function TemplatesPage() {
               <h2 className="text-sm font-semibold text-slate-900">Add Custom KPI</h2>
             </div>
             <p className="text-xs text-slate-500 mb-4">
-              Assigns a recurring monthly KPI to a specific {isDeptAdmin ? "employee" : "person"} starting from{" "}
+              Assigns a KPI to a specific {isDeptAdmin ? "employee" : "person"} starting from{" "}
               <span className="font-medium text-slate-700">
                 {data.default_period} {data.default_year}
-              </span>{" "}
-              — it auto-carries forward each month.
-              {!isDeptAdmin && " A Dept Admin's own KPI first needs their self-approval at department review, then comes to you for final approval."}
+              </span>
+              .
+              {!isDeptAdmin && " A Dept Admin's own KPI skips department review and comes straight to you for final approval."}
             </p>
 
             <form onSubmit={handleCreateCustom} className="space-y-3">
@@ -516,6 +550,22 @@ export default function TemplatesPage() {
               )}
 
               {/* Submit */}
+              <label className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={customRecurring}
+                  onChange={(e) => setCustomRecurring(e.target.checked)}
+                  className="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
+                />
+                <span className="text-xs text-slate-600">
+                  <span className="font-semibold text-slate-700">Repeat every month</span>
+                  <span className="block text-[11px] text-slate-400">
+                    {customRecurring
+                      ? "Auto-carries forward each month."
+                      : "One-off — only for the selected month."}
+                  </span>
+                </span>
+              </label>
               <button
                 type="submit"
                 disabled={submitting || !!weightError}
@@ -550,6 +600,67 @@ export default function TemplatesPage() {
               )}
             </form>
           </div>
+
+          {/* ── Add Org Metric panel (tenant admin only) ── */}
+          {!isDeptAdmin && (
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+              <h2 className="text-sm font-semibold text-slate-900 mb-1">Add Department Metric</h2>
+              <p className="text-xs text-slate-500 mb-4">
+                A recurring metric for a whole department — or everyone, if no department is picked.
+              </p>
+              <form onSubmit={handleCreateOrgMetric} className="space-y-3">
+                <input
+                  type="text"
+                  required
+                  placeholder="e.g. Monthly Revenue"
+                  value={orgMetricName}
+                  onChange={(e) => setOrgMetricName(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                />
+                <div className="grid grid-cols-2 gap-3">
+                  <input
+                    type="number"
+                    step="0.1"
+                    required
+                    placeholder="Target"
+                    value={orgTarget}
+                    onChange={(e) => setOrgTarget(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                  />
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="100"
+                    required
+                    placeholder="Weight %"
+                    value={orgWeight}
+                    onChange={(e) => setOrgWeight(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                  />
+                </div>
+                <select
+                  value={orgDepartmentId}
+                  onChange={(e) => setOrgDepartmentId(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                >
+                  <option value="">All Departments</option>
+                  {(data.departments ?? []).map((d) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="submit"
+                  disabled={orgSubmitting}
+                  className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition disabled:opacity-60"
+                >
+                  {orgSubmitting ? "Saving…" : "Add Metric"}
+                </button>
+              </form>
+            </div>
+          )}
         </div>
       </div>
 

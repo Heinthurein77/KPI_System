@@ -1,8 +1,7 @@
 """HTTP-level coverage for the department endpoints in app/routers/admin.py:
-GET/POST /api/admin/departments, DELETE /api/admin/departments/{id}.
+GET/POST /api/admin/departments, PATCH/DELETE /api/admin/departments/{id}.
 
-Departments are Tenant-Admin-only (require_tenant_admin) -- there is no edit
-endpoint, only create/list/delete.
+Departments are Tenant-Admin-only (require_tenant_admin).
 """
 
 from app.models.user import UserRole
@@ -193,3 +192,66 @@ def test_create_department_duplicate_name_returns_400(db, client):
     )
     assert resp.status_code == 400
     assert "already exists" in resp.json()["detail"]
+
+
+# ---------- Rename (PATCH) ----------
+
+
+def test_rename_department_success(db, client):
+    tenant = make_tenant(db)
+    admin = _tenant_admin(db, tenant)
+    dept = make_department(db, tenant, name="Old Name")
+
+    resp = client.patch(
+        f"/api/admin/departments/{dept.id}", json={"name": "New Name"}, headers=auth_headers(admin, tenant)
+    )
+    assert resp.status_code == 200
+    assert resp.json()["name"] == "New Name"
+
+    listing = client.get("/api/admin/departments", headers=auth_headers(admin, tenant))
+    assert listing.json()[0]["name"] == "New Name"
+
+
+def test_rename_department_rejects_duplicate_name(db, client):
+    tenant = make_tenant(db)
+    admin = _tenant_admin(db, tenant)
+    dept = make_department(db, tenant, name="Sales")
+    make_department(db, tenant, name="Engineering")
+
+    resp = client.patch(
+        f"/api/admin/departments/{dept.id}", json={"name": "Engineering"}, headers=auth_headers(admin, tenant)
+    )
+    assert resp.status_code == 400
+
+
+def test_rename_department_rejects_empty_name(db, client):
+    tenant = make_tenant(db)
+    admin = _tenant_admin(db, tenant)
+    dept = make_department(db, tenant, name="Sales")
+
+    resp = client.patch(
+        f"/api/admin/departments/{dept.id}", json={"name": "   "}, headers=auth_headers(admin, tenant)
+    )
+    assert resp.status_code == 400
+
+
+def test_rename_department_not_found(db, client):
+    tenant = make_tenant(db)
+    admin = _tenant_admin(db, tenant)
+
+    resp = client.patch(
+        "/api/admin/departments/99999", json={"name": "Ghost"}, headers=auth_headers(admin, tenant)
+    )
+    assert resp.status_code == 404
+
+
+def test_rename_department_forbidden_for_dept_admin(db, client):
+    tenant = make_tenant(db)
+    admin = _tenant_admin(db, tenant)
+    dept = make_department(db, tenant, name="Sales")
+    da = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
+
+    resp = client.patch(
+        f"/api/admin/departments/{dept.id}", json={"name": "New"}, headers=auth_headers(da, tenant)
+    )
+    assert resp.status_code == 403

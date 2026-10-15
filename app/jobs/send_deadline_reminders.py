@@ -2,7 +2,7 @@
 
 Run daily from the server's cron (or a scheduler), e.g.::
 
-    docker compose exec -T backend python -m app.jobs.send_deadline_reminders
+    docker compose exec -T web python -m app.jobs.send_deadline_reminders
 
 The job is idempotent — each user gets at most one reminder per period — and
 does nothing outside the reminder window, so running it daily is safe.

@@ -1,9 +1,18 @@
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import NotificationBell from "./NotificationBell";
 
 export default function Topbar({ title, onMenuClick }) {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
+
+  async function handleLogout() {
+    const isPlatform = user?.role === "super_admin";
+    await logout();
+    // ProtectedRoute would bounce a signed-out platform admin to the org
+    // /login — send them to their own login page instead.
+    navigate(isPlatform ? "/platform/login" : "/login", { replace: true });
+  }
 
   return (
     <header className="flex items-center justify-between border-b border-slate-200 bg-white/80 backdrop-blur px-4 md:px-8 py-4 sticky top-0 z-10">
@@ -43,7 +52,7 @@ export default function Topbar({ title, onMenuClick }) {
         </Link>
         <button
           type="button"
-          onClick={logout}
+          onClick={handleLogout}
           title="Sign out"
           className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 sm:px-3.5 py-2 text-sm font-medium text-slate-600 shadow-sm hover:bg-slate-50 hover:text-slate-900 transition"
         >

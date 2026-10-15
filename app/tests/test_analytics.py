@@ -109,3 +109,33 @@ def test_analytics_dept_admin_forbidden(client, db):
     da = make_user(db, tenant, UserRole.DEPT_ADMIN, name="DA", department=dept)
     r = client.get("/api/analytics/overview", headers=auth_headers(da, tenant))
     assert r.status_code == 403
+
+
+def test_overview_includes_dept_admins(client, db):
+    """Dept admins are counted alongside employees in the analytics overview."""
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant, name="Engineering")
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Boss")
+    emp = make_user(db, tenant, UserRole.EMPLOYEE, name="Emp", department=dept)
+    da = make_user(db, tenant, UserRole.DEPT_ADMIN, name="DA", department=dept)
+    tpl = make_template(db, tenant)
+    make_submission(db, tenant, emp, tpl, year=2026, period="October",
+                    status=KPIStatus.APPROVED, final_score=80, department=dept)
+    make_submission(db, tenant, da, tpl, year=2026, period="October",
+                    status=KPIStatus.APPROVED, final_score=100, department=dept)
+    db.commit()
+
+    r = client.get(
+        "/api/analytics/overview",
+        params={"year": 2026, "period": "October"},
+        headers=auth_headers(admin, tenant),
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["employee_count"] == 2
+    assert data["submitted_count"] == 2
+    assert data["pending_count"] == 0
+    assert data["avg_score"] == pytest.approx(90.0)
+    by_dept = {d["department_name"]: d for d in data["by_department"]}
+    assert by_dept["Engineering"]["employee_count"] == 2
+    assert by_dept["Engineering"]["avg_score"] == pytest.approx(90.0)

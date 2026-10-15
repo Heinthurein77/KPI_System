@@ -65,6 +65,29 @@ def create_department(
     return department
 
 
+@router.patch("/departments/{department_id}", response_model=DepartmentOut)
+def rename_department(
+    department_id: int,
+    payload: CreateDepartmentRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_tenant_admin),
+):
+    department = get_tenant_scoped_or_404(db, Department, department_id, user.tenant_id, "Department not found.")
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(400, "Department name cannot be empty.")
+    existing = db.scalar(
+        select(Department).where(
+            Department.tenant_id == user.tenant_id, Department.name == name, Department.id != department_id
+        )
+    )
+    if existing is not None:
+        raise HTTPException(400, f'A department named "{name}" already exists.')
+    department.name = name
+    db.commit()
+    return department
+
+
 @router.delete("/departments/{department_id}")
 def delete_department(department_id: int, db: Session = Depends(get_db), user: User = Depends(require_tenant_admin)):
     department = get_tenant_scoped_or_404(db, Department, department_id, user.tenant_id, "Department not found.")

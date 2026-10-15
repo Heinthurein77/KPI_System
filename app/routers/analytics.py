@@ -102,16 +102,16 @@ def analytics_overview(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Tenant-wide KPI overview for one period."""
+    """Tenant-wide KPI overview for one period (employees + dept admins)."""
     year, period = _validated_year_period(year, period)
 
-    employees = {
+    members = {
         u.id: u
         for u in db.scalars(
             select(User).where(
                 User.tenant_id == user.tenant_id,
                 User.is_active == True,  # noqa: E712
-                User.role == UserRole.EMPLOYEE,
+                User.role.in_([UserRole.EMPLOYEE, UserRole.DEPT_ADMIN]),
             )
         )
     }
@@ -124,17 +124,17 @@ def analytics_overview(
 
     submissions = _period_submissions(db, user.tenant_id, year, period)
 
-    # Per-employee aggregation: an employee with 5 KPIs gets ONE score (the
+    # Per-member aggregation: a person with 5 KPIs gets ONE score (the
     # mean of their submitted effective scores), so they cast exactly one
     # bucket vote and one department vote — previously each submission voted
-    # separately, overweighting employees with more KPIs.
+    # separately, overweighting people with more KPIs.
     employee_scores: dict[int, list[float]] = {}
-    submitted_employees: set[int] = set()
+    submitted_members: set[int] = set()
     for sub in submissions:
-        if sub.employee_id not in employees:
+        if sub.employee_id not in members:
             continue
         if _submitted(sub):
-            submitted_employees.add(sub.employee_id)
+            submitted_members.add(sub.employee_id)
             score = sub.effective_score
             if score is not None:
                 employee_scores.setdefault(sub.employee_id, []).append(score)
@@ -146,21 +146,21 @@ def analytics_overview(
         mean_score = sum(scores) / len(scores)
         all_scores.append(mean_score)
         buckets[_bucket(mean_score)] += 1
-        dept_scores.setdefault(employees[emp_id].department_id, []).append(mean_score)
+        dept_scores.setdefault(members[emp_id].department_id, []).append(mean_score)
 
-    employee_count = len(employees)
-    submitted_count = len(submitted_employees)
+    member_count = len(members)
+    submitted_count = len(submitted_members)
 
     by_department: list[DepartmentStatOut] = []
     for dept_id, dept in departments.items():
-        emp_ids = [uid for uid, u in employees.items() if u.department_id == dept_id]
+        member_ids = [uid for uid, u in members.items() if u.department_id == dept_id]
         scores = dept_scores.get(dept_id, [])
         by_department.append(
             DepartmentStatOut(
                 department_id=dept_id,
                 department_name=dept.name,
-                employee_count=len(emp_ids),
-                submitted_count=len([uid for uid in emp_ids if uid in submitted_employees]),
+                employee_count=len(member_ids),
+                submitted_count=len([uid for uid in member_ids if uid in submitted_members]),
                 avg_score=round(sum(scores) / len(scores), 2) if scores else None,
             )
         )
@@ -169,10 +169,10 @@ def analytics_overview(
     return OverviewOut(
         year=year,
         period=period,
-        employee_count=employee_count,
+        employee_count=member_count,
         submitted_count=submitted_count,
-        pending_count=employee_count - submitted_count,
-        submission_rate=round(submitted_count / employee_count * 100, 1) if employee_count else 0.0,
+        pending_count=member_count - submitted_count,
+        submission_rate=round(submitted_count / member_count * 100, 1) if member_count else 0.0,
         avg_score=round(sum(all_scores) / len(all_scores), 2) if all_scores else None,
         buckets=buckets,
         by_department=by_department,

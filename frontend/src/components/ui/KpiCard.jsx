@@ -67,6 +67,7 @@ export default function KpiCard({
   const [deptScore, setDeptScore] = useState(s.dept_score ?? s.self_score ?? "");
   const [deptRemarks, setDeptRemarks] = useState("");
   const [finalScore, setFinalScore] = useState(s.final_score ?? s.dept_score ?? "");
+  const [finalRemarks, setFinalRemarks] = useState("");
   const [overrideScore, setOverrideScore] = useState("");
   const [overrideRemarks, setOverrideRemarks] = useState("");
   const [overrideOpen, setOverrideOpen] = useState(false);
@@ -88,23 +89,31 @@ export default function KpiCard({
       onDeptApprove(s.id, Number(deptScore), deptRemarks || undefined);
     } else if (confirm.kind === "finalApprove") {
       onFinalApprove(s.id, Number(finalScore));
+    } else if (confirm.kind === "override") {
+      onOverride(s.id, Number(overrideScore), overrideRemarks || undefined);
     } else if (confirm.kind === "reject") {
-      // The remarks field doubles as the rejection reason.
-      onReject(s.id, deptRemarks || undefined);
+      // The remarks field doubles as the rejection reason — deptRemarks on the
+      // department path, finalRemarks on the final-approval path.
+      const reason = s.status === "pending_final_approval" ? finalRemarks : deptRemarks;
+      onReject(s.id, reason || undefined);
     }
     setConfirm(null);
   }
 
   function confirmTitle() {
     if (confirm?.kind === "reject") return "Reject this submission?";
+    if (confirm?.kind === "override") return "Override and approve?";
     return "Approve this submission?";
   }
 
   function confirmMessage() {
     const metric = s.kpi_template.metric_name;
     if (confirm?.kind === "reject") {
-      const reason = deptRemarks?.trim();
+      const reason = (s.status === "pending_final_approval" ? finalRemarks : deptRemarks)?.trim();
       return `The employee will need to revise and resubmit "${metric}".${reason ? `\n\nReason: ${reason}` : ""}`;
+    }
+    if (confirm?.kind === "override") {
+      return `Override the score to ${overrideScore} and approve "${metric}"?`;
     }
     return `Approve "${metric}" and move it to the next stage?`;
   }
@@ -280,6 +289,13 @@ export default function KpiCard({
                 </svg>
                 Approve
               </button>
+              <input
+                type="text"
+                placeholder="Remarks (optional — used as the reason if rejected)"
+                value={finalRemarks}
+                onChange={(e) => setFinalRemarks(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500"
+              />
             </div>
           )}
 
@@ -323,7 +339,7 @@ export default function KpiCard({
                   <button
                     type="button"
                     disabled={!isValidScore(overrideScore, s.kpi_template.target)}
-                    onClick={() => onOverride(s.id, Number(overrideScore), overrideRemarks || undefined)}
+                    onClick={() => setConfirm({ kind: "override" })}
                     className="w-full rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800 transition disabled:opacity-60"
                   >
                     Override &amp; Approve
@@ -348,7 +364,7 @@ export default function KpiCard({
         open={!!confirm}
         title={confirmTitle()}
         message={confirmMessage()}
-        confirmLabel={confirm?.kind === "reject" ? "Reject" : "Approve"}
+        confirmLabel={confirm?.kind === "reject" ? "Reject" : confirm?.kind === "override" ? "Override" : "Approve"}
         danger={confirm?.kind === "reject"}
         onConfirm={handleConfirmAction}
         onCancel={() => setConfirm(null)}

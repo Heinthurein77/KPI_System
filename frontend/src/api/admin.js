@@ -12,6 +12,10 @@ export function deleteDepartment(id) {
   return client.delete(`/api/admin/departments/${id}`).then((r) => r.data);
 }
 
+export function renameDepartment(id, payload) {
+  return client.patch(`/api/admin/departments/${id}`, payload).then((r) => r.data);
+}
+
 export function listUsers() {
   return client.get("/api/admin/users").then((r) => r.data);
 }

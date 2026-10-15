@@ -145,12 +145,12 @@ export default function AnalyticsPage() {
                 <StatCard
                   label="Submission Rate"
                   value={`${overview.submission_rate}%`}
-                  detail={`${overview.submitted_count} of ${overview.employee_count} employees`}
+                  detail={`${overview.submitted_count} of ${overview.employee_count} people`}
                 />
                 <StatCard
                   label="Pending"
                   value={overview.pending_count}
-                  detail="employees not yet submitted"
+                  detail="people not yet submitted"
                 />
                 <StatCard
                   label="Period"
@@ -216,7 +216,7 @@ export default function AnalyticsPage() {
                     <thead>
                       <tr className="border-b border-slate-200 text-xs uppercase tracking-wider text-slate-500">
                         <th className="py-2 pr-4">Department</th>
-                        <th className="py-2 pr-4">Employees</th>
+                        <th className="py-2 pr-4">People</th>
                         <th className="py-2 pr-4">Submitted</th>
                         <th className="py-2">Avg Score</th>
                       </tr>

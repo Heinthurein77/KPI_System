@@ -1,7 +1,8 @@
 """Tests for the deadline reminder service.
 
-Covers: the reminder window, who gets reminded (DRAFT/REJECTED only),
-idempotency (one reminder per user per period), and the disabled flag.
+Covers: the reminder window, who gets reminded (DRAFT/REJECTED, plus
+never-started users who have applicable templates), idempotency (one
+reminder per user per period), and the disabled flag.
 """
 
 from datetime import date
@@ -46,16 +47,34 @@ def _notified_user_ids(db, tenant):
     }
 
 
-def test_reminds_only_draft_and_rejected_inside_window(db):
+def test_reminds_draft_rejected_and_never_started_inside_window(db):
     tenant, emp_draft, emp_rejected, emp_done, emp_idle = _setup(db)
     # Oct 29, 2026: 2 days before month end, inside the default 3-day window.
+    # emp_idle never opened the app (no submissions) but has an applicable
+    # department template, so they get the "haven't started" nudge too.
     with patch.object(deadline_reminder_service, "email_service") as mock_email:
         mock_email.send_for_notifications.return_value = None
         result = deadline_reminder_service.send_deadline_reminders(db, today=date(2026, 10, 29))
     assert result.window_open is True
-    assert result.reminded == 2
+    assert result.reminded == 3
     notified = _notified_user_ids(db, tenant)
-    assert notified == {emp_draft.id, emp_rejected.id}
+    assert notified == {emp_draft.id, emp_rejected.id, emp_idle.id}
+
+
+def test_never_started_without_templates_gets_no_reminder(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    dept_empty = make_department(db, tenant, name="Empty Dept")
+    emp_idle = make_user(db, tenant, UserRole.EMPLOYEE, name="Idle Person", department=dept)
+    emp_no_kpis = make_user(db, tenant, UserRole.EMPLOYEE, name="No KPIs", department=dept_empty)
+    make_template(db, tenant, department=dept)
+    # emp_idle has an applicable template but no submissions -> reminded.
+    # emp_no_kpis has neither -> no nag.
+    with patch.object(deadline_reminder_service, "email_service") as mock_email:
+        mock_email.send_for_notifications.return_value = None
+        result = deadline_reminder_service.send_deadline_reminders(db, today=date(2026, 10, 29))
+    assert result.reminded == 1
+    assert _notified_user_ids(db, tenant) == {emp_idle.id}
 
 
 def test_no_reminders_outside_window(db):
@@ -68,15 +87,15 @@ def test_no_reminders_outside_window(db):
 
 
 def test_idempotent_second_run(db):
-    tenant, emp_draft, emp_rejected, *_ = _setup(db)
+    tenant, emp_draft, emp_rejected, _, emp_idle = _setup(db)
     with patch.object(deadline_reminder_service, "email_service") as mock_email:
         mock_email.send_for_notifications.return_value = None
         first = deadline_reminder_service.send_deadline_reminders(db, today=date(2026, 10, 29))
         second = deadline_reminder_service.send_deadline_reminders(db, today=date(2026, 10, 30))
-    assert first.reminded == 2
+    assert first.reminded == 3
     assert second.reminded == 0
-    assert second.already_reminded == 2
-    assert len(_notified_user_ids(db, tenant)) == 2
+    assert second.already_reminded == 3
+    assert len(_notified_user_ids(db, tenant)) == 3
 
 
 def test_disabled_flag_sends_nothing(db):

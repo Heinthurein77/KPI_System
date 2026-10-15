@@ -155,10 +155,11 @@ def get_submission_scoped(db: Session, user: User, submission_id: int) -> KPISub
     return submission
 
 
-def ensure_period_submissions(
+def applicable_templates(
     db: Session, employee: User, year: int, period: str
-) -> list[KPISubmission]:
-    """Create draft submissions for every metric template applicable to the employee, idempotently.
+) -> list[KPITemplate]:
+    """Every metric template that would materialise into a draft submission
+    for this employee in this period. Read-only — creates nothing.
 
     Recurring department/company-wide metrics only apply to Employees — a Dept
     Admin's own KPI is always a custom one-off metric created specifically for
@@ -186,10 +187,22 @@ def ensure_period_submissions(
     # A recurring custom template becomes applicable from its configured month
     # forward.  Keeping this guard in the existing lazy materialisation path
     # makes monthly carry-over automatic even if the bulk job has not run yet.
-    templates = [
+    return [
         template for template in templates
         if not template.is_recurring or is_template_active_for_period(template, year, period)
     ]
+
+
+def ensure_period_submissions(
+    db: Session, employee: User, year: int, period: str
+) -> list[KPISubmission]:
+    """Create draft submissions for every metric template applicable to the employee, idempotently.
+
+    Recurring department/company-wide metrics only apply to Employees — a Dept
+    Admin's own KPI is always a custom one-off metric created specifically for
+    them, locked to this exact year/period.
+    """
+    templates = applicable_templates(db, employee, year, period)
 
     if not templates:
         if employee.role == UserRole.EMPLOYEE:

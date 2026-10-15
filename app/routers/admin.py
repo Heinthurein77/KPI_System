@@ -17,6 +17,7 @@ from app.schemas.audit_log import AuditLogOut
 from app.schemas.kpi import KPISubmissionOut, KpiTrendOut, KpiTrendPointOut
 from app.schemas.kpi_template import (
     CreateCustomTemplateRequest,
+    CreateCustomTemplateWithRebalanceRequest,
     CreateTemplateRequest,
     KPITemplateOut,
     RunRecurringKpisRequest,
@@ -627,6 +628,106 @@ def create_custom_template(
         db, user, employee, payload.metric_name.strip(), payload.target, payload.weight,
         effective_year, effective_period, is_recurring=payload.is_recurring,
     )
+    return submission.kpi_template
+
+
+
+@router.post("/templates/custom-with-rebalance", response_model=KPITemplateOut)
+def create_custom_template_with_rebalance(
+    payload: CreateCustomTemplateWithRebalanceRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_dept_admin),
+):
+    """Atomically rebalance existing custom-KPI weights AND create a new custom KPI.
+
+    The Templates page used to PATCH each changed weight and then POST the new
+    custom KPI as separate requests — a failed create left the weight changes
+    silently persisted. This endpoint applies the weight adjustments and the
+    create in a single transaction: any failure rolls back everything.
+
+    Access rules mirror create_custom_template; weight-adjustment rules mirror
+    PATCH /templates/{id}/weight. Adjustments must target the same employee's
+    recurring custom templates.
+    """
+    employee = get_tenant_scoped_or_404(db, User, payload.employee_id, user.tenant_id, "User not found.")
+
+    if user.role == UserRole.DEPT_ADMIN:
+        # Dept Admins may only assign custom KPIs to their own Employees.
+        if employee.role != UserRole.EMPLOYEE or employee.department_id != user.department_id:
+            raise HTTPException(403, "Cannot create a custom KPI for an employee outside your department.")
+    else:
+        # Tenant Admin may target any Employee or Dept Admin, but not another Tenant
+        # Admin (Tenant Admins aren't reviewed by anyone in this workflow).
+        if employee.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN):
+            raise HTTPException(400, "Custom KPIs can only be assigned to Employees or Department Admins.")
+
+    # Determine effective start period — same approved-month guard as
+    # create_custom_template: never retroactively change a fully approved month.
+    effective_year, effective_period = payload.year, payload.period
+    cur_year, cur_period = current_month_period()
+    current_month_subs = db.scalars(
+        select(KPISubmission).where(
+            KPISubmission.employee_id == employee.id,
+            KPISubmission.year == cur_year,
+            KPISubmission.month_or_quarter == cur_period,
+            KPISubmission.tenant_id == employee.tenant_id,
+        )
+    ).all()
+    if current_month_subs and all(s.status == KPIStatus.APPROVED for s in current_month_subs):
+        cur_idx = MONTH_NAMES.index(cur_period)
+        if cur_idx == 11:  # December → January next year
+            effective_year, effective_period = cur_year + 1, MONTH_NAMES[0]
+        else:
+            effective_year, effective_period = cur_year, MONTH_NAMES[cur_idx + 1]
+
+    try:
+        # 1. Weight adjustments (same rules as PATCH /templates/{id}/weight).
+        for adj in payload.weight_adjustments:
+            template = get_tenant_scoped_or_404(
+                db, KPITemplate, adj.template_id, user.tenant_id, "Template not found."
+            )
+            if not template.is_custom:
+                raise HTTPException(
+                    400,
+                    "Weight rebalancing is only available for custom "
+                    "(employee-scoped) KPI templates.",
+                )
+            if not template.is_recurring:
+                raise HTTPException(
+                    400,
+                    f'"{template.metric_name}" is a one-off template. Only recurring '
+                    "custom templates support weight rebalancing.",
+                )
+            if template.employee_id != employee.id:
+                raise HTTPException(
+                    400, "Weight adjustments must target the same employee's KPI templates."
+                )
+            if user.role == UserRole.DEPT_ADMIN and template.department_id != user.department_id:
+                raise HTTPException(
+                    403, "Cannot manage templates outside your department."
+                )
+            old_weight = template.weight
+            template.weight = adj.weight
+            audit_service.log(
+                db, user,
+                "kpi_template_weight_updated", "kpi_template",
+                template.id, template.metric_name,
+                f"Template weight updated for future periods: "
+                f"{fmt_score(old_weight)} → {fmt_score(adj.weight)}. "
+                "Approved/historical submission records are unchanged.",
+                department_id=template.department_id,
+            )
+
+        # 2. Create the custom KPI — no intermediate commit.
+        submission = kpi_service.create_custom_employee_kpi(
+            db, user, employee, payload.metric_name.strip(), payload.target, payload.weight,
+            effective_year, effective_period, is_recurring=payload.is_recurring,
+            commit=False,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     return submission.kpi_template
 
 

@@ -82,6 +82,10 @@ export function createCustomTemplate(payload) {
   return client.post("/api/admin/templates/custom", payload).then((r) => r.data);
 }
 
+export function createCustomTemplateWithRebalance(payload) {
+  return client.post("/api/admin/templates/custom-with-rebalance", payload).then((r) => r.data);
+}
+
 export function deleteTemplate(id) {
   return client.delete(`/api/admin/templates/${id}`).then((r) => r.data);
 }

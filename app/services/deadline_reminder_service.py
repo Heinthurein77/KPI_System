@@ -7,6 +7,9 @@ notifications (in-app + email) for employees who still have actionable work:
 
 - DRAFT submissions  → started but not yet submitted
 - REJECTED submissions → sent back, needs correction and resubmission
+- NO submissions yet but applicable templates exist → never opened the app
+  this period (no lazily created rows); these are exactly the people the
+  nudge exists for
 
 Public surface
 --------------
@@ -38,6 +41,7 @@ from app.models.notification import Notification
 from app.models.tenant import Tenant, TenantStatus
 from app.models.user import User, UserRole
 from app.services import email_service, notification_service
+from app.services.kpi_service import applicable_templates
 
 REMINDER_TYPE = "deadline_reminder"
 
@@ -120,38 +124,63 @@ def send_deadline_reminders(
         )
 
     created_all: list = []
+    actionable = set(ACTIONABLE_STATUSES)
     for tid in tenant_ids:
-        # Active employees AND dept admins (who also self-assess) with at
-        # least one actionable submission this period.
-        user_ids = db.scalars(
-            select(KPISubmission.employee_id)
-            .join(User, User.id == KPISubmission.employee_id)
-            .where(
-                KPISubmission.tenant_id == tid,
-                KPISubmission.year == year,
-                KPISubmission.month_or_quarter == period,
-                KPISubmission.status.in_(ACTIONABLE_STATUSES),
+        # Every active employee AND dept admin (who also self-assess) in the
+        # tenant — not just the ones who already opened the app this period.
+        # Users who never opened it have no (lazily created) submissions yet;
+        # they are exactly the people this nudge exists for.
+        users = db.scalars(
+            select(User).where(
+                User.tenant_id == tid,
                 User.is_active == True,  # noqa: E712
                 User.role.in_([UserRole.EMPLOYEE, UserRole.DEPT_ADMIN]),
             )
-            .distinct()
         ).all()
 
+        # This period's submission statuses, grouped by employee.
+        statuses_by_user: dict[int, set[KPIStatus]] = {}
+        for emp_id, st in db.execute(
+            select(KPISubmission.employee_id, KPISubmission.status).where(
+                KPISubmission.tenant_id == tid,
+                KPISubmission.year == year,
+                KPISubmission.month_or_quarter == period,
+            )
+        ).all():
+            statuses_by_user.setdefault(emp_id, set()).add(st)
+
         tenant_reminded = 0
-        for user_id in user_ids:
-            if _already_reminded(db, user_id, link):
+        for user in users:
+            statuses = statuses_by_user.get(user.id, set())
+            if statuses and not (statuses & actionable):
+                continue  # nothing actionable — already submitted/approved
+            if _already_reminded(db, user.id, link):
                 result.already_reminded += 1
                 continue
+            if not statuses:
+                # Never started this period (no lazy-created rows). Only nudge
+                # when they actually have KPIs to do — no templates, no nag.
+                if not applicable_templates(db, user, year, period):
+                    continue
+                title = f"KPI submission due {when}"
+                message = (
+                    f"Your {period} {year} KPI is due {when}, and you haven't "
+                    "started it yet. Please open My KPI, enter your scores and "
+                    "submit it for review."
+                )
+            else:
+                title = f"KPI submission due {when}"
+                message = (
+                    f"Your {period} {year} KPI is due {when}. "
+                    "Please finish your scores and submit it for review."
+                )
             created = notification_service.notify_user(
                 db,
                 tenant_id=tid,
-                user_id=user_id,
+                user_id=user.id,
                 type=REMINDER_TYPE,
-                title=f"KPI submission due {when}",
-                message=(
-                    f"Your {period} {year} KPI is due {when}. "
-                    "Please finish your scores and submit it for review."
-                ),
+                title=title,
+                message=message,
                 link=link,
             )
             created_all.extend(created)

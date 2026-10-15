@@ -4,7 +4,7 @@ import PageLoading from "../../components/ui/PageLoading";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { createCustomTemplate, deleteTemplate, listTemplates, updateTemplateWeight } from "../../api/admin";
+import { createCustomTemplateWithRebalance, deleteTemplate, listTemplates } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
 
 // Shown when the initial data load fails (instead of an endless spinner).
@@ -119,14 +119,10 @@ export default function TemplatesPage() {
     setSubmitting(true);
 
     try {
-      // 1. PATCH changed template weights (template-only — no submission rows touched).
-      //    Approved/historical records remain immutable; new weight is for future months.
-      for (const t of changedTemplates) {
-        await updateTemplateWeight(t.id, { weight: Number(adjustedWeights[t.id]) });
-      }
-
-      // 2. Create the new custom KPI starting from the current month.
-      await createCustomTemplate({
+      // Single atomic request: weight rebalancing + custom KPI create commit
+      // together on the backend. A failed create can no longer leave the
+      // weight changes silently persisted (they roll back as one unit).
+      await createCustomTemplateWithRebalance({
         employee_id: Number(customEmployeeId),
         metric_name: customMetricName.trim(),
         target: Number(customTarget),
@@ -134,6 +130,10 @@ export default function TemplatesPage() {
         year: data.default_year,
         period: data.default_period,
         is_recurring: customRecurring,
+        weight_adjustments: changedTemplates.map((t) => ({
+          template_id: t.id,
+          weight: Number(adjustedWeights[t.id]),
+        })),
       });
 
       const rebalanceNote =

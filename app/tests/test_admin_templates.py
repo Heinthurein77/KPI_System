@@ -3,6 +3,7 @@ GET/POST /api/admin/templates, POST /api/admin/templates/custom,
 DELETE /api/admin/templates/{id}.
 """
 
+from app.models.department import Department
 from app.models.kpi_template import KPITemplate
 from app.models.user import UserRole
 from app.models.kpi_submission import KPIStatus
@@ -405,3 +406,122 @@ def test_new_submissions_get_current_weight(client, db):
     assert len(subs) == 1
     assert subs[0].weight_snapshot == 70
     assert subs[0].target_snapshot == 100
+
+
+# ---------- Custom template period/year validation (audit fix 3) ----------
+
+
+def _custom_payload(employee, **overrides):
+    payload = {
+        "employee_id": employee.id,
+        "metric_name": "Special Project",
+        "target": 50.0,
+        "weight": 1.0,
+        "year": 2026,
+        "period": "March",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def _dept_admin_with_employee(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    return tenant, dept_admin, employee
+
+
+def test_create_custom_template_rejects_invalid_period(db, client):
+    tenant, dept_admin, employee = _dept_admin_with_employee(db)
+    resp = client.post(
+        "/api/admin/templates/custom",
+        json=_custom_payload(employee, period="NotAMonth"),
+        headers=auth_headers(dept_admin, tenant),
+    )
+    assert resp.status_code == 422
+    # nothing persisted
+    assert db.query(KPITemplate).count() == 0
+
+
+def test_create_custom_template_rejects_invalid_year(db, client):
+    tenant, dept_admin, employee = _dept_admin_with_employee(db)
+    resp = client.post(
+        "/api/admin/templates/custom",
+        json=_custom_payload(employee, year=1999),
+        headers=auth_headers(dept_admin, tenant),
+    )
+    assert resp.status_code == 422
+    assert db.query(KPITemplate).count() == 0
+
+
+# ---------- Atomic rebalance + create (audit fix 2) ----------
+
+
+def _rebalance_setup(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    existing = make_template(
+        db, tenant, metric_name="Existing KPI", weight=30.0,
+        department=dept, employee=employee, is_recurring=True,
+    )
+    return tenant, dept_admin, employee, existing
+
+
+def test_custom_with_rebalance_success_applies_both(db, client):
+    tenant, dept_admin, employee, existing = _rebalance_setup(db)
+    resp = client.post(
+        "/api/admin/templates/custom-with-rebalance",
+        json={
+            **_custom_payload(employee, metric_name="New KPI", weight=20.0),
+            "is_recurring": True,
+            "weight_adjustments": [{"template_id": existing.id, "weight": 40.0}],
+        },
+        headers=auth_headers(dept_admin, tenant),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["metric_name"] == "New KPI"
+    assert body["is_custom"] is True
+    db.refresh(existing)
+    assert existing.weight == 40.0
+
+
+def test_custom_with_rebalance_rolls_back_weights_on_failed_create(db, client):
+    tenant, dept_admin, employee, existing = _rebalance_setup(db)
+    # A template with the same name+period already exists → the create fails.
+    dept = db.query(Department).filter_by(tenant_id=tenant.id).first()
+    make_template(
+        db, tenant, metric_name="New KPI", department=dept, employee=employee,
+        locked_year=2026, locked_period="March", is_recurring=True,
+    )
+    resp = client.post(
+        "/api/admin/templates/custom-with-rebalance",
+        json={
+            **_custom_payload(employee, metric_name="New KPI", weight=20.0),
+            "is_recurring": True,
+            "weight_adjustments": [{"template_id": existing.id, "weight": 40.0}],
+        },
+        headers=auth_headers(dept_admin, tenant),
+    )
+    assert resp.status_code == 400
+    # The weight change must NOT have been persisted.
+    db.refresh(existing)
+    assert existing.weight == 30.0
+
+
+def test_custom_with_rebalance_rejects_invalid_period(db, client):
+    tenant, dept_admin, employee, existing = _rebalance_setup(db)
+    resp = client.post(
+        "/api/admin/templates/custom-with-rebalance",
+        json={
+            **_custom_payload(employee, period="Someday"),
+            "weight_adjustments": [{"template_id": existing.id, "weight": 40.0}],
+        },
+        headers=auth_headers(dept_admin, tenant),
+    )
+    assert resp.status_code == 422
+    db.refresh(existing)
+    assert existing.weight == 30.0

@@ -6,16 +6,46 @@ import KpiCard from "../ui/KpiCard";
 import EmptyState from "../ui/EmptyState";
 import TeamOverview from "./TeamOverview";
 
-function groupByEmployee(submissions) {
-  // Keyed by employee id, not name — two employees can share a display name,
-  // and a name key would silently merge their submissions into one section.
-  const groups = new Map();
-  for (const s of submissions) {
-    const key = s.employee.id;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(s);
-  }
-  return groups;
+// Review queue grouped by STATUS, not by employee: the first thing an admin
+// sees is what needs their action, then what's waiting on others, then the
+// settled history. "pending" holds exactly the statuses in the
+// pendingStatuses prop (what THIS viewer must act on); a submission that's
+// pending for someone else lands in "waiting".
+const BUCKET_ORDER = ["pending", "waiting", "approved", "rejected", "draft"];
+
+const BUCKET_STYLE = {
+  waiting: {
+    title: "Waiting on others",
+    bar: "bg-violet-400",
+    badge: "bg-violet-50 text-violet-700 ring-violet-200",
+    dot: "bg-violet-400",
+  },
+  approved: {
+    title: "Approved",
+    bar: "bg-emerald-500",
+    badge: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+    dot: "bg-emerald-500",
+  },
+  rejected: {
+    title: "Rejected",
+    bar: "bg-red-400",
+    badge: "bg-red-50 text-red-700 ring-red-200",
+    dot: "bg-red-400",
+  },
+  draft: {
+    title: "Drafts",
+    bar: "bg-slate-300",
+    badge: "bg-slate-100 text-slate-600 ring-slate-200",
+    dot: "bg-slate-400",
+  },
+};
+
+function bucketFor(status, pendingStatuses) {
+  if (pendingStatuses.includes(status)) return "pending";
+  if (status === "approved") return "approved";
+  if (status === "rejected") return "rejected";
+  if (status === "draft") return "draft";
+  return "waiting";
 }
 
 export default function TeamReviewBoard({
@@ -33,45 +63,68 @@ export default function TeamReviewBoard({
   onReject,
 }) {
   const [query, setQuery] = useState("");
-  // Only records an explicit click — open/collapsed state a person needing
-  // action stays open by default, and someone already fully reviewed
-  // collapses to a single scannable row, WITHOUT this map ever saying so.
-  // That default is derived fresh from pendingCount on every render instead
-  // of being computed once and stored, so approving someone's last pending
-  // item collapses them immediately rather than only after the period/filter
-  // changes and this effect re-runs.
-  const [manualOverride, setManualOverride] = useState(new Map());
+  // Status groups the viewer explicitly opened/closed. "pending" starts open;
+  // the rest start collapsed so the settled history doesn't push the work
+  // queue off screen.
+  const [openGroups, setOpenGroups] = useState(() => new Set(["pending"]));
+  // Explicit per-employee toggles, keyed `${bucket}:${employeeId}`. Untouched
+  // employees in the pending bucket start open (they need action); everywhere
+  // else they start collapsed.
+  const [openEmployees, setOpenEmployees] = useState(() => new Map());
 
-  const groups = useMemo(() => groupByEmployee(data.submissions), [data.submissions]);
+  // bucket -> [{ employee, department, items }]
+  const buckets = useMemo(() => {
+    const grouped = { pending: new Map(), waiting: new Map(), approved: new Map(), rejected: new Map(), draft: new Map() };
+    for (const s of data.submissions) {
+      const b = bucketFor(s.status, pendingStatuses);
+      const key = s.employee.id;
+      if (!grouped[b].has(key)) {
+        grouped[b].set(key, { employee: s.employee, department: s.department?.name ?? null, items: [] });
+      }
+      grouped[b].get(key).items.push(s);
+    }
+    const q = query.trim().toLowerCase();
+    const result = {};
+    for (const b of BUCKET_ORDER) {
+      let emps = Array.from(grouped[b].values());
+      if (q) {
+        emps = emps.filter(
+          (e) => e.employee.name.toLowerCase().includes(q) || e.department?.toLowerCase().includes(q)
+        );
+      }
+      emps.sort((a, b2) => a.employee.name.localeCompare(b2.employee.name));
+      result[b] = emps;
+    }
+    return result;
+  }, [data.submissions, query, pendingStatuses]);
 
+  // A new period/filter/department is a new view — drop manual toggles.
   useEffect(() => {
-    setManualOverride(new Map());
+    setOpenGroups(new Set(["pending"]));
+    setOpenEmployees(new Map());
   }, [data.active_year, data.active_period, data.status_filter, data.active_department_id]);
 
-  function toggle(employeeId, isCurrentlyOpen) {
-    setManualOverride((prev) => new Map(prev).set(employeeId, !isCurrentlyOpen));
+  function toggleGroup(bucket) {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(bucket)) next.delete(bucket);
+      else next.add(bucket);
+      return next;
+    });
   }
 
-  const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return Array.from(groups.entries())
-      .map(([employeeId, group]) => ({
-        employeeId,
-        group,
-        name: group[0].employee.name,
-        department: group[0].department?.name ?? null,
-        pendingCount: group.filter((s) => pendingStatuses.includes(s.status)).length,
-      }))
-      .filter(
-        (r) => !q || r.name.toLowerCase().includes(q) || r.department?.toLowerCase().includes(q)
-      )
-      .sort((a, b) => {
-        // People needing action first, then alphabetical within each group —
-        // this is a queue to work through, not just a report to read.
-        if ((b.pendingCount > 0) !== (a.pendingCount > 0)) return b.pendingCount > 0 ? 1 : -1;
-        return a.name.localeCompare(b.name);
-      });
-  }, [groups, query, pendingStatuses]);
+  function toggleEmployee(bucket, employeeId, isCurrentlyOpen) {
+    const key = `${bucket}:${employeeId}`;
+    setOpenEmployees((prev) => new Map(prev).set(key, !isCurrentlyOpen));
+  }
+
+  const totalPeople = BUCKET_ORDER.reduce((n, b) => n + buckets[b].length, 0);
+  const totalItems = BUCKET_ORDER.reduce((n, b) => n + buckets[b].reduce((m, e) => m + e.items.length, 0), 0);
+
+  // The pending bucket reuses the role's accent (amber for dept admins, blue
+  // for tenant admins) so each dashboard keeps its identity.
+  const pendingMeta = { title: "Needs your review", bar: pendingDotClass, badge: pendingChipClass, dot: pendingDotClass };
+  const groupMeta = (bucket) => (bucket === "pending" ? pendingMeta : BUCKET_STYLE[bucket]);
 
   return (
     <div>
@@ -124,105 +177,138 @@ export default function TeamReviewBoard({
               />
             </div>
             <span className="shrink-0 text-xs text-slate-400 tabular-nums">
-              {rows.length} of {groups.size}
+              {totalPeople} {totalPeople === 1 ? "person" : "people"} · {totalItems} {totalItems === 1 ? "item" : "items"}
             </span>
           </div>
 
-          {rows.length === 0 ? (
+          {totalPeople === 0 ? (
             <EmptyState title="No matches" message={`No one matches "${query}".`} />
           ) : (
-            rows.map(({ employeeId, group, name: employeeName, department, pendingCount }) => {
-              const isOpen = manualOverride.get(employeeId) ?? pendingCount > 0;
-              const first = group[0];
+            BUCKET_ORDER.map((bucket) => {
+              const emps = buckets[bucket];
+              const itemCount = emps.reduce((n, e) => n + e.items.length, 0);
+              // Always show the pending bucket (its empty state is the "all
+              // clear" confirmation); hide other buckets when empty.
+              if (bucket !== "pending" && emps.length === 0) return null;
+              const meta = groupMeta(bucket);
+              const isGroupOpen = openGroups.has(bucket);
               return (
                 <section
-                  key={employeeId}
-                  className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden mb-4"
+                  key={bucket}
+                  className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden mb-4"
                 >
                   <button
                     type="button"
-                    onClick={() => toggle(employeeId, isOpen)}
-                    aria-expanded={isOpen}
-                    className="flex w-full items-center justify-between gap-3 px-6 py-4 text-left hover:bg-slate-50/60 transition"
+                    onClick={() => toggleGroup(bucket)}
+                    aria-expanded={isGroupOpen}
+                    className="flex w-full items-center gap-3 px-5 py-4 text-left hover:bg-slate-50/60 transition"
                   >
-                    <div className="flex min-w-0 items-center gap-3.5">
-                      <div className="h-10 w-10 shrink-0 rounded-full bg-gradient-to-br from-brand-500 to-brand-700 text-white flex items-center justify-center text-sm font-semibold shadow-sm">
-                        {employeeName[0]?.toUpperCase()}
-                      </div>
-                      <div className="min-w-0">
-                        <h3 className="text-[15px] font-semibold text-slate-900 tracking-tight truncate">
-                          {employeeName}
-                        </h3>
-                        <p className="text-xs text-slate-500 truncate">
-                          {showDepartmentColumn && `${department ?? "Unassigned"} · `}
-                          {group.length} metric{group.length !== 1 ? "s" : ""}
-                          {!isOpen && data.employee_combined?.[String(employeeId)]?.attainment != null && (
-                            <> · {data.employee_combined[String(employeeId)].attainment.toFixed(0)}% combined</>
-                          )}
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      {pendingCount > 0 && (
-                        <span
-                          className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ring-1 ring-inset ${pendingChipClass}`}
-                        >
-                          <span className={`h-1.5 w-1.5 rounded-full ${pendingDotClass}`}></span>
-                          {pendingCount} {pendingLabel}
+                    <span className={`h-8 w-1.5 shrink-0 rounded-full ${meta.bar}`} aria-hidden="true" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-[15px] font-semibold text-slate-900 tracking-tight">
+                        {meta.title}
+                      </span>
+                      {bucket === "pending" && emps.length === 0 && (
+                        <span className="block text-xs text-slate-500 mt-0.5">
+                          Nothing waiting for you. Nice work.
                         </span>
                       )}
-                      {pendingCount === 0 && (
-                        <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-50 px-3 py-1.5 text-xs font-medium text-slate-400 ring-1 ring-inset ring-slate-200">
-                          All reviewed
-                        </span>
-                      )}
-                      <svg
-                        className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${isOpen ? "rotate-180" : ""}`}
-                        fill="none"
-                        viewBox="0 0 24 24"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                      >
-                        <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-                      </svg>
-                    </div>
+                    </span>
+                    <span
+                      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ring-1 ring-inset ${meta.badge}`}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
+                      {itemCount} {itemCount === 1 ? "item" : "items"}
+                    </span>
+                    <svg
+                      className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${isGroupOpen ? "rotate-180" : ""}`}
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                    >
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                    </svg>
                   </button>
 
-                  {isOpen && (
+                  {isGroupOpen && (
                     <div className="border-t border-slate-100">
-                      <div className="flex items-center justify-between gap-3 px-6 py-3 bg-slate-50/60 border-b border-slate-100">
-                        <div className="flex-1">
-                          <CombinedScoreCard combined={data.employee_combined[String(employeeId)]} />
-                        </div>
-                        <Link
-                          to={`/admin/kpi-trend/${first.employee.id}`}
-                          title={`View ${employeeName}'s KPI trend`}
-                          className="ml-4 inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-800 hover:border-slate-300 transition"
-                        >
-                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="M3 3v16.5A1.5 1.5 0 0 0 4.5 21H21M7 15.5 11 10l3 3 5.5-6.5"
-                            />
-                          </svg>
-                          KPI Trend
-                        </Link>
-                      </div>
+                      {emps.map(({ employee, department, items }) => {
+                        const empKey = `${bucket}:${employee.id}`;
+                        const isEmpOpen = openEmployees.get(empKey) ?? bucket === "pending";
+                        return (
+                          <div key={employee.id} className="border-b border-slate-100 last:border-b-0">
+                            <button
+                              type="button"
+                              onClick={() => toggleEmployee(bucket, employee.id, isEmpOpen)}
+                              aria-expanded={isEmpOpen}
+                              className="flex w-full items-center gap-3 px-5 py-3.5 text-left hover:bg-slate-50/60 transition"
+                            >
+                              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-brand-500 to-brand-700 text-xs font-semibold text-white">
+                                {employee.name[0]?.toUpperCase()}
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm font-semibold text-slate-900">
+                                  {employee.name}
+                                </span>
+                                <span className="block truncate text-xs text-slate-500">
+                                  {showDepartmentColumn && `${department ?? "Unassigned"} · `}
+                                  {items.length} {items.length === 1 ? "metric" : "metrics"}
+                                  {data.employee_combined?.[String(employee.id)]?.attainment != null && (
+                                    <> · {data.employee_combined[String(employee.id)].attainment.toFixed(0)}% combined</>
+                                  )}
+                                </span>
+                              </span>
+                              <svg
+                                className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${isEmpOpen ? "rotate-90" : ""}`}
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                              >
+                                <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+                              </svg>
+                            </button>
 
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 p-6">
-                        {group.map((s) => (
-                          <KpiCard
-                            key={s.id}
-                            submission={s}
-                            onDeptSave={onDeptSave}
-                            onDeptApprove={onDeptApprove}
-                            onFinalApprove={onFinalApprove}
-                            onOverride={onOverride}
-                            onReject={onReject}
-                          />
-                        ))}
-                      </div>
+                            {isEmpOpen && (
+                              <div className="bg-slate-50/50 px-5 pb-5 pt-1">
+                                <div className="mb-3 flex items-center justify-between gap-3">
+                                  <div className="min-w-0 flex-1">
+                                    <CombinedScoreCard combined={data.employee_combined?.[String(employee.id)]} />
+                                  </div>
+                                  <Link
+                                    to={`/admin/kpi-trend/${employee.id}`}
+                                    title={`View ${employee.name}'s KPI trend`}
+                                    className="ml-3 inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 hover:text-slate-800 hover:border-slate-300 transition"
+                                  >
+                                    <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+                                      <path
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        d="M3 3v16.5A1.5 1.5 0 0 0 4.5 21H21M7 15.5 11 10l3 3 5.5-6.5"
+                                      />
+                                    </svg>
+                                    KPI Trend
+                                  </Link>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                                  {items.map((s) => (
+                                    <KpiCard
+                                      key={s.id}
+                                      submission={s}
+                                      onDeptSave={onDeptSave}
+                                      onDeptApprove={onDeptApprove}
+                                      onFinalApprove={onFinalApprove}
+                                      onOverride={onOverride}
+                                      onReject={onReject}
+                                    />
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
                 </section>

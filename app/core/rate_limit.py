@@ -24,3 +24,8 @@ limiter = Limiter(key_func=_client_ip_key)
 # Brute-force protection for login endpoints: 10 attempts per minute per IP.
 # Legitimate users retrying a typo'd password stay well under this.
 LOGIN_RATE_LIMIT = "10/minute"
+
+# CPU/memory-heavy endpoints: parsing a workbook and fanning out emails are
+# expensive, so cap how often each client can trigger them.
+UPLOAD_RATE_LIMIT = "5/minute"
+REMINDER_RATE_LIMIT = "5/minute"

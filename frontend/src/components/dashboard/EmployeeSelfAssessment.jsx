@@ -10,6 +10,24 @@ import { getErrorMessage } from "../../api/errors";
 import { useToast } from "../../context/ToastContext";
 import { useAuth } from "../../context/AuthContext";
 
+// Shown when the initial data load fails (instead of an endless spinner).
+// Lets the user retry the failed request.
+function LoadError({ message, onRetry }) {
+  return (
+    <div className="rounded-2xl bg-white shadow-sm border border-slate-200 px-8 py-10 max-w-md w-full mx-auto text-center">
+      <p className="text-sm font-semibold text-red-600">Couldn't load data</p>
+      <p className="mt-2 text-sm text-slate-500">{message}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+
 const TARGET_EXCEEDED_MESSAGE = "Target ထက်ကျော်နေပါ၍ပြန်ထည့်ရန်";
 const WEIGHT_TOTAL_MESSAGE = "Weight စုစုပေါင်းသည် 100% ဖြစ်ရပါမည်။ (100 ထက် ကျော်လွန်နေပါသည် သို့မဟုတ် 100 မပြည့်သေးပါ)";
 
@@ -20,6 +38,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   const [data, setData] = useState(null);
   const [scores, setScores] = useState({});
   const [error, setError] = useState(null);
+  const [loadError, setLoadError] = useState(null);
   const [invalidScoreId, setInvalidScoreId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [params, setParams] = useState({});
@@ -34,6 +53,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
       .then((d) => {
         if (loadIdRef.current !== requestId) return;
         setData(d);
+        setLoadError(null);
         const initial = {};
         d.submissions.forEach((s) => {
           initial[s.id] = s.self_score ?? "";
@@ -42,7 +62,9 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
       })
       .catch((err) => {
         if (loadIdRef.current !== requestId) return;
-        toast.error(getErrorMessage(err));
+        const message = getErrorMessage(err);
+        setLoadError(message);
+        toast.error(message);
       });
   }
 
@@ -51,7 +73,10 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  if (!data) return <PageLoading />;
+  if (!data) {
+    if (loadError) return <LoadError message={loadError} onRetry={() => load(params)} />;
+    return <PageLoading />;
+  }
 
   // Editable when: this is the exact current month AND submission is still a draft
   // or was rejected (rejected KPIs can be corrected and resubmitted).

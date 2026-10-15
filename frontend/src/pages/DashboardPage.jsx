@@ -11,9 +11,28 @@ import { getDashboard } from "../api/dashboard";
 import { deptApprove, deptSave, finalApprove, overrideScore, rejectSubmission } from "../api/kpi";
 import { getErrorMessage } from "../api/errors";
 
+// Shown when the initial data load fails (instead of an endless spinner).
+// Lets the user retry the failed request.
+function LoadError({ message, onRetry }) {
+  return (
+    <div className="rounded-2xl bg-white shadow-sm border border-slate-200 px-8 py-10 max-w-md w-full mx-auto text-center">
+      <p className="text-sm font-semibold text-red-600">Couldn't load data</p>
+      <p className="mt-2 text-sm text-slate-500">{message}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+
 function DeptAdminDashboard({ initialParams }) {
   const toast = useToast();
   const [data, setData] = useState(null);
+  const [loadError, setLoadError] = useState(null);
   const [params, setParams] = useState(initialParams);
   const loadIdRef = useRef(0);
 
@@ -26,10 +45,13 @@ function DeptAdminDashboard({ initialParams }) {
       .then((d) => {
         if (loadIdRef.current !== requestId) return;
         setData(d);
+        setLoadError(null);
       })
       .catch((err) => {
         if (loadIdRef.current !== requestId) return;
-        toast.error(getErrorMessage(err));
+        const message = getErrorMessage(err);
+        setLoadError(message);
+        toast.error(message);
       });
   }
 
@@ -42,7 +64,10 @@ function DeptAdminDashboard({ initialParams }) {
     load(params);
   }
 
-  if (!data) return <PageLoading />;
+  if (!data) {
+    if (loadError) return <LoadError message={loadError} onRetry={() => load(params)} />;
+    return <PageLoading />;
+  }
 
   async function handleDeptSave(id, dept_score, remarks) {
     try {
@@ -93,6 +118,7 @@ function DeptAdminDashboard({ initialParams }) {
 function TenantAdminDashboard({ user, initialParams }) {
   const toast = useToast();
   const [data, setData] = useState(null);
+  const [loadError, setLoadError] = useState(null);
   const [params, setParams] = useState(initialParams);
   const loadIdRef = useRef(0);
 
@@ -103,10 +129,13 @@ function TenantAdminDashboard({ user, initialParams }) {
       .then((d) => {
         if (loadIdRef.current !== requestId) return;
         setData(d);
+        setLoadError(null);
       })
       .catch((err) => {
         if (loadIdRef.current !== requestId) return;
-        toast.error(getErrorMessage(err));
+        const message = getErrorMessage(err);
+        setLoadError(message);
+        toast.error(message);
       });
   }
 
@@ -119,7 +148,10 @@ function TenantAdminDashboard({ user, initialParams }) {
     load(params);
   }
 
-  if (!data) return <PageLoading />;
+  if (!data) {
+    if (loadError) return <LoadError message={loadError} onRetry={() => load(params)} />;
+    return <PageLoading />;
+  }
 
   if (data.is_fresh_install) {
     return <FreshInstallWelcome userName={user.name} />;

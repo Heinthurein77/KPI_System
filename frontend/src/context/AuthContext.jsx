@@ -9,16 +9,12 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const token = localStorage.getItem("access_token");
-    if (!token) {
-      setLoading(false);
-      return;
-    }
+    // Session lives in the httpOnly cookie now; if it's missing/invalid the
+    // server 401s and we land logged-out.
     authApi
       .me()
       .then(setUser)
       .catch(() => {
-        localStorage.removeItem("access_token");
         localStorage.removeItem("tenant_slug");
         setUser(null);
       })
@@ -28,7 +24,7 @@ export function AuthProvider({ children }) {
   async function login(orgSlug, email, password) {
     try {
       const data = await authApi.login(orgSlug, email, password);
-      localStorage.setItem("access_token", data.access_token);
+      // The server sets the session cookie; the token never touches JS.
       setUser(data.user);
       return { ok: true };
     } catch (err) {
@@ -39,7 +35,6 @@ export function AuthProvider({ children }) {
   async function platformLogin(email, password) {
     try {
       const data = await authApi.platformLogin(email, password);
-      localStorage.setItem("access_token", data.access_token);
       setUser(data.user);
       return { ok: true };
     } catch (err) {
@@ -47,8 +42,12 @@ export function AuthProvider({ children }) {
     }
   }
 
-  function logout() {
-    localStorage.removeItem("access_token");
+  async function logout() {
+    try {
+      await authApi.logout();
+    } catch {
+      // Cookie already gone/expired — still clear local state.
+    }
     localStorage.removeItem("tenant_slug");
     setUser(null);
   }

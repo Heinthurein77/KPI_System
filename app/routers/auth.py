@@ -1,9 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.core.deps import get_current_user
 from app.core.rate_limit import LOGIN_RATE_LIMIT, limiter
-from app.core.security import DUMMY_PASSWORD_HASH, create_session_token, hash_password, verify_password
+from app.core.security import (
+    DUMMY_PASSWORD_HASH,
+    clear_session_cookie,
+    create_session_token,
+    hash_password,
+    set_session_cookie,
+    verify_password,
+)
 from app.core.tenant import get_current_tenant
 from app.database import get_db
 from app.models.tenant import Tenant
@@ -18,6 +25,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 @limiter.limit(LOGIN_RATE_LIMIT)
 def login(
     request: Request,
+    response: Response,
     payload: LoginRequest,
     db: Session = Depends(get_db),
     tenant: Tenant = Depends(get_current_tenant),
@@ -36,8 +44,17 @@ def login(
     if user is None or not user.is_active or not password_ok:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
 
-    token = create_session_token(user.id, tenant_id=tenant.id)
+    token = create_session_token(user.id, tenant_id=tenant.id, token_version=user.token_version or 0)
+    set_session_cookie(response, token)
     return LoginResponse(access_token=token, user=user)
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+def logout(response: Response):
+    """Clear the session cookie. The JWT itself is stateless, so logout is
+    cookie removal; server-side invalidation happens via token_version on
+    password change."""
+    clear_session_cookie(response)
 
 
 @router.get("/me", response_model=UserOut)
@@ -56,4 +73,5 @@ def change_password(
 
     user.password_hash = hash_password(payload.new_password)
     user.must_change_password = False
+    user.token_version = (user.token_version or 0) + 1
     db.commit()

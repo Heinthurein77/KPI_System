@@ -6,17 +6,43 @@ import { createDepartment, deleteDepartment, listDepartments } from "../../api/a
 import { getErrorMessage } from "../../api/errors";
 import { useToast } from "../../context/ToastContext";
 
+// Shown when the initial data load fails (instead of an endless spinner).
+// Lets the user retry the failed request.
+function LoadError({ message, onRetry }) {
+  return (
+    <div className="rounded-2xl bg-white shadow-sm border border-slate-200 px-8 py-10 max-w-md w-full mx-auto text-center">
+      <p className="text-sm font-semibold text-red-600">Couldn't load data</p>
+      <p className="mt-2 text-sm text-slate-500">{message}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+
 export default function DepartmentsPage() {
   const toast = useToast();
   const [departments, setDepartments] = useState(null);
+  const [loadError, setLoadError] = useState(null);
   const [name, setName] = useState("");
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
 
   function load() {
     listDepartments()
-      .then(setDepartments)
-      .catch((err) => toast.error(getErrorMessage(err)));
+      .then((d) => {
+        setDepartments(d);
+        setLoadError(null);
+      })
+      .catch((err) => {
+        const message = getErrorMessage(err);
+        setLoadError(message);
+        toast.error(message);
+      });
   }
 
   // `toast` is a plain object re-created every render (not memoized by
@@ -51,7 +77,13 @@ export default function DepartmentsPage() {
     }
   }
 
-  if (!departments) return <AppShell title="Departments"><PageLoading /></AppShell>;
+  if (!departments) {
+    return (
+      <AppShell title="Departments">
+        {loadError ? <LoadError message={loadError} onRetry={load} /> : <PageLoading />}
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell title="Departments">

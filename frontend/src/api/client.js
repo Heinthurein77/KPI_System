@@ -22,13 +22,11 @@ if (import.meta.env.VITE_API_BASE_URL === undefined && import.meta.env.PROD) {
   );
 }
 
-const client = axios.create({ baseURL: API_BASE_URL });
+const client = axios.create({ baseURL: API_BASE_URL, withCredentials: true });
 
 client.interceptors.request.use((config) => {
-  const token = localStorage.getItem("access_token");
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
+  // Session auth travels in the httpOnly cookie (set by the server on login),
+  // so no Authorization header is needed — and JS can never read the token.
   // Identifies which tenant a request belongs to (see app/core/tenant.py).
   // Unset for platform-admin sessions (/platform/*), which aren't tenant-scoped.
   const tenantSlug = localStorage.getItem("tenant_slug");
@@ -47,14 +45,15 @@ client.interceptors.response.use(
       error.message = `Could not reach the API at ${API_BASE_URL}. Check the base URL and CORS configuration.`;
     } else if (error.response.status === 401) {
       // Session expired, token revoked, or account disabled mid-session: drop
-      // the stale credentials and send the user back to sign in. Skip when the
-      // failing request is itself a login attempt or we're already on a login
-      // page, so failed logins still show their error message.
+      // the tenant context and send the user back to sign in. The session
+      // cookie itself is httpOnly, so only the server can clear it — a fresh
+      // login replaces it. Skip when the failing request is itself a login
+      // attempt or we're already on a login page, so failed logins still
+      // show their error message.
       const url = error.config?.url || "";
       const onLoginPage = /\/login\/?$/.test(window.location.pathname);
       const isLoginRequest = /\/auth\/login\/?$/.test(url);
       if (!onLoginPage && !isLoginRequest) {
-        localStorage.removeItem("access_token");
         localStorage.removeItem("tenant_slug");
         window.location.href = "/login";
       }

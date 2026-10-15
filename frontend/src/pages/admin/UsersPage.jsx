@@ -8,6 +8,24 @@ import { useToast } from "../../context/ToastContext";
 import { createUser, deleteUser, listUsers, resetUserPassword, toggleUserActive } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
 
+// Shown when the initial data load fails (instead of an endless spinner).
+// Lets the user retry the failed request.
+function LoadError({ message, onRetry }) {
+  return (
+    <div className="rounded-2xl bg-white shadow-sm border border-slate-200 px-8 py-10 max-w-md w-full mx-auto text-center">
+      <p className="text-sm font-semibold text-red-600">Couldn't load data</p>
+      <p className="mt-2 text-sm text-slate-500">{message}</p>
+      <button
+        type="button"
+        onClick={onRetry}
+        className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
+      >
+        Try again
+      </button>
+    </div>
+  );
+}
+
 function titleCase(role) {
   return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -18,6 +36,7 @@ export default function UsersPage() {
   const isDeptAdmin = currentUser.role === "dept_admin";
 
   const [data, setData] = useState(null);
+  const [loadError, setLoadError] = useState(null);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -36,8 +55,15 @@ export default function UsersPage() {
 
   function load() {
     listUsers()
-      .then(setData)
-      .catch((err) => toast.error(getErrorMessage(err)));
+      .then((d) => {
+        setData(d);
+        setLoadError(null);
+      })
+      .catch((err) => {
+        const message = getErrorMessage(err);
+        setLoadError(message);
+        toast.error(message);
+      });
   }
 
   // `toast` is a plain object re-created every render (not memoized by
@@ -135,7 +161,13 @@ export default function UsersPage() {
     }
   }
 
-  if (!data) return <AppShell title={isDeptAdmin ? "My Team" : "Users"}><PageLoading /></AppShell>;
+  if (!data) {
+    return (
+      <AppShell title={isDeptAdmin ? "My Team" : "Users"}>
+        {loadError ? <LoadError message={loadError} onRetry={load} /> : <PageLoading />}
+      </AppShell>
+    );
+  }
 
   const q = searchQuery.trim().toLowerCase();
   const filteredUsers = data.users.filter((u) => {

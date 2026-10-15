@@ -240,6 +240,7 @@ def create_custom_employee_kpi(
     year: int,
     period: str,
     is_recurring: bool = True,
+    commit: bool = True,
 ) -> KPISubmission:
     """Dept Admin creates a one-off (or recurring) custom metric for a single employee.
 
@@ -296,7 +297,8 @@ def create_custom_employee_kpi(
         f"Custom KPI created for {employee.name}: target={fmt_score(target)}, weight={fmt_score(weight)}.{recurring_note}",
         department_id=employee.department_id,
     )
-    db.commit()
+    if commit:
+        db.commit()
     return submission
 
 

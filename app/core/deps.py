@@ -1,6 +1,6 @@
 from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
-from app.core.security import decode_session_token
+from app.core.security import SESSION_COOKIE_NAME, decode_session_token
 from app.database import get_db
 from app.models.tenant import TenantStatus
 from app.models.user import User, UserRole
@@ -12,6 +12,15 @@ class NotAuthenticated(HTTPException):
         super().__init__(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
 
 
+def _session_token(request: Request) -> str | None:
+    # httpOnly session cookie first (the SPA's normal auth path — immune to
+    # XSS token theft), then the Authorization header for API clients/tests.
+    cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
+    if cookie_token:
+        return cookie_token
+    return _bearer_token(request)
+
+
 def _bearer_token(request: Request) -> str | None:
     auth_header = request.headers.get("Authorization")
     if not auth_header or not auth_header.lower().startswith("bearer "):
@@ -20,7 +29,7 @@ def _bearer_token(request: Request) -> str | None:
 
 
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
-    token = _bearer_token(request)
+    token = _session_token(request)
     if not token:
         raise NotAuthenticated()
 
@@ -30,6 +39,11 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
 
     user = db.get(User, claims.user_id)
     if user is None or not user.is_active:
+        raise NotAuthenticated()
+
+    # A password change/reset bumps user.token_version; tokens issued before
+    # the bump carry the old version and are rejected here.
+    if claims.token_version != (user.token_version or 0):
         raise NotAuthenticated()
 
     resolved_tenant = getattr(request.state, "tenant", None)

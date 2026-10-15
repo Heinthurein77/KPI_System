@@ -5,11 +5,12 @@ server's cron. This endpoint lets a tenant admin fire the same logic on demand
 for their own tenant.
 """
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_tenant_admin
+from app.core.rate_limit import REMINDER_RATE_LIMIT, limiter
 from app.database import get_db
 from app.models.user import User
 from app.services import deadline_reminder_service
@@ -26,7 +27,8 @@ class DeadlineReminderOut(BaseModel):
 
 
 @router.post("/deadline", response_model=DeadlineReminderOut, dependencies=[Depends(require_tenant_admin)])
-def trigger_deadline_reminders(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+@limiter.limit(REMINDER_RATE_LIMIT)
+def trigger_deadline_reminders(request: Request, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
     """Send deadline reminders to employees of the caller's tenant.
 
     Safe to call repeatedly: each user gets at most one reminder per period.

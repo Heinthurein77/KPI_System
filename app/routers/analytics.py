@@ -124,12 +124,12 @@ def analytics_overview(
 
     submissions = _period_submissions(db, user.tenant_id, year, period)
 
-    # Per-employee: submitted if ANY of their submissions left DRAFT.
+    # Per-employee aggregation: an employee with 5 KPIs gets ONE score (the
+    # mean of their submitted effective scores), so they cast exactly one
+    # bucket vote and one department vote — previously each submission voted
+    # separately, overweighting employees with more KPIs.
+    employee_scores: dict[int, list[float]] = {}
     submitted_employees: set[int] = set()
-    dept_scores: dict[int | None, list[float]] = {}
-    buckets: dict[str, int] = {label: 0 for label in BUCKET_LABELS}
-    all_scores: list[float] = []
-
     for sub in submissions:
         if sub.employee_id not in employees:
             continue
@@ -137,9 +137,16 @@ def analytics_overview(
             submitted_employees.add(sub.employee_id)
             score = sub.effective_score
             if score is not None:
-                all_scores.append(score)
-                buckets[_bucket(score)] += 1
-                dept_scores.setdefault(sub.department_id, []).append(score)
+                employee_scores.setdefault(sub.employee_id, []).append(score)
+
+    buckets: dict[str, int] = {label: 0 for label in BUCKET_LABELS}
+    all_scores: list[float] = []
+    dept_scores: dict[int | None, list[float]] = {}
+    for emp_id, scores in employee_scores.items():
+        mean_score = sum(scores) / len(scores)
+        all_scores.append(mean_score)
+        buckets[_bucket(mean_score)] += 1
+        dept_scores.setdefault(employees[emp_id].department_id, []).append(mean_score)
 
     employee_count = len(employees)
     submitted_count = len(submitted_employees)

@@ -342,11 +342,11 @@ def create_user(
     else:
         resolved_department_id = None
 
-    # A Dept Admin without a department breaks every department-scoped view:
-    # their KPI never appears under any department filter, and their team
-    # queue can't resolve. Require it at creation.
-    if payload.role == UserRole.DEPT_ADMIN and resolved_department_id is None:
-        raise HTTPException(400, "Department Admins must belong to a department.")
+    # A Dept Admin or Employee without a department breaks every
+    # department-scoped view: their KPI never appears under any department
+    # filter, and their team queue can't resolve. Require it at creation.
+    if payload.role in (UserRole.DEPT_ADMIN, UserRole.EMPLOYEE) and resolved_department_id is None:
+        raise HTTPException(400, "Department Admins and Employees must belong to a department.")
 
     target = User(
         tenant_id=user.tenant_id,
@@ -397,6 +397,7 @@ def reset_user_password(
 
     target.password_hash = hash_password(payload.password)
     target.must_change_password = True
+    target.token_version = (target.token_version or 0) + 1
     audit_service.log(
         db, user, "user_password_reset", "user", target.id, target.name,
         f"Password reset by {user.name} ({user.role.value}).",
@@ -421,8 +422,16 @@ def edit_user(
     if target.id == user.id and payload.role != UserRole.TENANT_ADMIN:
         raise HTTPException(400, "You can't demote your own account while signed in as it.")
 
+    new_email = payload.email.strip().lower()
+    if new_email != target.email:
+        # Same duplicate check as create_user: the DB unique constraint would
+        # otherwise surface as an unhandled 500 (IntegrityError).
+        clash = db.scalar(select(User).where(User.tenant_id == user.tenant_id, User.email == new_email))
+        if clash is not None:
+            raise HTTPException(400, "A user with this email already exists.")
+
     target.name = payload.name.strip()
-    target.email = payload.email.strip().lower()
+    target.email = new_email
     target.role = payload.role
     target.position = payload.position.strip() if payload.position else None
     if payload.department_id and payload.role != UserRole.TENANT_ADMIN:
@@ -431,13 +440,15 @@ def edit_user(
         ).id
     else:
         target.department_id = None
-    # Same invariant as create_user: a Dept Admin must always belong to a
-    # department, otherwise their KPI vanishes from department-scoped views.
-    if target.role == UserRole.DEPT_ADMIN and target.department_id is None:
-        raise HTTPException(400, "Department Admins must belong to a department.")
+    # Same invariant as create_user: a Dept Admin or Employee must always
+    # belong to a department, otherwise their KPI vanishes from
+    # department-scoped views.
+    if target.role in (UserRole.DEPT_ADMIN, UserRole.EMPLOYEE) and target.department_id is None:
+        raise HTTPException(400, "Department Admins and Employees must belong to a department.")
     if payload.password:
         target.password_hash = hash_password(payload.password)
         target.must_change_password = True
+        target.token_version = (target.token_version or 0) + 1
     db.commit()
     return target
 

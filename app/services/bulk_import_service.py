@@ -48,7 +48,7 @@ from sqlalchemy.orm import Session
 from app.core.security import hash_password
 from app.models.tenant import Tenant
 from app.models.user import User, UserRole
-from app.services import email_service, kpi_service
+from app.services import audit_service, email_service, kpi_service
 
 SHEET_IMPORT = "Import"
 
@@ -58,6 +58,9 @@ IMPORT_HEADERS = ("name", "email", "position", "metric", "target", "weight")
 DEFAULT_PASSWORD = "password"
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Zip-bomb / abuse guard: reject workbooks with more data rows than this.
+MAX_IMPORT_ROWS = 5000
 
 MONTH_NAMES = (
     "January", "February", "March", "April", "May", "June",
@@ -143,6 +146,16 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
     rows = list(ws.iter_rows(values_only=True))
     if not rows:
         parsed.errors.append(ImportRowError(sheet=sheet, row=0, message="The sheet is empty."))
+        return parsed
+    # Zip-bomb guard: a small .xlsx can expand into millions of rows. Reject
+    # before validating so a crafted file can't exhaust worker memory.
+    if len(rows) > MAX_IMPORT_ROWS:
+        parsed.errors.append(
+            ImportRowError(
+                sheet=sheet, row=0,
+                message=f"Too many rows (max {MAX_IMPORT_ROWS}). Split the file and import in parts.",
+            )
+        )
         return parsed
     header = [_norm_header(v) for v in rows[0]]
     if header[:6] != list(IMPORT_HEADERS):
@@ -239,9 +252,11 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
 def execute_import(db: Session, dept_admin: User, parsed: ParsedImport) -> ImportResult:
     """Create users + recurring KPI templates + draft submissions.
 
-    ``parsed`` must have no errors. Users are created first (one commit);
-    each KPI row then goes through ``kpi_service.create_custom_employee_kpi``
-    exactly as a manual assignment would.
+    ``parsed`` must have no errors. The whole import runs in a single
+    transaction: users, templates, submissions and the audit entry are
+    committed together at the end, so a mid-import failure rolls everything
+    back instead of leaving half-created users. Welcome emails go out only
+    after the commit succeeds.
     """
     if not parsed.ok:
         raise ValueError("Cannot execute an import that has validation errors.")
@@ -252,46 +267,65 @@ def execute_import(db: Session, dept_admin: User, parsed: ParsedImport) -> Impor
     year, period = today.year, MONTH_NAMES[today.month - 1]
 
     password_hash = hash_password(DEFAULT_PASSWORD)
-    created_users: dict[str, User] = {}
-    for imp_user in parsed.users:
-        user = User(
-            tenant_id=dept_admin.tenant_id,
-            name=imp_user.name,
-            email=imp_user.email,
-            password_hash=password_hash,
-            role=UserRole.EMPLOYEE,
+    try:
+        created_users: dict[str, User] = {}
+        for imp_user in parsed.users:
+            user = User(
+                tenant_id=dept_admin.tenant_id,
+                name=imp_user.name,
+                email=imp_user.email,
+                password_hash=password_hash,
+                role=UserRole.EMPLOYEE,
+                department_id=dept_admin.department_id,
+                position=imp_user.position,
+                is_active=True,
+                must_change_password=True,
+            )
+            db.add(user)
+            created_users[imp_user.email] = user
+        db.flush()
+        for user in created_users.values():
+            db.refresh(user)
+
+        kpis_created = 0
+        for kpi in parsed.kpis:
+            employee = created_users[kpi.email]
+            kpi_service.create_custom_employee_kpi(
+                db,
+                dept_admin,
+                employee,
+                kpi.metric_name,
+                kpi.target,
+                kpi.weight,
+                year,
+                period,
+                is_recurring=True,
+                commit=False,
+            )
+            kpis_created += 1
+
+        # Batch-level audit trail: who imported whom, in one entry.
+        audit_service.log(
+            db,
+            dept_admin,
+            "bulk_import",
+            "bulk_import",
+            0,
+            f"{len(created_users)} users, {kpis_created} KPIs",
+            f"Bulk import by {dept_admin.name}: "
+            + ", ".join(sorted(created_users)),
             department_id=dept_admin.department_id,
-            position=imp_user.position,
-            is_active=True,
-            must_change_password=True,
         )
-        db.add(user)
-        created_users[imp_user.email] = user
-    db.commit()
-    for user in created_users.values():
-        db.refresh(user)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     # Welcome emails with login details (best-effort; skipped when SMTP unconfigured).
     tenant = db.get(Tenant, dept_admin.tenant_id)
     org_name = tenant.name if tenant else None
     for imp_user in parsed.users:
         email_service.send_welcome_email(imp_user.email, imp_user.name, DEFAULT_PASSWORD, org_name=org_name)
-
-    kpis_created = 0
-    for kpi in parsed.kpis:
-        employee = created_users[kpi.email]
-        kpi_service.create_custom_employee_kpi(
-            db,
-            dept_admin,
-            employee,
-            kpi.metric_name,
-            kpi.target,
-            kpi.weight,
-            year,
-            period,
-            is_recurring=True,
-        )
-        kpis_created += 1
 
     return ImportResult(
         users_created=len(created_users),

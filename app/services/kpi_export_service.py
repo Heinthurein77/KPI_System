@@ -26,10 +26,19 @@ _LABEL_FONT = Font(bold=True, color="334155")
 _THIN_BORDER = Border(bottom=Side(style="thin", color="CBD5E1"))
 
 
+def _safe(value: object) -> object:
+    """Neutralize Excel formula injection: a string starting with =, +, - or @
+    is treated as a formula by spreadsheet apps, so prefix it with a single
+    quote to force plain-text interpretation."""
+    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@"):
+        return "'" + value
+    return value
+
+
 def _write_summary_cell(sheet: Worksheet, label_cell: str, value_cell: str, label: str, value: object) -> None:
     sheet[label_cell] = label
     sheet[label_cell].font = _LABEL_FONT
-    sheet[value_cell] = value
+    sheet[value_cell] = _safe(value)
 
 
 def build_employee_kpi_report(
@@ -98,7 +107,7 @@ def build_employee_kpi_report(
             submission.remarks or "–",  # new column — fallback "–" when empty/null
         ]
         for column_number, value in enumerate(values, start=1):
-            sheet.cell(row=row_number, column=column_number, value=value)
+            sheet.cell(row=row_number, column=column_number, value=_safe(value))
         if row_number % 2 == 0:
             for cell in sheet[row_number]:
                 cell.fill = _ALTERNATE_FILL
@@ -192,7 +201,7 @@ def _write_annual_month_sheet(
                 submission.remarks or "–",  # new column — fallback "–" when empty/null
             ]
             for column_number, value in enumerate(values, start=1):
-                sheet.cell(row=row_number, column=column_number, value=value)
+                sheet.cell(row=row_number, column=column_number, value=_safe(value))
             if row_number % 2 == 0:
                 for cell in sheet[row_number]:
                     cell.fill = _ALTERNATE_FILL

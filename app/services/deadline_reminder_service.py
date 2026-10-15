@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.notification import Notification
-from app.models.tenant import Tenant
+from app.models.tenant import Tenant, TenantStatus
 from app.models.user import User, UserRole
 from app.services import email_service, notification_service
 
@@ -114,11 +114,15 @@ def send_deadline_reminders(
     if tenant_id is not None:
         tenant_ids = [tenant_id]
     else:
-        tenant_ids = list(db.scalars(select(Tenant.id)))
+        # Suspended tenants get no reminders.
+        tenant_ids = list(
+            db.scalars(select(Tenant.id).where(Tenant.status == TenantStatus.ACTIVE))
+        )
 
     created_all: list = []
     for tid in tenant_ids:
-        # Active employees with at least one actionable submission this period.
+        # Active employees AND dept admins (who also self-assess) with at
+        # least one actionable submission this period.
         user_ids = db.scalars(
             select(KPISubmission.employee_id)
             .join(User, User.id == KPISubmission.employee_id)
@@ -128,7 +132,7 @@ def send_deadline_reminders(
                 KPISubmission.month_or_quarter == period,
                 KPISubmission.status.in_(ACTIONABLE_STATUSES),
                 User.is_active == True,  # noqa: E712
-                User.role == UserRole.EMPLOYEE,
+                User.role.in_([UserRole.EMPLOYEE, UserRole.DEPT_ADMIN]),
             )
             .distinct()
         ).all()

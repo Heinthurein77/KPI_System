@@ -9,11 +9,12 @@ dept admin accounts manually). Every imported user becomes an EMPLOYEE in the
 importing admin's own department.
 """
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_dept_admin
+from app.core.rate_limit import UPLOAD_RATE_LIMIT, limiter
 from app.database import get_db
 from app.models.user import User, UserRole
 from app.services import bulk_import_service
@@ -54,7 +55,9 @@ def download_import_template(
 
 
 @router.post("/upload")
+@limiter.limit(UPLOAD_RATE_LIMIT)
 async def upload_import(
+    request: Request,
     dry_run: bool = True,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),

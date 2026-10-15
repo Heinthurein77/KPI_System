@@ -1,6 +1,6 @@
 from __future__ import annotations
 import enum
-from sqlalchemy import Enum, ForeignKey, Index, String, Boolean, UniqueConstraint, text
+from sqlalchemy import Enum, ForeignKey, Index, Integer, String, Boolean, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -35,6 +35,9 @@ class User(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     email_notifications: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # Bumped on every password change/reset; session JWTs carry the version
+    # they were issued at, so old tokens stop working immediately.
+    token_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     position: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     tenant_id: Mapped[int | None] = mapped_column(

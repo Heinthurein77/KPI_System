@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from typing import NamedTuple
+from fastapi import Response
 import bcrypt
 import jwt
 from app.core.config import settings
@@ -33,14 +34,46 @@ def verify_password(plain_password: str, password_hash: str) -> bool:
 class SessionClaims(NamedTuple):
     user_id: int
     tenant_id: int | None
+    token_version: int
 
 
-def create_session_token(user_id: int, tenant_id: int | None) -> str:
+#: Name of the httpOnly session cookie. The JWT is readable by JS nowhere —
+#: it lives only in this cookie, so XSS cannot steal sessions.
+SESSION_COOKIE_NAME = "access_token"
+
+
+def set_session_cookie(response: Response, token: str) -> None:
+    """Attach the session JWT as an httpOnly cookie.
+
+    ``secure`` is on in production (HTTPS via Caddy) and off for local
+    sqlite dev so the cookie still works over plain HTTP.
+    """
+    response.set_cookie(
+        SESSION_COOKIE_NAME,
+        token,
+        max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        httponly=True,
+        secure=settings.is_production,
+        samesite="lax",
+        path="/",
+    )
+
+
+def clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/", samesite="lax")
+
+
+def create_session_token(user_id: int, tenant_id: int | None, token_version: int = 0) -> str:
     """tenant_id is None for platform Super Admins, the tenant's id otherwise —
     carried in the token so a request's resolved tenant can be cross-checked
-    against it (see deps.get_current_user) without an extra DB round trip."""
+    against it (see deps.get_current_user) without an extra DB round trip.
+
+    token_version is bumped whenever the password changes; get_current_user
+    rejects tokens whose version no longer matches the user row, so a
+    password change immediately invalidates all existing sessions.
+    """
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload = {"sub": str(user_id), "tenant_id": tenant_id, "exp": expire}
+    payload = {"sub": str(user_id), "tenant_id": tenant_id, "ver": token_version, "exp": expire}
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
@@ -65,4 +98,9 @@ def decode_session_token(token: str) -> SessionClaims | None:
         except (TypeError, ValueError):
             return None
 
-    return SessionClaims(user_id=user_id, tenant_id=tenant_id)
+    try:
+        token_version = int(payload.get("ver", 0))
+    except (TypeError, ValueError):
+        return None
+
+    return SessionClaims(user_id=user_id, tenant_id=tenant_id, token_version=token_version)

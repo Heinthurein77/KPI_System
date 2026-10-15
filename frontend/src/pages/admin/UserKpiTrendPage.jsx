@@ -164,6 +164,11 @@ export default function UserKpiTrendPage() {
   );
 
   function goTo(userId) {
+    // Re-selecting the employee already on screen must be a no-op: clearing
+    // data and navigating to the same URL would leave the page blank forever,
+    // because the [id, year] fetch effect only runs when the param changes.
+    // (Double-clicking the current row in the combobox hit exactly this.)
+    if (String(userId) === String(id)) return;
     setData(null);
     navigate(`/admin/kpi-trend/${userId}`);
   }

@@ -15,11 +15,19 @@ export default function TenantsPage() {
   const [submitting, setSubmitting] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [loadError, setLoadError] = useState(null);
 
   function load() {
     listTenants()
-      .then(setTenants)
-      .catch((err) => toast.error(getErrorMessage(err)));
+      .then((t) => {
+        setTenants(t);
+        setLoadError(null);
+      })
+      .catch((err) => {
+        const message = getErrorMessage(err);
+        setLoadError(message);
+        toast.error(message);
+      });
   }
 
   // `toast` is a plain object re-created every render (not memoized by
@@ -68,7 +76,27 @@ export default function TenantsPage() {
     }
   }
 
-  if (!tenants) return <AppShell title="Tenants"><PageLoading /></AppShell>;
+  if (!tenants) {
+    return (
+      <AppShell title="Tenants">
+        {loadError ? (
+          <div className="rounded-2xl bg-white shadow-sm border border-slate-200 px-8 py-10 max-w-md w-full mx-auto text-center">
+            <p className="text-sm font-semibold text-red-600">Couldn't load data</p>
+            <p className="mt-2 text-sm text-slate-500">{loadError}</p>
+            <button
+              type="button"
+              onClick={load}
+              className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
+            >
+              Try again
+            </button>
+          </div>
+        ) : (
+          <PageLoading />
+        )}
+      </AppShell>
+    );
+  }
 
   return (
     <AppShell title="Tenants">

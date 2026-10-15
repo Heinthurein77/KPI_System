@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import AppShell from "../../components/layout/AppShell";
+import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { downloadImportTemplate, uploadImport } from "../../api/import";
 import { getErrorMessage } from "../../api/errors";
 
@@ -21,6 +22,7 @@ export default function BulkImportPage() {
   const [error, setError] = useState("");
   const [preview, setPreview] = useState(null); // dry-run result
   const [result, setResult] = useState(null); // final import result
+  const [confirmImport, setConfirmImport] = useState(false);
 
   async function handleTemplate() {
     setError("");
@@ -62,7 +64,13 @@ export default function BulkImportPage() {
   async function handleImport() {
     const f = fileRef.current?.files?.[0];
     if (!f) return;
-    if (!window.confirm(`Import ${preview.users_found} users and ${preview.kpis_found} KPIs?`)) return;
+    setConfirmImport(true);
+  }
+
+  async function doImport() {
+    setConfirmImport(false);
+    const f = fileRef.current?.files?.[0];
+    if (!f) return;
     setBusy(true);
     setError("");
     try {
@@ -202,6 +210,20 @@ export default function BulkImportPage() {
           </div>
         )}
       </div>
+      <ConfirmDialog
+        open={confirmImport}
+        title="Import users and KPIs?"
+        message={
+          preview
+            ? `Import ${preview.users_found} users and ${preview.kpis_found} KPIs? This cannot be undone.`
+            : "Import the validated users and KPIs? This cannot be undone."
+        }
+        confirmLabel="Import"
+        danger={false}
+        submitting={busy}
+        onConfirm={doImport}
+        onCancel={() => setConfirmImport(false)}
+      />
     </AppShell>
   );
 }

@@ -2,6 +2,7 @@ import { useState } from "react";
 import StatusBadge from "./StatusBadge";
 import ScoreBadge from "./ScoreBadge";
 import ConfirmDialog from "./ConfirmDialog";
+import AttainmentRing from "./AttainmentRing";
 import { useToast } from "../../context/ToastContext";
 
 const TARGET_EXCEEDED_MESSAGE = "Target ထက်ကျော်နေပါ၍ပြန်ထည့်ရန်";
@@ -40,6 +41,16 @@ function remarkAuthor(s) {
   return s.dept_reviewer ? { user: s.dept_reviewer, at: deptAt } : null;
 }
 
+// Attainment for the card's hero ring: best available score vs target,
+// capped at 120 like the backend. Prefers the most-finalized score.
+function attainmentFor(s) {
+  const target = Number(s.kpi_template.target);
+  const score = s.final_score ?? s.dept_score ?? s.self_score;
+  if (score == null || !(target > 0)) return { value: null, label: null };
+  const label = s.final_score != null ? "Final" : s.dept_score != null ? "Dept" : "Self";
+  return { value: Math.min(120, (Number(score) / target) * 100), label };
+}
+
 export default function KpiCard({
   submission: s,
   editableSelf = false,
@@ -62,6 +73,8 @@ export default function KpiCard({
   const [invalidScoreField, setInvalidScoreField] = useState(null);
   // Pending destructive/confirmatory action: { kind: "deptApprove" | "finalApprove" | "reject" }
   const [confirm, setConfirm] = useState(null);
+
+  const attainment = attainmentFor(s);
 
   const canReject = onReject && (s.status === "pending_dept_approval" || s.status === "pending_final_approval");
   const author = remarkAuthor(s);
@@ -110,16 +123,19 @@ export default function KpiCard({
     <div className="relative rounded-xl border border-slate-200 bg-white pt-4 px-4 pb-4 flex flex-col gap-3 overflow-hidden hover:shadow-md hover:border-slate-300 hover:-translate-y-0.5 transition-all">
       <span className={`absolute inset-x-0 top-0 h-1 ${ACCENT[s.status]}`}></span>
 
-      <div>
-        <h4
-          className="text-sm font-semibold text-slate-800 leading-snug line-clamp-2 min-h-[2.5rem]"
-          title={s.kpi_template.metric_name}
-        >
-          {s.kpi_template.metric_name}
-        </h4>
-        <p className="text-[11px] text-slate-400 mt-0.5">
-          Target {s.kpi_template.target} · Weight {s.kpi_template.weight}
-        </p>
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <h4
+            className="text-sm font-semibold text-slate-800 leading-snug line-clamp-2 min-h-[2.5rem]"
+            title={s.kpi_template.metric_name}
+          >
+            {s.kpi_template.metric_name}
+          </h4>
+          <p className="text-[11px] text-slate-400 mt-0.5">
+            Target {s.kpi_template.target} · Weight {s.kpi_template.weight}
+          </p>
+        </div>
+        <AttainmentRing value={attainment.value} label={attainment.label} />
       </div>
 
       <StatusBadge status={s.status} />

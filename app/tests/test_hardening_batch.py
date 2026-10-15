@@ -323,3 +323,26 @@ def test_export_sanitizes_formula_cells():
     assert _safe("Normal text") == "Normal text"
     assert _safe(123) == 123
     assert _safe(None) is None
+
+
+def test_session_cookie_secure_only_over_https(client, db):
+    tenant = make_tenant(db)
+    user = make_user(db, tenant, UserRole.EMPLOYEE)
+
+    # Plain HTTP login -> no Secure flag (browser would drop it otherwise).
+    r = client.post(
+        "/api/auth/login",
+        json={"email": user.email, "password": DEFAULT_PASSWORD},
+        headers={"X-Tenant-Slug": tenant.slug},
+    )
+    assert r.status_code == 200
+    assert "Secure" not in r.headers.get("set-cookie", "")
+
+    # HTTPS (via proxy header) -> Secure flag set.
+    r = client.post(
+        "/api/auth/login",
+        json={"email": user.email, "password": DEFAULT_PASSWORD},
+        headers={"X-Tenant-Slug": tenant.slug, "X-Forwarded-Proto": "https"},
+    )
+    assert r.status_code == 200
+    assert "Secure" in r.headers.get("set-cookie", "")

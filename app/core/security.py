@@ -42,21 +42,31 @@ class SessionClaims(NamedTuple):
 SESSION_COOKIE_NAME = "access_token"
 
 
-def set_session_cookie(response: Response, token: str) -> None:
+def set_session_cookie(response: Response, token: str, secure: bool) -> None:
     """Attach the session JWT as an httpOnly cookie.
 
-    ``secure`` is on in production (HTTPS via Caddy) and off for local
-    sqlite dev so the cookie still works over plain HTTP.
+    ``secure`` must reflect the scheme the login request arrived on: a Secure
+    cookie set over plain HTTP is silently dropped by the browser, which would
+    make login impossible on HTTP-only deployments. Callers derive it from
+    the request (see _request_is_secure).
     """
     response.set_cookie(
         SESSION_COOKIE_NAME,
         token,
         max_age=settings.ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         httponly=True,
-        secure=settings.is_production,
+        secure=secure,
         samesite="lax",
         path="/",
     )
+
+
+def _request_is_secure(request) -> bool:
+    """True when the login request arrived over HTTPS, honoring the
+    X-Forwarded-Proto header set by the reverse proxy. Only affects the
+    caller's own session cookie, so trusting the header is safe."""
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    return proto.split(",")[0].strip().lower() == "https"
 
 
 def clear_session_cookie(response: Response) -> None:

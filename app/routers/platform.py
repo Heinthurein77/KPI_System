@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.deps import require_platform_super_admin
 from app.core.rate_limit import LOGIN_RATE_LIMIT, limiter
-from app.core.security import DUMMY_PASSWORD_HASH, create_session_token, hash_password, set_session_cookie, verify_password
+from app.core.security import DUMMY_PASSWORD_HASH, _request_is_secure, create_session_token, hash_password, set_session_cookie, verify_password
 from app.database import get_db
 from app.models.tenant import Tenant, TenantStatus
 from app.models.user import User, UserRole
@@ -33,7 +33,7 @@ def platform_login(request: Request, response: Response, payload: LoginRequest, 
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password.")
 
     token = create_session_token(user.id, tenant_id=None, token_version=user.token_version or 0)
-    set_session_cookie(response, token)
+    set_session_cookie(response, token, secure=_request_is_secure(request))
     return LoginResponse(access_token=token, user=user)
 
 

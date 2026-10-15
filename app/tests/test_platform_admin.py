@@ -78,3 +78,45 @@ def test_platform_me_rejects_tenant_user(db, client):
 
 def test_platform_me_unauthenticated_401(db, client):
     assert client.get("/api/platform/auth/me").status_code == 401
+
+
+def test_platform_change_password_ok(db, client):
+    admin = make_user(db, None, UserRole.SUPER_ADMIN, email="root-pw@platform.example.com")
+    r = client.post("/api/platform/auth/login", json={"email": admin.email, "password": DEFAULT_PASSWORD})
+    assert r.status_code == 200
+    r = client.post(
+        "/api/platform/auth/change-password",
+        json={"current_password": DEFAULT_PASSWORD, "new_password": "BrandNewPass123"},
+    )
+    assert r.status_code == 204
+    # Old password no longer works; token version was bumped.
+    r = client.post("/api/platform/auth/login", json={"email": admin.email, "password": DEFAULT_PASSWORD})
+    assert r.status_code == 401
+    r = client.post("/api/platform/auth/login", json={"email": admin.email, "password": "BrandNewPass123"})
+    assert r.status_code == 200
+
+
+def test_platform_change_password_wrong_current(db, client):
+    admin = make_user(db, None, UserRole.SUPER_ADMIN, email="root-pw2@platform.example.com")
+    client.post("/api/platform/auth/login", json={"email": admin.email, "password": DEFAULT_PASSWORD})
+    r = client.post(
+        "/api/platform/auth/change-password",
+        json={"current_password": "wrong", "new_password": "BrandNewPass123"},
+    )
+    assert r.status_code == 400
+
+
+def test_platform_change_password_rejects_tenant_user(db, client):
+    tenant = make_tenant(db)
+    user = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Boss")
+    client.post(
+        "/api/auth/login",
+        json={"email": user.email, "password": DEFAULT_PASSWORD},
+        headers={"X-Tenant-Slug": tenant.slug},
+    )
+    r = client.post(
+        "/api/platform/auth/change-password",
+        json={"current_password": DEFAULT_PASSWORD, "new_password": "BrandNewPass123"},
+        headers={"X-Tenant-Slug": tenant.slug},
+    )
+    assert r.status_code in (401, 403)

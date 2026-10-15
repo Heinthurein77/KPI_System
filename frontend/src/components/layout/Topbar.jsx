@@ -23,7 +23,10 @@ export default function Topbar({ title, onMenuClick }) {
         </div>
       </div>
       <div className="flex items-center gap-2 shrink-0">
-        <NotificationBell />
+        {/* Platform super admins have no tenant, so the tenant-scoped
+            notifications API 401s for them — and the global 401 handler would
+            bounce them to /login. They have no notifications anyway. */}
+        {user?.role !== "super_admin" && <NotificationBell />}
         <Link
           to="/account/password"
           title="Change password"

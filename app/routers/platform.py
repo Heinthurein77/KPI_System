@@ -9,7 +9,7 @@ from app.core.security import DUMMY_PASSWORD_HASH, _request_is_secure, create_se
 from app.database import get_db
 from app.models.tenant import Tenant, TenantStatus
 from app.models.user import User, UserRole
-from app.schemas.auth import LoginRequest, LoginResponse
+from app.schemas.auth import ChangePasswordRequest, LoginRequest, LoginResponse
 from app.schemas.platform import CreateTenantRequest, TenantOut
 from app.schemas.user import UserOut
 
@@ -44,6 +44,25 @@ def platform_me(user: User = Depends(require_platform_super_admin)):
     /api/auth/me always 401s for tenant-less accounts (by design), so the
     SPA calls this endpoint instead when no tenant slug is stored."""
     return user
+
+
+@router.post("/auth/change-password", status_code=status.HTTP_204_NO_CONTENT)
+def platform_change_password(
+    payload: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_platform_super_admin),
+):
+    """Password change for platform super admins. The tenant-scoped
+    /api/auth/change-password 401s for tenant-less accounts, which would
+    trip the SPA's global 401 handler and bounce them to /login."""
+    if not verify_password(payload.current_password, admin.password_hash):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect.")
+    if len(payload.new_password) < 8:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "New password must be at least 8 characters.")
+    admin.password_hash = hash_password(payload.new_password)
+    admin.must_change_password = False
+    admin.token_version = (admin.token_version or 0) + 1
+    db.commit()
 
 
 @router.get("/tenants", response_model=list[TenantOut])

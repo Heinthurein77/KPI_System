@@ -28,3 +28,10 @@ export function changePassword(currentPassword, newPassword) {
     new_password: newPassword,
   });
 }
+
+export function platformChangePassword(currentPassword, newPassword) {
+  return client.post("/api/platform/auth/change-password", {
+    current_password: currentPassword,
+    new_password: newPassword,
+  });
+}

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import AppShell from "../components/layout/AppShell";
-import { changePassword } from "../api/auth";
+import { changePassword, platformChangePassword } from "../api/auth";
 import { getErrorMessage } from "../api/errors";
 import { useAuth } from "../context/AuthContext";
 
@@ -32,16 +32,19 @@ export default function ChangePasswordPage() {
 
     setSubmitting(true);
     try {
-      await changePassword(currentPassword, newPassword);
+      // Platform super admins have no tenant slug; the tenant-scoped
+      // /api/auth/change-password 401s for them (by design).
+      const changeFn = localStorage.getItem("tenant_slug") ? changePassword : platformChangePassword;
+      await changeFn(currentPassword, newPassword);
       await refreshUser();
       setSuccess(true);
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
       if (mustChange) {
-        // Forced change complete — go to the dashboard now that the
-        // ProtectedRoute gate will let this user through.
-        navigate("/dashboard", { replace: true });
+        // Forced change complete — go home now that the ProtectedRoute
+        // gate will let this user through.
+        navigate(user?.role === "super_admin" ? "/platform/tenants" : "/dashboard", { replace: true });
       }
     } catch (err) {
       setError(getErrorMessage(err));

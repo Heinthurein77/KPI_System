@@ -206,9 +206,12 @@ export default function TeamReviewBoard({
   }
 
   async function handleBulkConfirm() {
+    if (visibleBulkSubs.length === 0) {
+      toast.error("Nothing to approve in this department.");
+      return;
+    }
     const items = [];
-    for (const s of visibleBulkSubs) {
-      const target = Number(s.target_snapshot ?? s.kpi_template.target);
+    for (const s of visibleBulkSubs) {      const target = Number(s.target_snapshot ?? s.kpi_template.target);
       const raw = bulkEdits[s.id];
       const n = Number(raw);
       if (raw === undefined || raw === "" || Number.isNaN(n) || n < 0 || n > target) {

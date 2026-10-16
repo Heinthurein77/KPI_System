@@ -108,6 +108,7 @@ function DeptAdminDashboard({ initialParams }) {
       pendingLabel="awaiting your review"
       pendingChipClass="bg-amber-50 text-amber-700 ring-amber-200"
       pendingDotClass="bg-amber-500"
+      onReload={reload}
       onDeptSave={handleDeptSave}
       onDeptApprove={handleDeptApprove}
       onReject={handleReject}
@@ -197,6 +198,7 @@ function TenantAdminDashboard({ user, initialParams }) {
       pendingChipClass="bg-blue-50 text-blue-700 ring-blue-200"
       pendingDotClass="bg-blue-500"
       showDepartmentColumn
+      onReload={reload}
       onFinalApprove={handleFinalApprove}
       onOverride={handleOverride}
       onReject={handleReject}

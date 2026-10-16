@@ -555,6 +555,58 @@ def final_approve(
     email_service.send_for_notifications(db, emailed)
 
 
+def bulk_approve(
+    db: Session,
+    reviewer: User,
+    year: int,
+    period: str,
+    items: list[tuple[int, float | None]],
+) -> dict:
+    """Approve many submissions in one request.
+
+    Dept Admins bulk dept-approve (pending_dept_approval → pending_final_approval);
+    Tenant Admins bulk final-approve (pending_final_approval → approved).
+    Every item is validated first (scope, period, status, score); if any item
+    fails, nothing is processed. Approved items go through the exact same
+    single-item functions, so notifications, audit logs and emails behave
+    identically to one-by-one approval.
+    """
+    seen: set[int] = set()
+    planned: list[tuple[str, KPISubmission, float | None]] = []
+    for submission_id, score in items:
+        if submission_id in seen:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Duplicate submission in request.")
+        seen.add(submission_id)
+        submission = get_submission_scoped(db, reviewer, submission_id)
+        if submission.year != year or submission.month_or_quarter != period:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not in this period.")
+        if reviewer.role == UserRole.DEPT_ADMIN:
+            if submission.status != KPIStatus.PENDING_DEPT_APPROVAL:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"Submission {submission_id} is not awaiting department review.",
+                )
+            _validate_score_within_target(submission, score, "Dept score")
+            planned.append(("dept", submission, score))
+        else:  # TENANT_ADMIN (require_dept_admin admits both roles)
+            if submission.status != KPIStatus.PENDING_FINAL_APPROVAL:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"Submission {submission_id} is not awaiting final approval.",
+                )
+            _validate_score_within_target(submission, score, "Final score")
+            planned.append(("final", submission, score))
+
+    approved_ids: list[int] = []
+    for kind, submission, score in planned:
+        if kind == "dept":
+            dept_approve(db, reviewer, submission, score, None)
+        else:
+            final_approve(db, reviewer, submission, score, None)
+        approved_ids.append(submission.id)
+    return {"approved": approved_ids, "count": len(approved_ids)}
+
+
 def tenant_admin_override(
     db: Session, admin: User, submission: KPISubmission, final_score: float, remarks: str | None
 ) -> None:

@@ -140,6 +140,17 @@ class OverrideRequest(BaseModel):
     remarks: str | None = None
 
 
+class BulkApproveItem(BaseModel):
+    submission_id: int
+    score: float | None = Field(default=None, ge=0)
+
+
+class BulkApproveRequest(BaseModel):
+    year: int
+    period: str
+    items: list[BulkApproveItem] = Field(min_length=1, max_length=500)
+
+
 class RejectRequest(BaseModel):
     year: int
     period: str

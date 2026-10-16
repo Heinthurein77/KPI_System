@@ -27,3 +27,7 @@ export function overrideScore(submissionId, payload) {
 export function rejectSubmission(submissionId, payload) {
   return client.post(`/api/kpi/${submissionId}/reject`, payload).then((r) => r.data);
 }
+
+export function bulkApprove(payload) {
+  return client.post("/api/kpi/bulk-approve", payload).then((r) => r.data);
+}

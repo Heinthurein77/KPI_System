@@ -5,6 +5,7 @@ from app.database import get_db
 from app.models.kpi_submission import KPISubmission
 from app.models.user import User, UserRole
 from app.schemas.kpi import (
+    BulkApproveRequest,
     DeptApproveRequest,
     DeptSaveRequest,
     FinalApproveRequest,
@@ -74,6 +75,18 @@ def employee_submit(
 
     kpi_service.submit_for_dept_approval(db, user, payload.year, payload.period)
     return _own_submissions_for_period(db, user, payload.year, payload.period)
+
+
+@router.post("/bulk-approve")
+def bulk_approve(
+    payload: BulkApproveRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_dept_admin),
+):
+    return kpi_service.bulk_approve(
+        db, user, payload.year, payload.period,
+        [(item.submission_id, item.score) for item in payload.items],
+    )
 
 
 @router.post("/{submission_id}/dept-save", response_model=KPISubmissionOut)

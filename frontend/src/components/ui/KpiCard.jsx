@@ -94,6 +94,7 @@ export default function KpiCard({
   onFinalApprove,
   onOverride,
   onReject,
+  onReviewScoreChange,
 }) {
   const toast = useToast();
   const [deptScore, setDeptScore] = useState(s.dept_score ?? s.self_score ?? "");
@@ -200,6 +201,12 @@ export default function KpiCard({
 
   function handleScoreChange(setScore, field, value) {
     setScore(value);
+    // Lets the review board's Approve-all collect each card's current
+    // reviewer input (dept/final paths only — self scores and overrides
+    // are never bulk-approved).
+    if (onReviewScoreChange && (field === "dept" || field === "final")) {
+      onReviewScoreChange(s.id, field, value);
+    }
     if (value !== "" && Number(value) > Number(snapTarget)) {
       setInvalidScoreField(field);
       toast.error(TARGET_EXCEEDED_MESSAGE);

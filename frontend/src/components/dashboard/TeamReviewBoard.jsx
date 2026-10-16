@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import PeriodSelector from "../ui/PeriodSelector";
 import CombinedScoreCard from "../ui/CombinedScoreCard";
 import KpiCard from "../ui/KpiCard";
 import EmptyState from "../ui/EmptyState";
+import ConfirmDialog from "../ui/ConfirmDialog";
 import TeamOverview from "./TeamOverview";
+import { bulkApprove } from "../../api/kpi";
+import { getErrorMessage } from "../../api/errors";
+import { useToast } from "../../context/ToastContext";
 
 // Review queue grouped by STATUS, not by employee: the first thing an admin
 // sees is what needs their action, then what's waiting on others, then the
@@ -51,6 +55,7 @@ function bucketFor(status, pendingStatuses) {
 export default function TeamReviewBoard({
   data,
   onApply,
+  onReload,
   pendingStatuses,
   pendingLabel,
   pendingChipClass,
@@ -62,6 +67,7 @@ export default function TeamReviewBoard({
   onOverride,
   onReject,
 }) {
+  const toast = useToast();
   const [query, setQuery] = useState("");
   // Status groups the viewer explicitly opened/closed. "pending" starts open;
   // the rest start collapsed so the settled history doesn't push the work
@@ -71,6 +77,16 @@ export default function TeamReviewBoard({
   // employees in the pending bucket start open (they need action); everywhere
   // else they start collapsed.
   const [openEmployees, setOpenEmployees] = useState(() => new Map());
+  // Reviewer score inputs per card, keyed by submission id: { dept, final }.
+  // Lets Approve-all use what the reviewer actually typed (not just the
+  // saved score). A ref — not state — because only the bulk dialog reads it.
+  const scoreInputs = useRef(new Map());
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState(false);
+
+  // Dept path (dept admin) bulk dept-approves; final path (tenant admin) bulk
+  // final-approves. Inferred from which approve handler the page wired up.
+  const isDeptPath = !!onDeptApprove;
 
   // bucket -> [{ employee, department, items }]
   const buckets = useMemo(() => {
@@ -102,6 +118,8 @@ export default function TeamReviewBoard({
   useEffect(() => {
     setOpenGroups(new Set(["pending"]));
     setOpenEmployees(new Map());
+    scoreInputs.current = new Map();
+    setBulkOpen(false);
   }, [data.active_year, data.active_period, data.status_filter, data.active_department_id]);
 
   function toggleGroup(bucket) {
@@ -116,6 +134,71 @@ export default function TeamReviewBoard({
   function toggleEmployee(bucket, employeeId, isCurrentlyOpen) {
     const key = `${bucket}:${employeeId}`;
     setOpenEmployees((prev) => new Map(prev).set(key, !isCurrentlyOpen));
+  }
+
+  function handleReviewScoreChange(id, field, value) {
+    const entry = scoreInputs.current.get(id) ?? {};
+    entry[field] = value;
+    scoreInputs.current.set(id, entry);
+  }
+
+  // Score that bulk-approve will send for one submission: the reviewer's
+  // current card input when it's a valid score, otherwise the saved score
+  // (dept ?? self on the dept path; final ?? dept ?? self on the final path).
+  function resolveBulkScore(s) {
+    const typed = scoreInputs.current.get(s.id);
+    const raw = isDeptPath ? typed?.dept : typed?.final;
+    const target = Number(s.target_snapshot ?? s.kpi_template.target);
+    const n = Number(raw);
+    if (raw !== undefined && raw !== "" && !Number.isNaN(n) && n >= 0 && n <= target) {
+      return n;
+    }
+    if (isDeptPath) return s.dept_score ?? s.self_score ?? null;
+    return s.final_score ?? s.dept_score ?? s.self_score ?? null;
+  }
+
+  // Submissions this viewer can bulk-approve: everything in "Needs your
+  // review" on the dept path; only final-pending items on the tenant path
+  // (dept-pending items there belong to dept admins).
+  const bulkSubs = useMemo(() => {
+    const out = [];
+    for (const { items } of buckets.pending) {
+      for (const s of items) {
+        if (!isDeptPath && s.status !== "pending_final_approval") continue;
+        out.push(s);
+      }
+    }
+    return out;
+  }, [buckets, isDeptPath]);
+
+  // Rows for the bulk confirm dialog, grouped by employee.
+  function bulkRows() {
+    const byEmp = new Map();
+    for (const s of bulkSubs) {
+      if (!byEmp.has(s.employee.id)) byEmp.set(s.employee.id, { employee: s.employee, rows: [] });
+      byEmp.get(s.employee.id).rows.push({ submission: s, score: resolveBulkScore(s) });
+    }
+    return Array.from(byEmp.values());
+  }
+
+  async function handleBulkConfirm() {
+    const items = [];
+    for (const { rows } of bulkRows()) {
+      for (const { submission, score } of rows) {
+        items.push({ submission_id: submission.id, score });
+      }
+    }
+    setBulkBusy(true);
+    try {
+      const result = await bulkApprove({ year: data.active_year, period: data.active_period, items });
+      toast.success(`Approved ${result.count} submission${result.count === 1 ? "" : "s"}.`);
+      setBulkOpen(false);
+      onReload?.();
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setBulkBusy(false);
+    }
   }
 
   const totalPeople = BUCKET_ORDER.reduce((n, b) => n + buckets[b].length, 0);
@@ -196,39 +279,53 @@ export default function TeamReviewBoard({
                   key={bucket}
                   className="rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden mb-4"
                 >
-                  <button
-                    type="button"
-                    onClick={() => toggleGroup(bucket)}
-                    aria-expanded={isGroupOpen}
-                    className="flex w-full items-center gap-3 px-5 py-4 text-left hover:bg-slate-50/60 transition"
-                  >
-                    <span className={`h-8 w-1.5 shrink-0 rounded-full ${meta.bar}`} aria-hidden="true" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-[15px] font-semibold text-slate-900 tracking-tight">
-                        {meta.title}
-                      </span>
-                      {bucket === "pending" && emps.length === 0 && (
-                        <span className="block text-xs text-slate-500 mt-0.5">
-                          Nothing waiting for you. Nice work.
+                  <div className="flex items-center gap-2 pl-5 pr-3 py-3">
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(bucket)}
+                      aria-expanded={isGroupOpen}
+                      className="flex min-w-0 flex-1 items-center gap-3 rounded-lg py-1 text-left hover:bg-slate-50/60 transition"
+                    >
+                      <span className={`h-8 w-1.5 shrink-0 rounded-full ${meta.bar}`} aria-hidden="true" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[15px] font-semibold text-slate-900 tracking-tight">
+                          {meta.title}
                         </span>
-                      )}
-                    </span>
-                    <span
-                      className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ring-1 ring-inset ${meta.badge}`}
-                    >
-                      <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
-                      {itemCount} {itemCount === 1 ? "item" : "items"}
-                    </span>
-                    <svg
-                      className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${isGroupOpen ? "rotate-180" : ""}`}
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                    >
-                      <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
-                    </svg>
-                  </button>
+                        {bucket === "pending" && emps.length === 0 && (
+                          <span className="block text-xs text-slate-500 mt-0.5">
+                            Nothing waiting for you. Nice work.
+                          </span>
+                        )}
+                      </span>
+                      <span
+                        className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ring-1 ring-inset ${meta.badge}`}
+                      >
+                        <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
+                        {itemCount} {itemCount === 1 ? "item" : "items"}
+                      </span>
+                      <svg
+                        className={`h-4 w-4 shrink-0 text-slate-400 transition-transform ${isGroupOpen ? "rotate-180" : ""}`}
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+                      </svg>
+                    </button>
+                    {bucket === "pending" && bulkSubs.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setBulkOpen(true)}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-gradient-to-r from-emerald-600 to-green-500 px-3 py-2 text-xs font-bold text-white shadow-md shadow-emerald-500/25 hover:shadow-lg hover:-translate-y-px active:translate-y-0 transition whitespace-nowrap"
+                      >
+                        <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.4">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
+                        </svg>
+                        Approve all ({bulkSubs.length})
+                      </button>
+                    )}
+                  </div>
 
                   {isGroupOpen && (
                     <div className="border-t border-slate-100">
@@ -300,6 +397,7 @@ export default function TeamReviewBoard({
                                       onFinalApprove={onFinalApprove}
                                       onOverride={onOverride}
                                       onReject={onReject}
+                                      onReviewScoreChange={handleReviewScoreChange}
                                     />
                                   ))}
                                 </div>
@@ -316,6 +414,47 @@ export default function TeamReviewBoard({
           )}
         </>
       )}
+
+      <ConfirmDialog
+        open={bulkOpen}
+        title={`Approve all ${bulkSubs.length} submissions?`}
+        message={
+          isDeptPath
+            ? "Each submission moves to final approval at the score shown."
+            : "Each submission is final-approved at the score shown."
+        }
+        details={
+          <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2 space-y-3">
+            {bulkRows().map(({ employee, rows }) => (
+              <div key={employee.id}>
+                <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1">
+                  {employee.name}
+                </p>
+                <ul className="space-y-1">
+                  {rows.map(({ submission, score }) => (
+                    <li
+                      key={submission.id}
+                      className="flex items-center justify-between gap-2 text-xs"
+                    >
+                      <span className="min-w-0 truncate text-slate-700">
+                        {submission.kpi_template.metric_name}
+                      </span>
+                      <span className="shrink-0 rounded-md bg-white px-2 py-0.5 font-bold tabular-nums text-slate-900 ring-1 ring-inset ring-slate-200">
+                        {score ?? "—"}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        }
+        confirmLabel={bulkBusy ? "Approving…" : "Approve all"}
+        tone="success"
+        submitting={bulkBusy}
+        onConfirm={handleBulkConfirm}
+        onCancel={() => !bulkBusy && setBulkOpen(false)}
+      />
     </div>
   );
 }

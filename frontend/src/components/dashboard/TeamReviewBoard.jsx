@@ -132,7 +132,6 @@ export default function TeamReviewBoard({
         data={data}
         pendingStatuses={pendingStatuses}
         pendingLabel={pendingLabel}
-        showDepartmentColumn={showDepartmentColumn}
       />
 
       <PeriodSelector

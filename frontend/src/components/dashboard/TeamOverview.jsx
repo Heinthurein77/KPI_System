@@ -29,20 +29,6 @@ const ICON = {
   ),
   pending: <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6l4 2m6-2a10 10 0 1 1-20 0 10 10 0 0 1 20 0Z" />,
   approved: <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />,
-  peak: (
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      d="M2.25 18 9 11.25l4.306 4.306a11.95 11.95 0 0 1 5.814-5.518l2.74-1.22m0 0-5.94-2.281m5.94 2.28-2.28 5.941"
-    />
-  ),
-  lowest: (
-    <path
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      d="M2.25 6 9 12.75l4.286-4.286a11.948 11.948 0 0 1 4.306 6.43l.776 2.898m0 0 3.182-5.511m-3.182 5.51-5.511-3.181"
-    />
-  ),
 };
 
 function StatCard({ label, value, detail, accent, icon }) {
@@ -65,7 +51,7 @@ function StatCard({ label, value, detail, accent, icon }) {
   );
 }
 
-export default function TeamOverview({ data, pendingStatuses, pendingLabel, showDepartmentColumn = false }) {
+export default function TeamOverview({ data, pendingStatuses, pendingLabel }) {
   const combinedEntries = Object.entries(data.employee_combined || {});
   const scored = combinedEntries.filter(([, c]) => c);
   const peopleCount = combinedEntries.length;
@@ -73,38 +59,10 @@ export default function TeamOverview({ data, pendingStatuses, pendingLabel, show
   const pendingCount = data.submissions.filter((s) => pendingStatuses.includes(s.status)).length;
   const approvedCount = data.submissions.filter((s) => s.status === "approved").length;
 
-  let top = null;
-  let bottom = null;
-  for (const [, c] of scored) {
-    if (!top || c.attainment > top.attainment) top = c;
-    if (!bottom || c.attainment < bottom.attainment) bottom = c;
-  }
-
-  let byDept = null;
-  if (showDepartmentColumn) {
-    const employeeDept = new Map();
-    for (const s of data.submissions) {
-      if (!employeeDept.has(s.employee.id)) {
-        employeeDept.set(s.employee.id, s.department?.name ?? "Unassigned");
-      }
-    }
-    const deptTotals = new Map();
-    for (const [employeeId, c] of scored) {
-      const dept = employeeDept.get(Number(employeeId)) ?? "Unassigned";
-      const entry = deptTotals.get(dept) ?? { sum: 0, count: 0 };
-      entry.sum += c.attainment;
-      entry.count += 1;
-      deptTotals.set(dept, entry);
-    }
-    byDept = Array.from(deptTotals.entries())
-      .map(([name, { sum, count }]) => ({ name, avg: sum / count }))
-      .sort((a, b) => b.avg - a.avg);
-  }
-
   const avgTier = avgAttainment !== null ? TIER_COLOR[scoreTier(avgAttainment)] : TIER_COLOR.warning;
 
   return (
-    <div className="mb-6 space-y-4">
+    <div className="mb-6">
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           label="People"
@@ -129,47 +87,6 @@ export default function TeamOverview({ data, pendingStatuses, pendingLabel, show
           icon={ICON.approved}
         />
       </div>
-
-      {(top || bottom) && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <StatCard
-            label="Top Performer"
-            value={top.name}
-            detail={`${top.attainment.toFixed(0)}% combined score`}
-            accent={TIER_COLOR.good}
-            icon={ICON.peak}
-          />
-          <StatCard
-            label="Needs Attention"
-            value={bottom.name}
-            detail={`${bottom.attainment.toFixed(0)}% combined score`}
-            accent={TIER_COLOR.critical}
-            icon={ICON.lowest}
-          />
-        </div>
-      )}
-
-      {byDept && byDept.length > 0 && (
-        <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-5">
-          <h3 className="text-sm font-semibold text-slate-800 mb-4">Average Score by Department</h3>
-          <div className="space-y-3">
-            {byDept.map((d) => (
-              <div key={d.name} className="flex items-center gap-3">
-                <span className="w-32 shrink-0 truncate text-sm text-slate-600">{d.name}</span>
-                <div className="flex-1 h-2 rounded-full bg-slate-100 overflow-hidden">
-                  <div
-                    className={`h-full rounded-full ${TIER_COLOR[scoreTier(d.avg)].bar}`}
-                    style={{ width: `${Math.min(d.avg, 100)}%` }}
-                  ></div>
-                </div>
-                <span className="w-12 shrink-0 text-right text-sm font-semibold tabular-nums text-slate-700">
-                  {d.avg.toFixed(0)}%
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

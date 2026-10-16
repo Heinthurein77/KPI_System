@@ -4,6 +4,7 @@ export default function ConfirmDialog({
   open,
   title,
   message,
+  details,
   confirmLabel = "Delete",
   danger = true,
   submitting = false,
@@ -49,6 +50,7 @@ export default function ConfirmDialog({
         </div>
         <h3 className="mt-4 text-base font-semibold text-slate-900">{title}</h3>
         {message && <p className="mt-1.5 text-sm text-slate-500 whitespace-pre-wrap leading-relaxed">{message}</p>}
+        {details && <div className="mt-4">{details}</div>}
         <div className="mt-6 flex items-center justify-end gap-2">
           <button
             type="button"

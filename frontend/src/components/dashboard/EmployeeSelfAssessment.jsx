@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import PeriodSelector from "../ui/PeriodSelector";
 import CombinedScoreCard from "../ui/CombinedScoreCard";
 import KpiCard from "../ui/KpiCard";
+import ConfirmDialog from "../ui/ConfirmDialog";
 import EmptyState from "../ui/EmptyState";
 import PageLoading from "../ui/PageLoading";
 import { STYLES as STATUS_STYLES, LABELS as STATUS_LABELS } from "../ui/statusMeta";
@@ -43,6 +44,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   const [loadError, setLoadError] = useState(null);
   const [invalidScoreId, setInvalidScoreId] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [params, setParams] = useState({});
   const loadIdRef = useRef(0);
 
@@ -201,8 +203,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   }
 
   async function handleSubmit() {
-    if (!validateScores(scores)) return;
-    if (!validateTotalWeight()) return;
+    setConfirmSubmit(false);
     setSaving(true);
     setError(null);
     try {
@@ -214,6 +215,39 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     } finally {
       setSaving(false);
     }
+  }
+
+  // Validates first; the actual submit happens from the confirm dialog.
+  function requestSubmit() {
+    if (!validateScores(scores)) return;
+    if (!validateTotalWeight()) return;
+    setError(null);
+    setConfirmSubmit(true);
+  }
+
+  // Rows for the submit confirmation summary: metric name + entered score.
+  function submitSummaryRows() {
+    return data.submissions.map((s) => {
+      const value = scores[s.id];
+      const filled = value !== "" && value !== null && value !== undefined;
+      const target = s.target_snapshot ?? s.kpi_template.target;
+      return (
+        <div key={s.id} className="flex items-center justify-between gap-3 px-3 py-2">
+          <span className="min-w-0 truncate text-xs font-medium text-slate-700" title={s.kpi_template.metric_name}>
+            {s.kpi_template.metric_name}
+          </span>
+          {filled ? (
+            <span className="shrink-0 rounded-full bg-brand-50 px-2.5 py-0.5 text-xs font-semibold text-brand-700 tabular-nums">
+              {Number(value)} <span className="font-normal text-brand-500">/ {target}</span>
+            </span>
+          ) : (
+            <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-0.5 text-[11px] font-medium text-slate-400">
+              no score
+            </span>
+          )}
+        </div>
+      );
+    });
   }
 
   return (
@@ -314,7 +348,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
               <button
                 type="button"
                 disabled={saving}
-                onClick={handleSubmit}
+                onClick={requestSubmit}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition disabled:opacity-60"
               >
                 {isResubmit ? "Resubmit for Department Approval" : "Submit for Department Approval"}
@@ -345,6 +379,22 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
 
         </>
       )}
+
+      <ConfirmDialog
+        open={confirmSubmit}
+        title={isResubmit ? "Resubmit for department approval?" : "Submit for department approval?"}
+        message={`Your scores for ${data.active_period} ${data.active_year} will be sent to your department admin for review. After submitting you won't be able to edit them unless they are rejected.`}
+        details={
+          <div className="rounded-xl border border-slate-200 bg-slate-50 divide-y divide-slate-100 max-h-56 overflow-y-auto">
+            {submitSummaryRows()}
+          </div>
+        }
+        confirmLabel={isResubmit ? "Resubmit" : "Submit"}
+        danger={false}
+        submitting={saving}
+        onConfirm={handleSubmit}
+        onCancel={() => setConfirmSubmit(false)}
+      />
     </div>
   );
 }

@@ -64,7 +64,7 @@ class Settings(BaseSettings):
     # reminder job is meant to run daily (server cron); it sends at most one
     # reminder per user per period.
     DEADLINE_REMINDER_ENABLED: bool = True
-    DEADLINE_REMINDER_DAYS_BEFORE: int = 3
+    DEADLINE_REMINDER_DAYS_BEFORE: int = 7
 
     @property
     def smtp_configured(self) -> bool:

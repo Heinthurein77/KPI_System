@@ -560,8 +560,7 @@ def bulk_approve(
     reviewer: User,
     year: int,
     period: str,
-    items: list[tuple[int, float | None]],
-    remarks: str | None = None,
+    items: list[tuple[int, float | None, str | None]],
 ) -> dict:
     """Approve many submissions in one request.
 
@@ -570,11 +569,11 @@ def bulk_approve(
     Every item is validated first (scope, period, status, score); if any item
     fails, nothing is processed. Approved items go through the exact same
     single-item functions, so notifications, audit logs and emails behave
-    identically to one-by-one approval.
+    identically to one-by-one approval. Each item carries its own remarks.
     """
     seen: set[int] = set()
-    planned: list[tuple[str, KPISubmission, float | None]] = []
-    for submission_id, score in items:
+    planned: list[tuple[str, KPISubmission, float | None, str | None]] = []
+    for submission_id, score, remarks in items:
         if submission_id in seen:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Duplicate submission in request.")
         seen.add(submission_id)
@@ -588,7 +587,7 @@ def bulk_approve(
                     f"Submission {submission_id} is not awaiting department review.",
                 )
             _validate_score_within_target(submission, score, "Dept score")
-            planned.append(("dept", submission, score))
+            planned.append(("dept", submission, score, remarks))
         else:  # TENANT_ADMIN (require_dept_admin admits both roles)
             if submission.status != KPIStatus.PENDING_FINAL_APPROVAL:
                 raise HTTPException(
@@ -596,10 +595,10 @@ def bulk_approve(
                     f"Submission {submission_id} is not awaiting final approval.",
                 )
             _validate_score_within_target(submission, score, "Final score")
-            planned.append(("final", submission, score))
+            planned.append(("final", submission, score, remarks))
 
     approved_ids: list[int] = []
-    for kind, submission, score in planned:
+    for kind, submission, score, remarks in planned:
         if kind == "dept":
             dept_approve(db, reviewer, submission, score, remarks)
         else:

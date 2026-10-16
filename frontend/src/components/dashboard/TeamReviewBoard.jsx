@@ -86,9 +86,10 @@ export default function TeamReviewBoard({
   // Editable scores inside the bulk confirm dialog: { [submissionId]: string }.
   // Initialized from each card's current score when the dialog opens.
   const [bulkEdits, setBulkEdits] = useState({});
+  // Per-row remarks inside the bulk dialog: { [submissionId]: string }.
+  const [bulkRemarkEdits, setBulkRemarkEdits] = useState({});
   // Department filter + shared remarks inside the bulk dialog.
   const [bulkDeptFilter, setBulkDeptFilter] = useState("all");
-  const [bulkRemarks, setBulkRemarks] = useState("");
 
   // Dept path (dept admin) bulk dept-approves; final path (tenant admin) bulk
   // final-approves. Inferred from which approve handler the page wired up.
@@ -214,7 +215,8 @@ export default function TeamReviewBoard({
         toast.error(`"${s.kpi_template.metric_name}" score must be between 0 and ${target}.`);
         return;
       }
-      items.push({ submission_id: s.id, score: n });
+      const remarks = (bulkRemarkEdits[s.id] ?? "").trim();
+      items.push({ submission_id: s.id, score: n, remarks: remarks || null });
     }
     setBulkBusy(true);
     try {
@@ -222,7 +224,6 @@ export default function TeamReviewBoard({
         year: data.active_year,
         period: data.active_period,
         items,
-        remarks: bulkRemarks.trim() || null,
       });
       toast.success(`Approved ${result.count} submission${result.count === 1 ? "" : "s"}.`);
       setBulkOpen(false);
@@ -236,12 +237,14 @@ export default function TeamReviewBoard({
 
   function openBulkDialog() {
     setBulkDeptFilter("all");
-    setBulkRemarks("");
     const edits = {};
+    const remarkEdits = {};
     for (const s of bulkSubs) {
       edits[s.id] = resolveBulkScore(s) ?? "";
+      remarkEdits[s.id] = "";
     }
     setBulkEdits(edits);
+    setBulkRemarkEdits(remarkEdits);
     setBulkOpen(true);
   }
 
@@ -495,31 +498,43 @@ export default function TeamReviewBoard({
                   <p className="text-[11px] font-bold text-slate-500 uppercase tracking-wide mb-1">
                     {employee.name}
                   </p>
-                  <ul className="space-y-1">
+                  <ul className="space-y-2">
                     {rows.map(({ submission }) => {
                       const target = Number(submission.target_snapshot ?? submission.kpi_template.target);
                       return (
                         <li
                           key={submission.id}
-                          className="flex items-center justify-between gap-2 text-xs"
+                          className="space-y-1 rounded-lg bg-white px-2 py-1.5 ring-1 ring-inset ring-slate-100"
                         >
-                          <span className="min-w-0 flex-1 truncate text-slate-700">
-                            {submission.kpi_template.metric_name}
-                          </span>
-                          <span className="shrink-0 text-[10px] tabular-nums text-slate-400">
-                            / {target}
-                          </span>
+                          <div className="flex items-center justify-between gap-2 text-xs">
+                            <span className="min-w-0 flex-1 truncate font-medium text-slate-700">
+                              {submission.kpi_template.metric_name}
+                            </span>
+                            <span className="shrink-0 text-[10px] tabular-nums text-slate-400">
+                              / {target}
+                            </span>
+                            <input
+                              type="number"
+                              min="0"
+                              max={target}
+                              step="0.1"
+                              value={bulkEdits[submission.id] ?? ""}
+                              onChange={(e) =>
+                                setBulkEdits((prev) => ({ ...prev, [submission.id]: e.target.value }))
+                              }
+                              aria-label={`${submission.kpi_template.metric_name} score`}
+                              className="w-20 shrink-0 rounded-md bg-white px-2 py-1 text-right text-xs font-bold tabular-nums text-slate-900 ring-1 ring-inset ring-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                            />
+                          </div>
                           <input
-                            type="number"
-                            min="0"
-                            max={target}
-                            step="0.1"
-                            value={bulkEdits[submission.id] ?? ""}
+                            type="text"
+                            placeholder="Remarks (optional)"
+                            value={bulkRemarkEdits[submission.id] ?? ""}
                             onChange={(e) =>
-                              setBulkEdits((prev) => ({ ...prev, [submission.id]: e.target.value }))
+                              setBulkRemarkEdits((prev) => ({ ...prev, [submission.id]: e.target.value }))
                             }
-                            aria-label={`${submission.kpi_template.metric_name} score`}
-                            className="w-20 shrink-0 rounded-md bg-white px-2 py-1 text-right text-xs font-bold tabular-nums text-slate-900 ring-1 ring-inset ring-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                            aria-label={`${submission.kpi_template.metric_name} remarks`}
+                            className="w-full rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-600 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                           />
                         </li>
                       );
@@ -531,13 +546,6 @@ export default function TeamReviewBoard({
                 <p className="text-xs text-slate-400 text-center py-4">No submissions in this department.</p>
               )}
             </div>
-            <input
-              type="text"
-              placeholder="Remarks for all approved (optional)"
-              value={bulkRemarks}
-              onChange={(e) => setBulkRemarks(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
           </div>
         }
         confirmLabel={bulkBusy ? "Approving…" : "Approve all"}

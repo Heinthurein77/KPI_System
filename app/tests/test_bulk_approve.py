@@ -198,7 +198,7 @@ def test_bulk_approve_uses_saved_score_when_none_sent(client, db):
     assert s1.dept_score == 80  # falls back to self_score like single approve
 
 
-def test_bulk_approve_applies_remarks_to_all(client, db):
+def test_bulk_approve_applies_per_item_remarks(client, db):
     fx = _setup(db)
     s1 = _pending_dept(db, fx, fx["emp_a"])
     s2 = _pending_dept(db, fx, fx["emp_b"])
@@ -208,18 +208,17 @@ def test_bulk_approve_applies_remarks_to_all(client, db):
             "year": YEAR,
             "period": PERIOD,
             "items": [
-                {"submission_id": s1.id, "score": 82},
-                {"submission_id": s2.id, "score": 90},
+                {"submission_id": s1.id, "score": 82, "remarks": "Good progress"},
+                {"submission_id": s2.id, "score": 90, "remarks": "Excellent"},
             ],
-            "remarks": "Bulk approved after review",
         },
         headers=auth_headers(fx["dept_admin"], fx["tenant"]),
     )
     assert resp.status_code == 200
     db.refresh(s1)
     db.refresh(s2)
-    assert s1.remarks == "Bulk approved after review"
-    assert s2.remarks == "Bulk approved after review"
+    assert s1.remarks == "Good progress"
+    assert s2.remarks == "Excellent"
 
 
 def test_bulk_approve_without_remarks_leaves_remarks_untouched(client, db):

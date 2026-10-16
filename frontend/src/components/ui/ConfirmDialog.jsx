@@ -52,19 +52,19 @@ export default function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm px-4 animate-fade-in"
       onClick={onCancel}
     >
       <div
         role="alertdialog"
         aria-modal="true"
-        className="w-full max-w-xs overflow-hidden rounded-2xl bg-white shadow-2xl"
+        className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl animate-dialog-in"
         onClick={(e) => e.stopPropagation()}
       >
         <div className={`h-1 bg-gradient-to-r ${t.gradient}`} />
         <div className="p-5">
           <div className="flex items-center gap-3">
-            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br ${t.gradient} shadow-md`}>
+            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br ${t.gradient} shadow-md`}>
               <svg
                 className="h-5 w-5 text-white"
                 fill="none"
@@ -83,7 +83,7 @@ export default function ConfirmDialog({
             <button
               type="button"
               onClick={onCancel}
-              className="flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold text-slate-600 hover:bg-slate-50 transition"
+              className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold text-slate-600 hover:bg-slate-50 transition"
             >
               Cancel
             </button>
@@ -91,7 +91,7 @@ export default function ConfirmDialog({
               type="button"
               onClick={onConfirm}
               disabled={submitting}
-              className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-xl bg-gradient-to-r ${t.button} px-3 py-2 text-[13px] font-bold text-white shadow-md transition hover:shadow-lg active:scale-[0.98] disabled:opacity-60`}
+              className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r ${t.button} px-3 py-2 text-[13px] font-bold text-white shadow-md transition hover:shadow-lg active:scale-[0.98] disabled:opacity-60`}
             >
               {submitting ? (
                 <>

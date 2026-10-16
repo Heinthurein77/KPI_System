@@ -154,7 +154,7 @@ export default function KpiCard({
             <span className="truncate text-xs font-semibold text-slate-700">{s.employee.name}</span>
           </span>
         )}
-        <span className="shrink-0 whitespace-nowrap rounded-full bg-gradient-to-r from-brand-600 to-brand-500 px-2.5 py-1 text-[11px] font-bold text-white tabular-nums shadow-sm">
+        <span className="shrink-0 whitespace-nowrap rounded-lg bg-gradient-to-r from-brand-600 to-brand-500 px-2.5 py-1 text-[11px] font-bold text-white tabular-nums shadow-sm">
           {approving.label} {approving.value}
         </span>
       </div>

@@ -57,6 +57,8 @@ export default function KpiCard({
   selfScoreValue,
   selfScoreInvalid = false,
   onSelfScoreChange,
+  selfCommentValue,
+  onSelfCommentChange,
   onDeptSave,
   onDeptApprove,
   onFinalApprove,
@@ -183,6 +185,35 @@ export default function KpiCard({
           <ScoreBadge value={s.final_score} target={snapTarget} size="md" />
         </div>
       </div>
+
+      {editableSelf && (
+        <div>
+          <label
+            htmlFor={`self-comment-${s.id}`}
+            className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide"
+          >
+            Why this score? <span className="normal-case font-normal">(optional)</span>
+          </label>
+          <textarea
+            id={`self-comment-${s.id}`}
+            rows={2}
+            maxLength={2000}
+            placeholder="e.g. Closed 14 tickets, 2 above target…"
+            value={selfCommentValue ?? ""}
+            onChange={(e) => onSelfCommentChange(s.id, e.target.value)}
+            className="mt-1 w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500 resize-y"
+          />
+        </div>
+      )}
+
+      {s.self_score_comment && !editableSelf && (
+        <div className="rounded-lg bg-sky-50 border border-sky-100 px-3 py-2.5">
+          <p className="text-[10px] font-semibold text-sky-700 uppercase tracking-wide mb-1">
+            Why this score
+          </p>
+          <p className="text-xs text-sky-900 leading-relaxed whitespace-pre-wrap">{s.self_score_comment}</p>
+        </div>
+      )}
 
       {s.remarks && (
         <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2.5">

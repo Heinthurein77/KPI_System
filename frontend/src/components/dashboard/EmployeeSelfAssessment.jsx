@@ -37,6 +37,8 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   const isDeptAdmin = user?.role === "dept_admin";
   const [data, setData] = useState(null);
   const [scores, setScores] = useState({});
+  const [comments, setComments] = useState({});
+  const initialCommentsRef = useRef({});
   const [error, setError] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [invalidScoreId, setInvalidScoreId] = useState(null);
@@ -55,10 +57,14 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
         setData(d);
         setLoadError(null);
         const initial = {};
+        const initialComments = {};
         d.submissions.forEach((s) => {
           initial[s.id] = s.self_score ?? "";
+          initialComments[s.id] = s.self_score_comment ?? "";
         });
         setScores(initial);
+        setComments(initialComments);
+        initialCommentsRef.current = initialComments;
       })
       .catch((err) => {
         if (loadIdRef.current !== requestId) return;
@@ -136,11 +142,29 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     validateScores(nextScores);
   }
 
+  function handleSelfCommentChange(id, value) {
+    setComments({ ...comments, [id]: value });
+  }
+
   function buildScoresPayload() {
     const payload = {};
     for (const [id, value] of Object.entries(scores)) {
       if (value !== "" && value !== null && value !== undefined) {
         payload[id] = Number(value);
+      }
+    }
+    return payload;
+  }
+
+  // Only send comments the user actually changed (trimmed); an emptied field
+  // clears the stored comment. Untouched comments are left alone server-side.
+  function buildCommentsPayload() {
+    const payload = {};
+    const initial = initialCommentsRef.current;
+    for (const [id, value] of Object.entries(comments)) {
+      const trimmed = (value ?? "").trim();
+      if (trimmed !== (initial[id] ?? "").trim()) {
+        payload[id] = trimmed;
       }
     }
     return payload;
@@ -166,7 +190,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     setSaving(true);
     setError(null);
     try {
-      await employeeSaveScores({ year: data.active_year, period: data.active_period, scores: buildScoresPayload() });
+      await employeeSaveScores({ year: data.active_year, period: data.active_period, scores: buildScoresPayload(), comments: buildCommentsPayload() });
       toast.success("Draft saved.");
       load(params);
     } catch (err) {
@@ -182,7 +206,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     setSaving(true);
     setError(null);
     try {
-      await employeeSubmit({ year: data.active_year, period: data.active_period, scores: buildScoresPayload() });
+      await employeeSubmit({ year: data.active_year, period: data.active_period, scores: buildScoresPayload(), comments: buildCommentsPayload() });
       toast.success("Submitted for department approval.");
       load(params);
     } catch (err) {
@@ -271,6 +295,8 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
                 selfScoreValue={scores[s.id]}
                 selfScoreInvalid={invalidScoreId === s.id}
                 onSelfScoreChange={handleSelfScoreChange}
+                selfCommentValue={comments[s.id]}
+                onSelfCommentChange={handleSelfCommentChange}
               />
             ))}
           </div>

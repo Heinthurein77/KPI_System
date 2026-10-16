@@ -195,6 +195,88 @@ def test_save_self_scores_only_touches_own_submissions(db):
     assert sub2.self_score is None
 
 
+# ---------------------------------------------------------------------------
+# save_self_scores — self_score_comment
+# ---------------------------------------------------------------------------
+
+
+def test_save_self_scores_persists_comment_with_score(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant)
+    sub = make_submission(db, tenant, employee, template, period="August")
+
+    kpi_service.save_self_scores(db, employee, {sub.id: 88.0}, {sub.id: "Closed 14 tickets"})
+
+    db.refresh(sub)
+    assert sub.self_score == 88.0
+    assert sub.self_score_comment == "Closed 14 tickets"
+
+
+def test_save_self_scores_comment_only_save_works(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant)
+    sub = make_submission(db, tenant, employee, template, period="August")
+
+    kpi_service.save_self_scores(db, employee, {}, {sub.id: "Justified without touching score"})
+
+    db.refresh(sub)
+    assert sub.self_score is None
+    assert sub.self_score_comment == "Justified without touching score"
+
+
+def test_save_self_scores_comment_untouched_when_not_sent(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant)
+    sub = make_submission(db, tenant, employee, template, period="August")
+    sub.self_score_comment = "Existing reason"
+    db.commit()
+
+    kpi_service.save_self_scores(db, employee, {sub.id: 70.0})
+
+    db.refresh(sub)
+    assert sub.self_score == 70.0
+    assert sub.self_score_comment == "Existing reason"
+
+
+def test_save_self_scores_empty_comment_clears(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant)
+    sub = make_submission(db, tenant, employee, template, period="August")
+    sub.self_score_comment = "Old reason"
+    db.commit()
+
+    kpi_service.save_self_scores(db, employee, {}, {sub.id: "   "})
+
+    db.refresh(sub)
+    assert sub.self_score_comment is None
+
+
+def test_save_self_scores_rejects_comment_on_submitted_submission(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant)
+    sub = make_submission(
+        db, tenant, employee, template, period="August",
+        status=KPIStatus.PENDING_DEPT_APPROVAL,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.save_self_scores(db, employee, {}, {sub.id: "Too late"})
+
+    assert exc_info.value.status_code == 400
+    db.refresh(sub)
+    assert sub.self_score_comment is None
+
+
 def test_save_self_scores_raises_400_if_not_draft(db):
     tenant = make_tenant(db)
     dept = make_department(db, tenant)

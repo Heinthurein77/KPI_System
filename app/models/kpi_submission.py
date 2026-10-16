@@ -62,6 +62,9 @@ class KPISubmission(Base):
         Enum(KPIStatus), nullable=False, default=KPIStatus.DRAFT
     )
     remarks: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Employee's justification for their self score ("why I gave this score"),
+    # entered alongside the score. Display-only — never feeds into score math.
+    self_score_comment: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     dept_reviewed_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True

@@ -102,6 +102,59 @@ def test_full_happy_path_employee_to_approved(db, client):
     assert entry["status"] == "Performance "
 
 
+def test_employee_save_with_comment_persists_and_returns(db, client):
+    tenant, dept, employee, dept_admin, tenant_admin, template = _setup_tenant(db)
+
+    resp = client.get("/api/dashboard", headers=auth_headers(employee, tenant))
+    body = resp.json()
+    submission_id = body["submissions"][0]["id"]
+    year, period = body["active_year"], body["active_period"]
+
+    # Save a score together with its justification comment.
+    resp = client.post(
+        "/api/kpi/employee/save",
+        json={
+            "year": year,
+            "period": period,
+            "scores": {str(submission_id): 92.0},
+            "comments": {str(submission_id): "Closed 12 tickets, 2 above target"},
+        },
+        headers=auth_headers(employee, tenant),
+    )
+    assert resp.status_code == 200
+    saved = resp.json()
+    assert saved[0]["self_score"] == 92.0
+    assert saved[0]["self_score_comment"] == "Closed 12 tickets, 2 above target"
+
+    # Comment-only update (no score) is also accepted.
+    resp = client.post(
+        "/api/kpi/employee/save",
+        json={
+            "year": year,
+            "period": period,
+            "scores": {},
+            "comments": {str(submission_id): "Revised reason"},
+        },
+        headers=auth_headers(employee, tenant),
+    )
+    assert resp.status_code == 200
+    assert resp.json()[0]["self_score_comment"] == "Revised reason"
+
+    # Invalid comment keys and over-long comments are rejected with 422.
+    resp = client.post(
+        "/api/kpi/employee/save",
+        json={"year": year, "period": period, "comments": {"abc": "x"}},
+        headers=auth_headers(employee, tenant),
+    )
+    assert resp.status_code == 422
+    resp = client.post(
+        "/api/kpi/employee/save",
+        json={"year": year, "period": period, "comments": {str(submission_id): "x" * 2001}},
+        headers=auth_headers(employee, tenant),
+    )
+    assert resp.status_code == 422
+
+
 def test_reject_path_then_reject_and_approve_are_refused(db, client):
     tenant, dept, employee, dept_admin, tenant_admin, template = _setup_tenant(db)
 

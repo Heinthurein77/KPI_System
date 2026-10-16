@@ -323,12 +323,18 @@ def create_custom_employee_kpi(
     return submission
 
 
-def save_self_scores(db: Session, employee: User, scores: dict[int, float]) -> None:
+def save_self_scores(
+    db: Session,
+    employee: User,
+    scores: dict[int, float],
+    comments: dict[int, str] | None = None,
+) -> None:
+    comments = comments or {}
     submissions = db.scalars(
         select(KPISubmission)
         .options(joinedload(KPISubmission.kpi_template))
         .where(
-            KPISubmission.id.in_(scores.keys()),
+            KPISubmission.id.in_(set(scores.keys()) | set(comments.keys())),
             KPISubmission.employee_id == employee.id,
             KPISubmission.tenant_id == employee.tenant_id,
         )
@@ -338,8 +344,13 @@ def save_self_scores(db: Session, employee: User, scores: dict[int, float]) -> N
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, "Cannot edit a submission that has already been submitted."
             )
-        _validate_score_within_target(submission, scores[submission.id], "Self score")
-        submission.self_score = scores[submission.id]
+        if submission.id in scores:
+            _validate_score_within_target(submission, scores[submission.id], "Self score")
+            submission.self_score = scores[submission.id]
+        if submission.id in comments:
+            # Only keys actually sent by the client update the comment; an
+            # empty string clears it. Keys not sent leave it untouched.
+            submission.self_score_comment = comments[submission.id].strip() or None
     db.commit()
 
 

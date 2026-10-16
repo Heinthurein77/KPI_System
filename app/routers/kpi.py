@@ -43,8 +43,13 @@ def employee_save_scores(
         raise HTTPException(403, "This account type does not self-assess.")
 
     kpi_service.validate_period_total_weight(db, user, payload.year, payload.period)
-    if payload.scores:
-        kpi_service.save_self_scores(db, user, {int(k): v for k, v in payload.scores.items()})
+    if payload.scores or payload.comments:
+        kpi_service.save_self_scores(
+            db,
+            user,
+            {int(k): v for k, v in payload.scores.items()},
+            {int(k): v for k, v in payload.comments.items()},
+        )
 
     return _own_submissions_for_period(db, user, payload.year, payload.period)
 
@@ -59,8 +64,13 @@ def employee_submit(
         raise HTTPException(403, "This account type does not self-assess.")
 
     kpi_service.validate_period_total_weight(db, user, payload.year, payload.period)
-    if payload.scores:
-        kpi_service.save_self_scores(db, user, {int(k): v for k, v in payload.scores.items()})
+    if payload.scores or payload.comments:
+        kpi_service.save_self_scores(
+            db,
+            user,
+            {int(k): v for k, v in payload.scores.items()},
+            {int(k): v for k, v in payload.comments.items()},
+        )
 
     kpi_service.submit_for_dept_approval(db, user, payload.year, payload.period)
     return _own_submissions_for_period(db, user, payload.year, payload.period)

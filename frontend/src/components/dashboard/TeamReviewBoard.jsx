@@ -83,6 +83,9 @@ export default function TeamReviewBoard({
   const scoreInputs = useRef(new Map());
   const [bulkOpen, setBulkOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
+  // Editable scores inside the bulk confirm dialog: { [submissionId]: string }.
+  // Initialized from each card's current score when the dialog opens.
+  const [bulkEdits, setBulkEdits] = useState({});
 
   // Dept path (dept admin) bulk dept-approves; final path (tenant admin) bulk
   // final-approves. Inferred from which approve handler the page wired up.
@@ -183,10 +186,15 @@ export default function TeamReviewBoard({
 
   async function handleBulkConfirm() {
     const items = [];
-    for (const { rows } of bulkRows()) {
-      for (const { submission, score } of rows) {
-        items.push({ submission_id: submission.id, score });
+    for (const s of bulkSubs) {
+      const target = Number(s.target_snapshot ?? s.kpi_template.target);
+      const raw = bulkEdits[s.id];
+      const n = Number(raw);
+      if (raw === undefined || raw === "" || Number.isNaN(n) || n < 0 || n > target) {
+        toast.error(`"${s.kpi_template.metric_name}" score must be between 0 and ${target}.`);
+        return;
       }
+      items.push({ submission_id: s.id, score: n });
     }
     setBulkBusy(true);
     try {
@@ -199,6 +207,17 @@ export default function TeamReviewBoard({
     } finally {
       setBulkBusy(false);
     }
+  }
+
+  function openBulkDialog() {
+    const edits = {};
+    for (const { rows } of bulkRows()) {
+      for (const { submission, score } of rows) {
+        edits[submission.id] = score ?? "";
+      }
+    }
+    setBulkEdits(edits);
+    setBulkOpen(true);
   }
 
   const totalPeople = BUCKET_ORDER.reduce((n, b) => n + buckets[b].length, 0);
@@ -316,7 +335,7 @@ export default function TeamReviewBoard({
                     {bucket === "pending" && bulkSubs.length > 0 && (
                       <button
                         type="button"
-                        onClick={() => setBulkOpen(true)}
+                        onClick={openBulkDialog}
                         className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-gradient-to-r from-emerald-600 to-green-500 px-3 py-2 text-xs font-bold text-white shadow-md shadow-emerald-500/25 hover:shadow-lg hover:-translate-y-px active:translate-y-0 transition whitespace-nowrap"
                       >
                         <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.4">
@@ -420,8 +439,8 @@ export default function TeamReviewBoard({
         title={`Approve all ${bulkSubs.length} submissions?`}
         message={
           isDeptPath
-            ? "Each submission moves to final approval at the score shown."
-            : "Each submission is final-approved at the score shown."
+            ? "Review the scores — tap any score to adjust it. Each submission then moves to final approval."
+            : "Review the scores — tap any score to adjust it. Each submission is then final-approved."
         }
         details={
           <div className="max-h-64 overflow-y-auto rounded-xl border border-slate-100 bg-slate-50/60 px-3 py-2 space-y-3">
@@ -431,19 +450,34 @@ export default function TeamReviewBoard({
                   {employee.name}
                 </p>
                 <ul className="space-y-1">
-                  {rows.map(({ submission, score }) => (
-                    <li
-                      key={submission.id}
-                      className="flex items-center justify-between gap-2 text-xs"
-                    >
-                      <span className="min-w-0 truncate text-slate-700">
-                        {submission.kpi_template.metric_name}
-                      </span>
-                      <span className="shrink-0 rounded-md bg-white px-2 py-0.5 font-bold tabular-nums text-slate-900 ring-1 ring-inset ring-slate-200">
-                        {score ?? "—"}
-                      </span>
-                    </li>
-                  ))}
+                  {rows.map(({ submission }) => {
+                    const target = Number(submission.target_snapshot ?? submission.kpi_template.target);
+                    return (
+                      <li
+                        key={submission.id}
+                        className="flex items-center justify-between gap-2 text-xs"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-slate-700">
+                          {submission.kpi_template.metric_name}
+                        </span>
+                        <span className="shrink-0 text-[10px] tabular-nums text-slate-400">
+                          / {target}
+                        </span>
+                        <input
+                          type="number"
+                          min="0"
+                          max={target}
+                          step="0.1"
+                          value={bulkEdits[submission.id] ?? ""}
+                          onChange={(e) =>
+                            setBulkEdits((prev) => ({ ...prev, [submission.id]: e.target.value }))
+                          }
+                          aria-label={`${submission.kpi_template.metric_name} score`}
+                          className="w-20 shrink-0 rounded-md bg-white px-2 py-1 text-right text-xs font-bold tabular-nums text-slate-900 ring-1 ring-inset ring-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        />
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             ))}

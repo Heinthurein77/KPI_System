@@ -69,6 +69,24 @@ def test_ensure_period_submissions_idempotent(db):
     assert len(all_rows) == 2
 
 
+def test_ensure_period_submissions_includes_recurring_department_template(db):
+    # Regression: department templates created via POST /api/admin/templates
+    # get is_recurring=True from the model default (no locked dates), and the
+    # recurring guard must not exclude them — the start-month guard only
+    # applies to employee-scoped custom templates.
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    dept_template = make_template(
+        db, tenant, metric_name="Dept Recurring", department=dept, is_recurring=True,
+    )
+    assert dept_template.locked_year is None
+
+    submissions = kpi_service.ensure_period_submissions(db, employee, 2026, "March")
+
+    assert {s.kpi_template_id for s in submissions} == {dept_template.id}
+
+
 def test_ensure_period_submissions_dept_admin_only_gets_own_locked_custom_template(db):
     tenant = make_tenant(db)
     dept = make_department(db, tenant)

@@ -187,9 +187,14 @@ def applicable_templates(
     # A recurring custom template becomes applicable from its configured month
     # forward.  Keeping this guard in the existing lazy materialisation path
     # makes monthly carry-over automatic even if the bulk job has not run yet.
+    # The guard only applies to employee-scoped (custom) templates:
+    # department/company-wide templates have no locked start month and are
+    # always applicable.
     return [
         template for template in templates
-        if not template.is_recurring or is_template_active_for_period(template, year, period)
+        if not template.is_recurring
+        or template.employee_id is None
+        or is_template_active_for_period(template, year, period)
     ]
 
 

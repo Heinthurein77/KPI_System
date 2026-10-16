@@ -148,6 +148,14 @@ export default function KpiCard({
     )?.trim();
     return (
       <div className="space-y-2">
+        {s.employee?.name && (
+          <div className="flex items-center gap-1.5">
+            <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-slate-200 text-[10px] font-bold text-slate-600">
+              {s.employee.name[0]?.toUpperCase()}
+            </div>
+            <span className="truncate text-[11px] font-semibold text-slate-600">{s.employee.name}</span>
+          </div>
+        )}
         <div className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
           <span className="text-[11px] text-slate-500">
             Self <span className="font-bold text-slate-700 tabular-nums">{s.self_score ?? "—"}</span>
@@ -357,15 +365,25 @@ export default function KpiCard({
         <div className="pt-1 border-t border-slate-100 space-y-2 mt-auto">
           {onFinalApprove && s.status === "pending_final_approval" && (
             <div className="space-y-2 pt-2">
+              <div className="flex items-center gap-2">
+                <label className="text-[11px] font-medium text-slate-500 shrink-0">Score</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  min="0"
+                  max="200"
+                  value={finalScore}
+                  onChange={(e) => handleScoreChange(setFinalScore, "final", e.target.value)}
+                  aria-invalid={invalidScoreField === "final"}
+                  className={`w-full rounded-lg border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 ${invalidScoreField === "final" ? "border-red-500 focus:ring-red-500" : "border-slate-300 focus:ring-brand-500"}`}
+                />
+              </div>
               <input
-                type="number"
-                step="0.1"
-                min="0"
-                max="200"
-                value={finalScore}
-                onChange={(e) => handleScoreChange(setFinalScore, "final", e.target.value)}
-                aria-invalid={invalidScoreField === "final"}
-                className={`w-full rounded-lg border px-2 py-1.5 text-sm focus:outline-none focus:ring-2 ${invalidScoreField === "final" ? "border-red-500 focus:ring-red-500" : "border-slate-300 focus:ring-brand-500"}`}
+                type="text"
+                placeholder="Remarks (optional — used as the reason if rejected)"
+                value={finalRemarks}
+                onChange={(e) => setFinalRemarks(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500"
               />
               <button
                 type="button"
@@ -378,13 +396,6 @@ export default function KpiCard({
                 </svg>
                 Approve
               </button>
-              <input
-                type="text"
-                placeholder="Remarks (optional — used as the reason if rejected)"
-                value={finalRemarks}
-                onChange={(e) => setFinalRemarks(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-2.5 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-brand-500"
-              />
             </div>
           )}
 

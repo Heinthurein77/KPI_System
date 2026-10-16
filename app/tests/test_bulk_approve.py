@@ -196,3 +196,38 @@ def test_bulk_approve_uses_saved_score_when_none_sent(client, db):
     db.refresh(s1)
     assert s1.status == KPIStatus.PENDING_FINAL_APPROVAL
     assert s1.dept_score == 80  # falls back to self_score like single approve
+
+
+def test_bulk_approve_applies_remarks_to_all(client, db):
+    fx = _setup(db)
+    s1 = _pending_dept(db, fx, fx["emp_a"])
+    s2 = _pending_dept(db, fx, fx["emp_b"])
+    resp = client.post(
+        "/api/kpi/bulk-approve",
+        json={
+            "year": YEAR,
+            "period": PERIOD,
+            "items": [
+                {"submission_id": s1.id, "score": 82},
+                {"submission_id": s2.id, "score": 90},
+            ],
+            "remarks": "Bulk approved after review",
+        },
+        headers=auth_headers(fx["dept_admin"], fx["tenant"]),
+    )
+    assert resp.status_code == 200
+    db.refresh(s1)
+    db.refresh(s2)
+    assert s1.remarks == "Bulk approved after review"
+    assert s2.remarks == "Bulk approved after review"
+
+
+def test_bulk_approve_without_remarks_leaves_remarks_untouched(client, db):
+    fx = _setup(db)
+    s1 = _pending_dept(db, fx, fx["emp_a"])
+    s1.remarks = "Earlier note"
+    db.commit()
+    resp = _post(client, fx, fx["dept_admin"], [{"submission_id": s1.id, "score": 82}])
+    assert resp.status_code == 200
+    db.refresh(s1)
+    assert s1.remarks == "Earlier note"

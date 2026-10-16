@@ -149,6 +149,7 @@ class BulkApproveRequest(BaseModel):
     year: int
     period: str
     items: list[BulkApproveItem] = Field(min_length=1, max_length=500)
+    remarks: str | None = None
 
 
 class RejectRequest(BaseModel):

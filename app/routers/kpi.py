@@ -86,6 +86,7 @@ def bulk_approve(
     return kpi_service.bulk_approve(
         db, user, payload.year, payload.period,
         [(item.submission_id, item.score) for item in payload.items],
+        remarks=payload.remarks,
     )
 
 

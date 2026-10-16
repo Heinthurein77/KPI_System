@@ -561,6 +561,7 @@ def bulk_approve(
     year: int,
     period: str,
     items: list[tuple[int, float | None]],
+    remarks: str | None = None,
 ) -> dict:
     """Approve many submissions in one request.
 
@@ -600,9 +601,9 @@ def bulk_approve(
     approved_ids: list[int] = []
     for kind, submission, score in planned:
         if kind == "dept":
-            dept_approve(db, reviewer, submission, score, None)
+            dept_approve(db, reviewer, submission, score, remarks)
         else:
-            final_approve(db, reviewer, submission, score, None)
+            final_approve(db, reviewer, submission, score, remarks)
         approved_ids.append(submission.id)
     return {"approved": approved_ids, "count": len(approved_ids)}
 

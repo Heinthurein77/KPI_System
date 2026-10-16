@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { createPortal } from "react-dom";
 
 // tone: "danger" | "success" | "brand" | "info"
 // Kept backward compatible: the old `danger` boolean still works.
@@ -50,7 +51,11 @@ export default function ConfirmDialog({
 
   const t = TONES[tone ?? (danger ? "danger" : "success")] ?? TONES.danger;
 
-  return (
+  // Portal to document.body: the dialog is often rendered inside cards with
+  // hover transforms, and a transformed ancestor would become the containing
+  // block for `position: fixed` — making the dialog jump/shrink relative to
+  // the card instead of staying viewport-centered.
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-sm px-4 animate-fade-in"
       onClick={onCancel}
@@ -113,6 +118,7 @@ export default function ConfirmDialog({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }

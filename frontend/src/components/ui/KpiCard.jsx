@@ -7,12 +7,13 @@ import { useToast } from "../../context/ToastContext";
 
 const TARGET_EXCEEDED_MESSAGE = "Target ထက်ကျော်နေပါ၍ပြန်ထည့်ရန်";
 
-const ACCENT = {
-  draft: "bg-slate-300",
-  pending_dept_approval: "bg-amber-400",
-  pending_final_approval: "bg-blue-400",
-  approved: "bg-emerald-400",
-  rejected: "bg-red-400",
+// Gradient version of the status accent for the card's top bar.
+const ACCENT_GRAD = {
+  draft: "from-slate-300 to-slate-200",
+  pending_dept_approval: "from-amber-400 to-orange-300",
+  pending_final_approval: "from-blue-400 to-sky-300",
+  approved: "from-emerald-400 to-green-300",
+  rejected: "from-red-400 to-rose-300",
 };
 
 const ROLE_LABELS = {
@@ -39,6 +40,32 @@ function remarkAuthor(s) {
     return s.final_reviewer ? { user: s.final_reviewer, at: finalAt } : null;
   }
   return s.dept_reviewer ? { user: s.dept_reviewer, at: deptAt } : null;
+}
+
+// One score tile (Self / Dept / Final): tier-colored badge plus a mini
+// attainment bar against the target. Purely presentational.
+function ScoreTile({ label, value, target, children }) {
+  const attainment =
+    value === null || value === undefined || !(Number(target) > 0)
+      ? null
+      : Math.min(100, (Number(value) / Number(target)) * 100);
+  const bar =
+    attainment === null
+      ? null
+      : attainment > 75
+        ? "bg-emerald-500"
+        : attainment > 50
+          ? "bg-amber-500"
+          : "bg-red-500";
+  return (
+    <div className="rounded-xl border border-slate-100 bg-slate-50/70 px-2 py-2.5 text-center">
+      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">{label}</p>
+      {children ?? <ScoreBadge value={value} target={target} />}
+      <div className="mt-2 h-1 overflow-hidden rounded-full bg-slate-200/70">
+        {bar && <div className={`h-full rounded-full ${bar} transition-all`} style={{ width: `${attainment}%` }} />}
+      </div>
+    </div>
+  );
 }
 
 // Attainment for the card's hero ring: best available score vs target,
@@ -179,29 +206,33 @@ export default function KpiCard({
   }
 
   return (
-    <div className="relative rounded-xl border border-slate-200 bg-white pt-4 px-4 pb-4 flex flex-col gap-3 overflow-hidden hover:shadow-md hover:border-slate-300 hover:-translate-y-0.5 transition-all">
-      <span className={`absolute inset-x-0 top-0 h-1 ${ACCENT[s.status]}`}></span>
+    <div className="relative rounded-2xl border border-slate-200/80 bg-white px-4 pt-4 pb-4 flex flex-col gap-3 overflow-hidden shadow-sm hover:shadow-lg hover:border-slate-300 hover:-translate-y-0.5 transition-all">
+      <span className={`absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r ${ACCENT_GRAD[s.status]}`}></span>
 
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h4
-            className="text-sm font-semibold text-slate-800 leading-snug line-clamp-2 min-h-[2.5rem]"
+            className="text-[15px] font-bold text-slate-900 leading-snug line-clamp-2 min-h-[2.5rem]"
             title={s.kpi_template.metric_name}
           >
             {s.kpi_template.metric_name}
           </h4>
-          <p className="text-[11px] text-slate-400 mt-0.5">
-            Target {snapTarget} · Weight {s.weight_snapshot ?? s.kpi_template.weight}
-          </p>
+          <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+            <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 tabular-nums">
+              Target {snapTarget}
+            </span>
+            <span className="rounded-md bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-500 tabular-nums">
+              Weight {s.weight_snapshot ?? s.kpi_template.weight}
+            </span>
+          </div>
         </div>
         <AttainmentRing value={attainment.value} label={attainment.label} />
       </div>
 
       <StatusBadge status={s.status} />
 
-      <div className={`grid ${hideDeptColumn ? "grid-cols-2" : "grid-cols-3"} gap-1.5 rounded-lg bg-slate-50 px-1.5 py-3`}>
-        <div className="text-center">
-          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Self</p>
+      <div className={`grid ${hideDeptColumn ? "grid-cols-2" : "grid-cols-3"} gap-2`}>
+        <ScoreTile label="Self" value={s.self_score} target={snapTarget}>
           {editableSelf ? (
             <input
               id={`self-score-${s.id}`}
@@ -214,20 +245,12 @@ export default function KpiCard({
               aria-invalid={selfScoreInvalid}
               className={`w-full rounded-lg border px-1 py-1.5 text-sm text-center tabular-nums focus:outline-none focus:ring-2 ${selfScoreInvalid ? "border-red-500 focus:ring-red-500" : "border-slate-300 focus:ring-brand-500"}`}
             />
-          ) : (
-            <ScoreBadge value={s.self_score} target={snapTarget} />
-          )}
-        </div>
+          ) : undefined}
+        </ScoreTile>
         {!hideDeptColumn && (
-          <div className="text-center border-x border-slate-200">
-            <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Dept</p>
-            <ScoreBadge value={s.dept_score} target={snapTarget} />
-          </div>
+          <ScoreTile label="Dept" value={s.dept_score} target={snapTarget} />
         )}
-        <div className="text-center">
-          <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wide mb-1.5">Final</p>
-          <ScoreBadge value={s.final_score} target={snapTarget} size="md" />
-        </div>
+        <ScoreTile label="Final" value={s.final_score} target={snapTarget} />
       </div>
 
       {editableSelf && (

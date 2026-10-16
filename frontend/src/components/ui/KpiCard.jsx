@@ -64,6 +64,9 @@ function ScoreTile({ label, value, target, children }) {
       <div className="mt-2 h-1 overflow-hidden rounded-full bg-slate-200/70">
         {bar && <div className={`h-full rounded-full ${bar} transition-all`} style={{ width: `${attainment}%` }} />}
       </div>
+      <p className="mt-1 h-3 text-[10px] font-semibold tabular-nums text-slate-400">
+        {attainment !== null ? `${Math.round((Number(value) / Number(target)) * 100)}%` : ""}
+      </p>
     </div>
   );
 }

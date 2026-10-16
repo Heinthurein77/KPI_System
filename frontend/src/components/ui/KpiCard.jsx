@@ -222,7 +222,7 @@ export default function KpiCard({
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h4
-            className="text-sm font-bold text-slate-900 leading-snug line-clamp-1"
+            className="text-sm font-bold text-slate-900 leading-snug break-words"
             title={s.kpi_template.metric_name}
           >
             {s.kpi_template.metric_name}

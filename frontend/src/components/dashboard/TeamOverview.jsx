@@ -33,18 +33,18 @@ const ICON = {
 
 function StatCard({ label, value, detail, accent, icon }) {
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-slate-200 bg-white px-5 py-4 shadow-sm">
-      <div className={`pointer-events-none absolute -top-8 -right-8 h-24 w-24 rounded-full blur-2xl ${accent.glow}`}></div>
-      <div className="relative flex items-start gap-3">
-        <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg ${accent.bg}`}>
-          <svg className={`h-4.5 w-4.5 ${accent.text}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+    <div className="relative overflow-hidden rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm">
+      <div className={`pointer-events-none absolute -top-8 -right-8 h-20 w-20 rounded-full blur-2xl ${accent.glow}`}></div>
+      <div className="relative flex items-start gap-2.5">
+        <div className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${accent.bg}`}>
+          <svg className={`h-4 w-4 ${accent.text}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
             {icon}
           </svg>
         </div>
         <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wide">{label}</p>
-          <p className="mt-1 text-2xl font-bold text-slate-900 leading-none tabular-nums truncate">{value}</p>
-          <p className="mt-1.5 text-xs text-slate-500 truncate">{detail}</p>
+          <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">{label}</p>
+          <p className="mt-0.5 text-xl font-bold text-slate-900 leading-none tabular-nums truncate">{value}</p>
+          <p className="mt-1 text-[11px] text-slate-500 truncate">{detail}</p>
         </div>
       </div>
     </div>
@@ -62,8 +62,8 @@ export default function TeamOverview({ data, pendingStatuses, pendingLabel }) {
   const avgTier = avgAttainment !== null ? TIER_COLOR[scoreTier(avgAttainment)] : TIER_COLOR.warning;
 
   return (
-    <div className="mb-6">
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="mb-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <StatCard
           label="People"
           value={peopleCount}

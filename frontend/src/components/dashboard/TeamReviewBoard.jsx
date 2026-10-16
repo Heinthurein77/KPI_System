@@ -241,7 +241,7 @@ export default function TeamReviewBoard({
     const remarkEdits = {};
     for (const s of bulkSubs) {
       edits[s.id] = resolveBulkScore(s) ?? "";
-      remarkEdits[s.id] = "";
+      remarkEdits[s.id] = s.remarks ?? "";
     }
     setBulkEdits(edits);
     setBulkRemarkEdits(remarkEdits);
@@ -434,7 +434,7 @@ export default function TeamReviewBoard({
                                     KPI Trend
                                   </Link>
                                 </div>
-                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                                   {items.map((s) => (
                                     <KpiCard
                                       key={s.id}
@@ -536,6 +536,14 @@ export default function TeamReviewBoard({
                             aria-label={`${submission.kpi_template.metric_name} remarks`}
                             className="w-full rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-600 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-500"
                           />
+                          {submission.self_score_comment && (
+                            <p
+                              className="text-[11px] text-sky-700 leading-snug line-clamp-2"
+                              title={submission.self_score_comment}
+                            >
+                              <span className="font-semibold">Why:</span> {submission.self_score_comment}
+                            </p>
+                          )}
                         </li>
                       );
                     })}

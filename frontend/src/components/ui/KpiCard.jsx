@@ -58,10 +58,10 @@ function ScoreTile({ label, value, target, children }) {
           ? "bg-amber-500"
           : "bg-red-500";
   return (
-    <div className="rounded-xl border border-slate-100 bg-slate-50/70 px-2 py-2.5 text-center">
-      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">{label}</p>
+    <div className="rounded-xl border border-slate-100 bg-slate-50/70 px-2 py-2 text-center">
+      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">{label}</p>
       {children ?? <ScoreBadge value={value} target={target} />}
-      <div className="mt-2 h-1 overflow-hidden rounded-full bg-slate-200/70">
+      <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-slate-200/70">
         {bar && <div className={`h-full rounded-full ${bar} transition-all`} style={{ width: `${attainment}%` }} />}
       </div>
       <p className="mt-1 h-3 text-[10px] font-semibold tabular-nums text-slate-400">
@@ -216,13 +216,13 @@ export default function KpiCard({
   }
 
   return (
-    <div className="relative rounded-2xl border border-slate-200/80 bg-white px-4 pt-4 pb-4 flex flex-col gap-3 overflow-hidden shadow-sm hover:shadow-lg hover:border-slate-300 hover:-translate-y-0.5 transition-all">
+    <div className="relative rounded-2xl border border-slate-200/80 bg-white px-4 py-3 flex flex-col gap-2.5 overflow-hidden shadow-sm hover:shadow-lg hover:border-slate-300 hover:-translate-y-0.5 transition-all">
       <span className={`absolute inset-x-0 top-0 h-1.5 bg-gradient-to-r ${ACCENT_GRAD[s.status]}`}></span>
 
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h4
-            className="text-[15px] font-bold text-slate-900 leading-snug line-clamp-2 min-h-[2.5rem]"
+            className="text-sm font-bold text-slate-900 leading-snug line-clamp-1"
             title={s.kpi_template.metric_name}
           >
             {s.kpi_template.metric_name}
@@ -284,16 +284,16 @@ export default function KpiCard({
       )}
 
       {s.self_score_comment && !editableSelf && (
-        <div className="rounded-lg bg-sky-50 border border-sky-100 px-3 py-2.5">
-          <p className="text-[10px] font-semibold text-sky-700 uppercase tracking-wide mb-1">
+        <div className="rounded-lg bg-sky-50 border border-sky-100 px-2.5 py-2">
+          <p className="text-[10px] font-semibold text-sky-700 uppercase tracking-wide mb-0.5">
             Why this score
           </p>
-          <p className="text-xs text-sky-900 leading-relaxed whitespace-pre-wrap">{s.self_score_comment}</p>
+          <p className="text-xs text-sky-900 leading-relaxed whitespace-pre-wrap line-clamp-3" title={s.self_score_comment}>{s.self_score_comment}</p>
         </div>
       )}
 
       {s.remarks && (
-        <div className="rounded-lg bg-amber-50 border border-amber-100 px-3 py-2.5">
+        <div className="rounded-lg bg-amber-50 border border-amber-100 px-2.5 py-2">
           <div className="flex items-center justify-between gap-2 mb-1">
             <p className="text-[10px] font-semibold text-amber-700 uppercase tracking-wide">Remarks</p>
             {author?.at && (
@@ -304,7 +304,7 @@ export default function KpiCard({
           </div>
           <p className="text-xs text-amber-900 leading-relaxed whitespace-pre-wrap">{s.remarks}</p>
           {author?.user && (
-            <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-amber-200/70">
+            <div className="flex items-center gap-1.5 mt-1.5 pt-1.5 border-t border-amber-200/70">
               <div className="h-5 w-5 shrink-0 rounded-full bg-amber-200 text-amber-800 flex items-center justify-center text-[10px] font-semibold">
                 {author.user.name[0]?.toUpperCase()}
               </div>

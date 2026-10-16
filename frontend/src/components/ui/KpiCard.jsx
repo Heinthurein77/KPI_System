@@ -115,13 +115,68 @@ export default function KpiCard({
   function confirmMessage() {
     const metric = s.kpi_template.metric_name;
     if (confirm?.kind === "reject") {
-      const reason = (s.status === "pending_final_approval" ? finalRemarks : deptRemarks)?.trim();
-      return `The employee will need to revise and resubmit "${metric}".${reason ? `\n\nReason: ${reason}` : ""}`;
+      return `The employee will need to revise and resubmit "${metric}".`;
     }
     if (confirm?.kind === "override") {
-      return `Override the score to ${overrideScore} and approve "${metric}"?`;
+      return `Set the final score for "${metric}" and approve it?`;
     }
     return `Approve "${metric}" and move it to the next stage?`;
+  }
+
+  // Rich summary shown inside the approval confirmation dialog: the score
+  // being approved, the employee's own justification, and any typed note.
+  function approvalDetails() {
+    if (!confirm) return null;
+    if (confirm.kind === "reject") {
+      const reason = (s.status === "pending_final_approval" ? finalRemarks : deptRemarks)?.trim();
+      if (!reason) return null;
+      return (
+        <div className="rounded-xl border border-red-100 bg-red-50 px-3 py-2.5">
+          <p className="text-[10px] font-semibold text-red-600 uppercase tracking-wide mb-1">Rejection reason</p>
+          <p className="text-xs text-red-900 whitespace-pre-wrap leading-relaxed">{reason}</p>
+        </div>
+      );
+    }
+    const approving =
+      confirm.kind === "deptApprove"
+        ? { label: "Dept score", value: deptScore }
+        : confirm.kind === "finalApprove"
+          ? { label: "Final score", value: finalScore }
+          : { label: "Override score", value: overrideScore };
+    const remarksText = (
+      confirm.kind === "deptApprove" ? deptRemarks : confirm.kind === "finalApprove" ? finalRemarks : overrideRemarks
+    )?.trim();
+    return (
+      <div className="space-y-2.5">
+        <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-50 divide-y divide-slate-100">
+          <div className="flex items-center justify-between px-3.5 py-2.5">
+            <span className="text-xs text-slate-500">Self score</span>
+            <span className="text-xs font-semibold text-slate-700 tabular-nums">{s.self_score ?? "—"}</span>
+          </div>
+          <div className="flex items-center justify-between bg-white px-3.5 py-2.5">
+            <span className="text-xs font-semibold text-slate-800">{approving.label} · approving</span>
+            <span className="rounded-full bg-gradient-to-r from-brand-600 to-brand-500 px-3 py-1 text-xs font-bold text-white tabular-nums shadow-sm">
+              {approving.value}
+            </span>
+          </div>
+        </div>
+        {s.self_score_comment && (
+          <p className="text-[11px] italic leading-relaxed text-slate-500">“{s.self_score_comment}”</p>
+        )}
+        {remarksText && (
+          <p className="text-xs text-slate-600 leading-relaxed">
+            <span className="font-semibold text-slate-700">Note:</span> {remarksText}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  function confirmTone() {
+    if (confirm?.kind === "reject") return "danger";
+    if (confirm?.kind === "override") return "info";
+    if (confirm?.kind === "finalApprove") return "success";
+    return "brand";
   }
 
   function handleScoreChange(setScore, field, value) {
@@ -275,7 +330,7 @@ export default function KpiCard({
               type="button"
               disabled={!isValidScore(deptScore, snapTarget)}
               onClick={() => setConfirm({ kind: "deptApprove" })}
-              className="flex-1 inline-flex items-center justify-center gap-1 rounded-md bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-brand-700 transition disabled:opacity-60"
+              className="flex-1 inline-flex items-center justify-center gap-1 rounded-xl bg-gradient-to-r from-brand-600 to-brand-500 px-3 py-2 text-xs font-bold text-white shadow-md shadow-brand-500/25 hover:shadow-lg hover:-translate-y-px active:translate-y-0 transition disabled:opacity-60 disabled:hover:translate-y-0"
             >
               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.4">
                 <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
@@ -317,7 +372,7 @@ export default function KpiCard({
                 type="button"
                 disabled={!isValidScore(finalScore, snapTarget)}
                 onClick={() => setConfirm({ kind: "finalApprove" })}
-                className="w-full inline-flex items-center justify-center gap-1 rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-emerald-700 transition whitespace-nowrap disabled:opacity-60"
+                className="w-full inline-flex items-center justify-center gap-1 rounded-xl bg-gradient-to-r from-emerald-600 to-green-500 px-3 py-2 text-xs font-bold text-white shadow-md shadow-emerald-500/25 hover:shadow-lg hover:-translate-y-px active:translate-y-0 transition whitespace-nowrap disabled:opacity-60 disabled:hover:translate-y-0"
               >
                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.4">
                   <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
@@ -375,7 +430,7 @@ export default function KpiCard({
                     type="button"
                     disabled={!isValidScore(overrideScore, snapTarget)}
                     onClick={() => setConfirm({ kind: "override" })}
-                    className="w-full rounded-md bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-slate-800 transition disabled:opacity-60"
+                    className="w-full rounded-xl bg-gradient-to-r from-indigo-600 to-violet-500 px-3 py-2 text-xs font-bold text-white shadow-md shadow-indigo-500/25 hover:shadow-lg hover:-translate-y-px active:translate-y-0 transition disabled:opacity-60 disabled:hover:translate-y-0"
                   >
                     Override &amp; Approve
                   </button>
@@ -399,8 +454,9 @@ export default function KpiCard({
         open={!!confirm}
         title={confirmTitle()}
         message={confirmMessage()}
+        details={approvalDetails()}
         confirmLabel={confirm?.kind === "reject" ? "Reject" : confirm?.kind === "override" ? "Override" : "Approve"}
-        danger={confirm?.kind === "reject"}
+        tone={confirmTone()}
         onConfirm={handleConfirmAction}
         onCancel={() => setConfirm(null)}
       />

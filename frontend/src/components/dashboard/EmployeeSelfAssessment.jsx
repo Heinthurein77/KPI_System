@@ -390,7 +390,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
           </div>
         }
         confirmLabel={isResubmit ? "Resubmit" : "Submit"}
-        danger={false}
+        tone="brand"
         submitting={saving}
         onConfirm={handleSubmit}
         onCancel={() => setConfirmSubmit(false)}

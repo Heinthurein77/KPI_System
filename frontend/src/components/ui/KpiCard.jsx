@@ -243,7 +243,7 @@ export default function KpiCard({
               value={selfScoreValue ?? ""}
               onChange={(e) => onSelfScoreChange(s.id, e.target.value)}
               aria-invalid={selfScoreInvalid}
-              className={`w-full rounded-lg border px-1 py-1.5 text-sm text-center tabular-nums focus:outline-none focus:ring-2 ${selfScoreInvalid ? "border-red-500 focus:ring-red-500" : "border-slate-300 focus:ring-brand-500"}`}
+              className={`w-full rounded-lg border px-2 py-2 text-base font-bold text-center tabular-nums focus:outline-none focus:ring-2 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${selfScoreInvalid ? "border-red-500 focus:ring-red-500" : "border-slate-300 focus:ring-brand-500"}`}
             />
           ) : undefined}
         </ScoreTile>

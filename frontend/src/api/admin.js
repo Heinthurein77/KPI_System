@@ -70,6 +70,13 @@ export function downloadEmployeeAnnualKpiReport(employeeId, year) {
   }).then((r) => r.data);
 }
 
+export function downloadAnnualAppraisalPdf(employeeId, year) {
+  return client.get(`/api/reports/annual/${employeeId}`, {
+    params: { year },
+    responseType: "blob",
+  }).then((r) => r.data);
+}
+
 export function listTemplates() {
   return client.get("/api/admin/templates").then((r) => r.data);
 }

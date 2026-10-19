@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import AppShell from "../../components/layout/AppShell";
 import EmployeeCombobox from "../../components/ui/EmployeeCombobox";
 import PageLoading from "../../components/ui/PageLoading";
-import { downloadEmployeeAnnualKpiReport, downloadEmployeeKpiReport, listUsers } from "../../api/admin";
+import { downloadAnnualAppraisalPdf, downloadEmployeeAnnualKpiReport, downloadEmployeeKpiReport, listUsers } from "../../api/admin";
 import { getBlobErrorMessage, getErrorMessage } from "../../api/errors";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
@@ -83,22 +83,29 @@ export default function KpiDownloadPage() {
 
     setDownloading(true);
     try {
-      const file = reportType === "annual"
-        ? await downloadEmployeeAnnualKpiReport(employee.id, year)
-        : await downloadEmployeeKpiReport(employee.id, month, year);
+      const isAnnual = reportType !== "monthly";
+      const isPdf = reportType === "annual_pdf";
+      const file = isPdf
+        ? await downloadAnnualAppraisalPdf(employee.id, year)
+        : reportType === "annual"
+          ? await downloadEmployeeAnnualKpiReport(employee.id, year)
+          : await downloadEmployeeKpiReport(employee.id, month, year);
       const url = URL.createObjectURL(file);
       const link = document.createElement("a");
       link.href = url;
-      link.download = reportType === "annual"
-        ? `kpi-report-${safeFilePart(employee.name)}-${year}-annual.xlsx`
-        : `kpi-report-${safeFilePart(employee.name)}-${year}-${month.toLowerCase()}.xlsx`;
+      link.download = isPdf
+        ? `kpi-appraisal-${safeFilePart(employee.name)}-${year}.pdf`
+        : reportType === "annual"
+          ? `kpi-report-${safeFilePart(employee.name)}-${year}-annual.xlsx`
+          : `kpi-report-${safeFilePart(employee.name)}-${year}-${month.toLowerCase()}.xlsx`;
       document.body.appendChild(link);
       link.click();
       link.remove();
       setTimeout(() => URL.revokeObjectURL(url), 0);
-      toast.success(`${reportType === "annual" ? "Annual" : "Monthly"} Excel report for ${employee.name} downloaded.`);
+      const label = isPdf ? "Annual appraisal PDF" : reportType === "annual" ? "Annual" : "Monthly";
+      toast.success(`${label} report for ${employee.name} downloaded.`);
     } catch (err) {
-      toast.error(await getBlobErrorMessage(err, "Could not download the Excel report. Please try again."));
+      toast.error(await getBlobErrorMessage(err, "Could not download the report. Please try again."));
     } finally {
       setDownloading(false);
     }
@@ -164,7 +171,7 @@ export default function KpiDownloadPage() {
               <div className="space-y-5">
                 <fieldset>
                   <legend className="mb-1.5 block text-[11px] font-semibold uppercase tracking-wide text-slate-500">Report type</legend>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                     <label className={`cursor-pointer rounded-xl border p-3.5 transition ${reportType === "monthly" ? "border-brand-500 bg-brand-50/60 ring-1 ring-brand-500" : "border-slate-200 hover:border-slate-300"}`}>
                       <input type="radio" name="report-type" value="monthly" checked={reportType === "monthly"} onChange={() => setReportType("monthly")} className="sr-only" />
                       <span className="block text-sm font-semibold text-slate-800">Monthly report</span>
@@ -174,6 +181,11 @@ export default function KpiDownloadPage() {
                       <input type="radio" name="report-type" value="annual" checked={reportType === "annual"} onChange={() => setReportType("annual")} className="sr-only" />
                       <span className="block text-sm font-semibold text-slate-800">Annual report</span>
                       <span className="mt-1 block text-xs leading-5 text-slate-500">One workbook for the full selected year.</span>
+                    </label>
+                    <label className={`cursor-pointer rounded-xl border p-3.5 transition ${reportType === "annual_pdf" ? "border-brand-500 bg-brand-50/60 ring-1 ring-brand-500" : "border-slate-200 hover:border-slate-300"}`}>
+                      <input type="radio" name="report-type" value="annual_pdf" checked={reportType === "annual_pdf"} onChange={() => setReportType("annual_pdf")} className="sr-only" />
+                      <span className="block text-sm font-semibold text-slate-800">Annual appraisal</span>
+                      <span className="mt-1 block text-xs leading-5 text-slate-500">Formatted PDF summary for the full year.</span>
                     </label>
                   </div>
                 </fieldset>
@@ -231,9 +243,9 @@ export default function KpiDownloadPage() {
                 className="mt-7 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-brand-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {downloading ? (
-                  <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/35 border-t-white" /> Preparing Excel file…</>
+                  <><span className="h-4 w-4 animate-spin rounded-full border-2 border-white/35 border-t-white" /> Preparing {reportType === "annual_pdf" ? "PDF" : "Excel"} file…</>
                 ) : (
-                  <><svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2"><path strokeLinecap="round" strokeLinejoin="round" d="M12 3v12m0 0 4-4m-4 4-4-4m-3 8.25v.75a2.25 2.25 0 0 0 2.25 2.25h9.5A2.25 2.25 0 0 0 19.5 19.5v-.75" /></svg> Download {reportType === "annual" ? "annual" : "monthly"} Excel report</>
+                  <><svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.2"><path strokeLinecap="round" strokeLinejoin="round" d="M12 3v12m0 0 4-4m-4 4-4-4m-3 8.25v.75a2.25 2.25 0 0 0 2.25 2.25h9.5A2.25 2.25 0 0 0 19.5 19.5v-.75" /></svg> Download {reportType === "annual_pdf" ? "appraisal PDF" : reportType === "annual" ? "annual" : "monthly"} {reportType === "annual_pdf" ? "" : "Excel "}report</>
                 )}
               </button>
             </form>
@@ -243,9 +255,21 @@ export default function KpiDownloadPage() {
               <ul className="mt-5 space-y-4 text-sm text-slate-600">
                 {[
                   "Employee and department details",
-                  reportType === "annual" ? "Yearly KPI summary" : "KPI targets and metric weights",
-                  reportType === "annual" ? "A detail sheet for every month" : "Self, department, and final scores",
-                  reportType === "annual" ? "Finalized monthly attainment and status" : "Combined KPI attainment and status",
+                  reportType === "annual_pdf"
+                    ? "Yearly attainment summary and best month"
+                    : reportType === "annual"
+                      ? "Yearly KPI summary"
+                      : "KPI targets and metric weights",
+                  reportType === "annual_pdf"
+                    ? "Monthly breakdown table for all 12 months"
+                    : reportType === "annual"
+                      ? "A detail sheet for every month"
+                      : "Self, department, and final scores",
+                  reportType === "annual_pdf"
+                    ? "Per-metric yearly performance and reviewer remarks"
+                    : reportType === "annual"
+                      ? "Finalized monthly attainment and status"
+                      : "Combined KPI attainment and status",
                 ].map((item) => (
                   <li key={item} className="flex gap-3">
                     <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-emerald-700"><svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5"><path strokeLinecap="round" strokeLinejoin="round" d="m5 12 4 4L19 7" /></svg></span>
@@ -255,8 +279,8 @@ export default function KpiDownloadPage() {
               </ul>
               <div className="mt-7 rounded-xl border border-brand-100 bg-white p-4">
                 <p className="text-xs font-semibold uppercase tracking-wide text-brand-700">Selected report</p>
-                <p className="mt-1 text-sm font-semibold text-slate-800">{employee?.name} · {reportType === "annual" ? `Annual ${year}` : `${month} ${year}`}</p>
-                <p className="mt-1 text-xs leading-5 text-slate-500">The report opens in Excel or another spreadsheet application after download.</p>
+                <p className="mt-1 text-sm font-semibold text-slate-800">{employee?.name} · {reportType === "annual_pdf" ? `Appraisal ${year}` : reportType === "annual" ? `Annual ${year}` : `${month} ${year}`}</p>
+                <p className="mt-1 text-xs leading-5 text-slate-500">{reportType === "annual_pdf" ? "The appraisal opens as a PDF after download." : "The report opens in Excel or another spreadsheet application after download."}</p>
               </div>
             </aside>
           </div>

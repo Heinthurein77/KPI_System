@@ -151,14 +151,51 @@ def test_reset_password_rejects_short_password(db, client):
     assert resp.status_code == 422
 
 
-def test_reset_password_dept_admin_forbidden(db, client):
+def test_reset_password_dept_admin_own_department_employee(db, client):
+    from app.core.security import verify_password
+
     tenant = make_tenant(db)
     dept = make_department(db, tenant)
     dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
     target = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    old_hash = target.password_hash
 
     resp = client.post(
         f"/api/admin/users/{target.id}/reset-password",
+        json={"password": "NewPassword123"},
+        headers=auth_headers(dept_admin, tenant),
+    )
+    assert resp.status_code == 200
+
+    db.refresh(target)
+    assert target.password_hash != old_hash
+    assert verify_password("NewPassword123", target.password_hash)
+    assert target.must_change_password is True
+
+
+def test_reset_password_dept_admin_other_department_forbidden(db, client):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    other_dept = make_department(db, tenant, name="Other")
+    dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
+    target = make_user(db, tenant, UserRole.EMPLOYEE, department=other_dept)
+
+    resp = client.post(
+        f"/api/admin/users/{target.id}/reset-password",
+        json={"password": "NewPassword123"},
+        headers=auth_headers(dept_admin, tenant),
+    )
+    assert resp.status_code == 403
+
+
+def test_reset_password_dept_admin_cannot_reset_dept_admin(db, client):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
+    other_da = make_user(db, tenant, UserRole.DEPT_ADMIN, name="Other DA", department=dept)
+
+    resp = client.post(
+        f"/api/admin/users/{other_da.id}/reset-password",
         json={"password": "NewPassword123"},
         headers=auth_headers(dept_admin, tenant),
     )

@@ -320,7 +320,7 @@ export default function UsersPage() {
                             </Link>
                           )}
 
-                          {!isDeptAdmin && (
+                          {(!isDeptAdmin || u.role === "employee") && (
                             <button
                               type="button"
                               onClick={() => openResetPassword(u)}

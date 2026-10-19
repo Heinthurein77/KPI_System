@@ -430,10 +430,18 @@ def reset_user_password(
     user_id: int,
     payload: ResetPasswordRequest,
     db: Session = Depends(get_db),
-    user: User = Depends(require_tenant_admin),
+    user: User = Depends(require_dept_admin),
 ):
-    """Tenant Admin password reset for any user in their tenant (including Dept Admins)."""
+    """Password reset: tenant admins for any user in their tenant (including
+    dept admins); dept admins for employees in their own department only."""
     target = get_tenant_scoped_or_404(db, User, user_id, user.tenant_id, "User not found.")
+
+    if user.role == UserRole.DEPT_ADMIN and (
+        not user.department_id
+        or target.role != UserRole.EMPLOYEE
+        or target.department_id != user.department_id
+    ):
+        raise HTTPException(403, "You can only reset passwords for employees in your department.")
 
     target.password_hash = hash_password(payload.password)
     target.must_change_password = True

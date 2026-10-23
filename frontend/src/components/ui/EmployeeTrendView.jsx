@@ -204,7 +204,7 @@ export default function EmployeeTrendView({ userId, toolbar = null }) {
             <KpiTrendChart points={data.points} onPointClick={handleChartPointClick} />
           </div>
 
-          <div className="mt-6 rounded-2xl border border-slate-200 bg-white shadow-sm overflow-hidden">
+          <div className="mt-6 rounded-2xl border border-slate-200 bg-white shadow-sm overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-100">
               <thead>
                 <tr>

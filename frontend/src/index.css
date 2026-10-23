@@ -63,3 +63,14 @@ body,
 .animate-fade-in {
   animation: fade-in 0.16s ease-out;
 }
+
+/* Phones: tighten table cell padding so wide admin tables fit more
+   columns before sideways scrolling kicks in. Unlayered CSS wins over
+   Tailwind's layered utilities, so this overrides px-6 below md only. */
+@media (max-width: 767px) {
+  table th,
+  table td {
+    padding-left: 0.75rem;
+    padding-right: 0.75rem;
+  }
+}

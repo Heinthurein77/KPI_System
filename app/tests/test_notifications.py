@@ -33,11 +33,18 @@ def _notifications_for(db, user):
 
 
 def _submit(db, tenant, employee, period="September"):
+    from datetime import date
+
+    from app.services.submission_grace import MONTH_NAMES
+
     template = make_template(db, tenant, department=employee.department)
     submission = make_submission(
         db, tenant, employee, template, period=period, self_score=80.0
     )
-    kpi_service.submit_for_dept_approval(db, employee, 2026, period)
+    # Submit mid-month so the grace rule never interferes with what these
+    # tests actually cover (notification routing, not the submission window).
+    mid_month = date(2026, MONTH_NAMES.index(period) + 1, 15)
+    kpi_service.submit_for_dept_approval(db, employee, 2026, period, today=mid_month)
     return submission
 
 
@@ -80,7 +87,9 @@ def test_dept_admin_submit_notifies_tenant_admins_for_final_approval(db):
     template = make_template(db, tenant, employee=dept_admin, locked_year=2026, locked_period="September")
     make_submission(db, tenant, dept_admin, template, period="September", self_score=90.0)
 
-    kpi_service.submit_for_dept_approval(db, dept_admin, 2026, "September")
+    from datetime import date
+
+    kpi_service.submit_for_dept_approval(db, dept_admin, 2026, "September", today=date(2026, 9, 20))
 
     # The submitter isn't notified about their own submit...
     assert [n for n in _notifications_for(db, dept_admin) if n.type == "kpi_submitted"] == []

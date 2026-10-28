@@ -1,10 +1,11 @@
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.config import settings
 from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.kpi_template import KPITemplate
 from app.models.user import User, UserRole
@@ -13,6 +14,7 @@ from app.services import email_service
 from app.services import notification_service
 from app.services.audit_service import fmt_score
 from app.services.recurring_service import is_template_active_for_period
+from app.services.submission_grace import assert_employee_window_open
 
 
 WEIGHT_TOTAL_MESSAGE = (
@@ -328,8 +330,10 @@ def save_self_scores(
     employee: User,
     scores: dict[int, float],
     comments: dict[int, str] | None = None,
+    today: date | None = None,
 ) -> None:
     comments = comments or {}
+    today = today or date.today()
     submissions = db.scalars(
         select(KPISubmission)
         .options(joinedload(KPISubmission.kpi_template))
@@ -344,6 +348,17 @@ def save_self_scores(
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, "Cannot edit a submission that has already been submitted."
             )
+        # Grace rule: a DRAFT may only be edited while its month's window is
+        # open (month-end + SUBMISSION_GRACE_DAYS). A REJECTED submission may
+        # still be corrected after grace — the delay there was the reviewer's.
+        # (Unparseable period labels are left alone by the guard.)
+        if submission.status == KPIStatus.DRAFT:
+            assert_employee_window_open(
+                submission.year,
+                submission.month_or_quarter,
+                today,
+                settings.SUBMISSION_GRACE_DAYS,
+            )
         if submission.id in scores:
             _validate_score_within_target(submission, scores[submission.id], "Self score")
             submission.self_score = scores[submission.id]
@@ -354,7 +369,10 @@ def save_self_scores(
     db.commit()
 
 
-def submit_for_dept_approval(db: Session, employee: User, year: int, period: str) -> None:
+def submit_for_dept_approval(
+    db: Session, employee: User, year: int, period: str, today: date | None = None
+) -> None:
+    today = today or date.today()
     submissions = db.scalars(
         select(KPISubmission).where(
             KPISubmission.employee_id == employee.id,
@@ -382,6 +400,14 @@ def submit_for_dept_approval(db: Session, employee: User, year: int, period: str
     missing = [s for s in submittable if s.self_score is None]
     if missing:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Please score every metric before submitting.")
+
+    # Grace rule: a first-time (DRAFT) submit after the window closed is
+    # refused. A REJECTED-only resubmit is still allowed — same reasoning
+    # as in save_self_scores.
+    if any(s.status == KPIStatus.DRAFT for s in submittable):
+        assert_employee_window_open(
+            year, period, today, settings.SUBMISSION_GRACE_DAYS
+        )
 
     # A Dept Admin cannot review their own KPI, so their own submissions skip
     # department review and go straight to the Tenant Admin for final approval.

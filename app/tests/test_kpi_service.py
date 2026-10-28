@@ -5,6 +5,8 @@ going through HTTP, since this layer is mostly plain Python functions that take
 a Session and ORM objects built via app.tests.factories.
 """
 
+from datetime import date
+
 import pytest
 from fastapi import HTTPException
 
@@ -185,7 +187,8 @@ def test_save_self_scores_only_touches_own_submissions(db):
     sub1 = make_submission(db, tenant, employee1, template, period="August")
     sub2 = make_submission(db, tenant, employee2, template, period="August")
 
-    kpi_service.save_self_scores(db, employee1, {sub1.id: 88.0, sub2.id: 99.0})
+    # today inside August's window (grace rule: old periods are closed).
+    kpi_service.save_self_scores(db, employee1, {sub1.id: 88.0, sub2.id: 99.0}, today=date(2026, 8, 15))
 
     db.refresh(sub1)
     db.refresh(sub2)
@@ -207,7 +210,7 @@ def test_save_self_scores_persists_comment_with_score(db):
     template = make_template(db, tenant)
     sub = make_submission(db, tenant, employee, template, period="August")
 
-    kpi_service.save_self_scores(db, employee, {sub.id: 88.0}, {sub.id: "Closed 14 tickets"})
+    kpi_service.save_self_scores(db, employee, {sub.id: 88.0}, {sub.id: "Closed 14 tickets"}, today=date(2026, 8, 15))
 
     db.refresh(sub)
     assert sub.self_score == 88.0
@@ -221,7 +224,7 @@ def test_save_self_scores_comment_only_save_works(db):
     template = make_template(db, tenant)
     sub = make_submission(db, tenant, employee, template, period="August")
 
-    kpi_service.save_self_scores(db, employee, {}, {sub.id: "Justified without touching score"})
+    kpi_service.save_self_scores(db, employee, {}, {sub.id: "Justified without touching score"}, today=date(2026, 8, 15))
 
     db.refresh(sub)
     assert sub.self_score is None
@@ -237,7 +240,7 @@ def test_save_self_scores_comment_untouched_when_not_sent(db):
     sub.self_score_comment = "Existing reason"
     db.commit()
 
-    kpi_service.save_self_scores(db, employee, {sub.id: 70.0})
+    kpi_service.save_self_scores(db, employee, {sub.id: 70.0}, today=date(2026, 8, 15))
 
     db.refresh(sub)
     assert sub.self_score == 70.0
@@ -253,7 +256,7 @@ def test_save_self_scores_empty_comment_clears(db):
     sub.self_score_comment = "Old reason"
     db.commit()
 
-    kpi_service.save_self_scores(db, employee, {}, {sub.id: "   "})
+    kpi_service.save_self_scores(db, employee, {}, {sub.id: "   "}, today=date(2026, 8, 15))
 
     db.refresh(sub)
     assert sub.self_score_comment is None
@@ -327,7 +330,7 @@ def test_submit_for_dept_approval_raises_404_when_no_submissions(db):
     employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
 
     with pytest.raises(HTTPException) as exc_info:
-        kpi_service.submit_for_dept_approval(db, employee, 2026, "September")
+        kpi_service.submit_for_dept_approval(db, employee, 2026, "September", today=date(2026, 9, 20))
 
     assert exc_info.value.status_code == 404
 
@@ -354,7 +357,7 @@ def test_submit_for_dept_approval_employee_goes_to_pending_dept_approval(db):
     template = make_template(db, tenant)
     submission = make_submission(db, tenant, employee, template, period="September", self_score=80.0)
 
-    kpi_service.submit_for_dept_approval(db, employee, 2026, "September")
+    kpi_service.submit_for_dept_approval(db, employee, 2026, "September", today=date(2026, 9, 20))
 
     db.refresh(submission)
     assert submission.status == KPIStatus.PENDING_DEPT_APPROVAL
@@ -368,7 +371,7 @@ def test_submit_for_dept_approval_dept_admin_skips_to_pending_final_approval(db)
     template = make_template(db, tenant, employee=dept_admin, locked_year=2026, locked_period="September")
     submission = make_submission(db, tenant, dept_admin, template, period="September", self_score=90.0)
 
-    kpi_service.submit_for_dept_approval(db, dept_admin, 2026, "September")
+    kpi_service.submit_for_dept_approval(db, dept_admin, 2026, "September", today=date(2026, 9, 20))
 
     db.refresh(submission)
     assert submission.status == KPIStatus.PENDING_FINAL_APPROVAL

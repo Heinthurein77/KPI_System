@@ -22,8 +22,10 @@ Idempotency: before reminding a user, we check for an existing
 ``deadline_reminder`` notification pointing at the same dashboard period link,
 so a daily cron never spams anyone twice for the same period.
 
-Window: reminders only go out within DEADLINE_REMINDER_DAYS_BEFORE days of
-the end of the current calendar month (configurable, default 3).
+Window: reminders go out within DEADLINE_REMINDER_DAYS_BEFORE days of
+the end of the current calendar month, and also during the submission
+grace week after a month ends (targeting that previous month) — see
+``submission_grace.resolve_reminder_target``.
 """
 
 from __future__ import annotations
@@ -41,18 +43,13 @@ from app.models.notification import Notification
 from app.models.tenant import Tenant, TenantStatus
 from app.models.user import User, UserRole
 from app.services import email_service, notification_service
+from app.services import submission_grace
 from app.services.kpi_service import applicable_templates
 
 REMINDER_TYPE = "deadline_reminder"
 
 # Statuses that mean "you still have something to do this period".
 ACTIONABLE_STATUSES = (KPIStatus.DRAFT, KPIStatus.REJECTED)
-
-MONTH_NAMES = (
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-)
-
 
 @dataclass
 class DeadlineReminderResult:
@@ -62,10 +59,6 @@ class DeadlineReminderResult:
     reminded: int = 0
     already_reminded: int = 0
     per_tenant: dict = field(default_factory=dict)
-
-
-def _current_year_period(today: date) -> tuple[int, str]:
-    return today.year, MONTH_NAMES[today.month - 1]
 
 
 def _days_until_month_end(today: date) -> int:
@@ -99,19 +92,32 @@ def send_deadline_reminders(
         tenant_id: scope to one tenant; None covers every tenant.
     """
     today = today or date.today()
-    year, period = _current_year_period(today)
+    # Reminder target: the current month inside its pre-month-end window,
+    # or the previous month while its submission grace window is still open
+    # (so employees keep getting nudged while they can still act).
+    year, period, in_grace, window_open = submission_grace.resolve_reminder_target(
+        today,
+        settings.DEADLINE_REMINDER_DAYS_BEFORE,
+        settings.SUBMISSION_GRACE_DAYS,
+    )
     result = DeadlineReminderResult(
         window_open=False, year=year, period=period
     )
 
     if not settings.DEADLINE_REMINDER_ENABLED:
         return result
-    if _days_until_month_end(today) > settings.DEADLINE_REMINDER_DAYS_BEFORE:
+    if not window_open:
         return result
     result.window_open = True
 
     link = f"/dashboard?year={year}&period={period}"
-    days_left = _days_until_month_end(today)
+    if in_grace:
+        grace_end = submission_grace.grace_end(
+            year, period, settings.SUBMISSION_GRACE_DAYS
+        )
+        days_left = (grace_end - today).days
+    else:
+        days_left = _days_until_month_end(today)
     when = "today" if days_left == 0 else f"in {days_left} day{'s' if days_left != 1 else ''}"
 
     tenant_ids: list[int]
@@ -162,18 +168,33 @@ def send_deadline_reminders(
                 # when they actually have KPIs to do — no templates, no nag.
                 if not applicable_templates(db, user, year, period):
                     continue
-                title = f"KPI submission due {when}"
-                message = (
-                    f"Your {period} {year} KPI is due {when}, and you haven't "
-                    "started it yet. Please open My KPI, enter your scores and "
-                    "submit it for review."
-                )
+                if in_grace:
+                    title = f"KPI submission grace period ends {when}"
+                    message = (
+                        f"Your {period} {year} KPI grace period ends {when}, and "
+                        "you haven't started it yet. Please open My KPI, enter "
+                        "your scores and submit it for review."
+                    )
+                else:
+                    title = f"KPI submission due {when}"
+                    message = (
+                        f"Your {period} {year} KPI is due {when}, and you haven't "
+                        "started it yet. Please open My KPI, enter your scores and "
+                        "submit it for review."
+                    )
             else:
-                title = f"KPI submission due {when}"
-                message = (
-                    f"Your {period} {year} KPI is due {when}. "
-                    "Please finish your scores and submit it for review."
-                )
+                if in_grace:
+                    title = f"KPI submission grace period ends {when}"
+                    message = (
+                        f"Your {period} {year} KPI grace period ends {when}. "
+                        "Please finish your scores and submit it for review."
+                    )
+                else:
+                    title = f"KPI submission due {when}"
+                    message = (
+                        f"Your {period} {year} KPI is due {when}. "
+                        "Please finish your scores and submit it for review."
+                    )
             created = notification_service.notify_user(
                 db,
                 tenant_id=tid,

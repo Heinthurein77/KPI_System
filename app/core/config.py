@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     DEADLINE_REMINDER_ENABLED: bool = True
     DEADLINE_REMINDER_DAYS_BEFORE: int = 7
 
+    # Submission grace period: after a month ends, employees may still enter
+    # scores for that month for this many days (see submission_grace.py).
+    # Applies to employee save/submit and to the dashboard edit window;
+    # rejected resubmissions and admin approvals are unaffected.
+    SUBMISSION_GRACE_DAYS: int = 7
+
     @property
     def smtp_configured(self) -> bool:
         return bool(self.SMTP_HOST and self.SMTP_USERNAME and self.SMTP_PASSWORD)

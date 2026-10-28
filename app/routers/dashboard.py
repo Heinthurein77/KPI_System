@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from app.core.config import settings
 from app.core.deps import get_current_user
 from app.database import get_db
 from app.models.department import Department
@@ -11,6 +12,7 @@ from app.models.user import User, UserRole
 from app.schemas.kpi import KPISubmissionOut
 from app.schemas.user import DepartmentOut
 from app.services import kpi_service
+from app.services import submission_grace
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -46,6 +48,22 @@ def is_future_month(year: int, period: str, today: date | None = None) -> bool:
     """True when year/period is strictly after the current calendar month."""
     current_year, current_period = current_month_period(today)
     return (year, MONTH_NAMES.index(period)) > (current_year, MONTH_NAMES.index(current_period))
+
+
+def _fillable_state(year: int, period: str, today: date | None = None):
+    """(fillable, is_grace_month, grace_ends_on) for the dashboard.
+
+    Fillable = current month, or a past month still inside its grace window
+    (month-end + SUBMISSION_GRACE_DAYS). ``is_current_period`` in responses
+    keeps meaning "fillable" so existing frontend edit gates keep working;
+    ``is_grace_period``/``grace_ends_on`` let the UI explain the grace case.
+    """
+    today = today or date.today()
+    grace_days = settings.SUBMISSION_GRACE_DAYS
+    fillable = submission_grace.is_fillable_period(year, period, today, grace_days)
+    grace_month = submission_grace.is_grace_month(year, period, today, grace_days)
+    end = submission_grace.grace_end(year, period, grace_days) if grace_month else None
+    return fillable, grace_month, end.isoformat() if end else None
 
 
 def _validated_year_period(year: int | None, period: str | None) -> tuple[int, str]:
@@ -157,7 +175,7 @@ def my_kpi(
 
     year, period = _validated_year_period(year, period)
 
-    is_fillable_period = is_exact_current_month(year, period)
+    is_fillable_period, is_grace_period, grace_ends_on = _fillable_state(year, period)
     if is_fillable_period:
         submissions = kpi_service.ensure_period_submissions(db, user, year, period)
     else:
@@ -176,6 +194,8 @@ def my_kpi(
         "is_current_period": is_fillable_period,
         "is_month_end": is_fillable_period,        # True for the entire current month
         "is_future_period": is_future_month(year, period),
+        "is_grace_period": is_grace_period,
+        "grace_ends_on": grace_ends_on,
         "combined_score": combined_final_score(submissions),
     }
 
@@ -208,7 +228,7 @@ def dashboard(
     }
 
     if user.role == UserRole.EMPLOYEE:
-        is_fillable_period = is_exact_current_month(year, period)
+        is_fillable_period, is_grace_period, grace_ends_on = _fillable_state(year, period)
         if is_fillable_period:
             submissions = kpi_service.ensure_period_submissions(db, user, year, period)
         else:
@@ -223,6 +243,8 @@ def dashboard(
             is_current_period=is_fillable_period,
             is_month_end=is_fillable_period,           # True for the entire current month
             is_future_period=is_future_month(year, period),
+            is_grace_period=is_grace_period,
+            grace_ends_on=grace_ends_on,
             combined_score=combined_final_score(submissions),
         )
         return context

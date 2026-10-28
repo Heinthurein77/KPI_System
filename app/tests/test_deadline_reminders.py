@@ -145,12 +145,14 @@ def test_reminder_endpoint_tenant_admin_ok(client, db):
 
     tenant = make_tenant(db)
     admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Boss")
-    # Outside the reminder window -> window_open false, nothing sent.
+    # Outside every reminder window -> window_open false, nothing sent.
+    # (Oct 15 is past September's grace week, which ends Oct 7, and before
+    # October's pre-month-end window, which opens Oct 24.)
     import datetime
     from unittest.mock import patch
 
     with patch("app.services.deadline_reminder_service.date") as mock_date:
-        mock_date.today.return_value = datetime.date(2026, 10, 1)
+        mock_date.today.return_value = datetime.date(2026, 10, 15)
         r = client.post("/api/admin/reminders/deadline", headers=auth_headers(admin, tenant))
     assert r.status_code == 200
     assert r.json()["window_open"] is False

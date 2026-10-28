@@ -50,19 +50,21 @@ def is_future_month(year: int, period: str, today: date | None = None) -> bool:
     return (year, MONTH_NAMES.index(period)) > (current_year, MONTH_NAMES.index(current_period))
 
 
-def _recurring_rollover_on(db: Session, user, year: int, period: str, today: date | None = None):
-    """ISO date the viewed month's recurring KPIs start, or None.
+def _rollover_on(db: Session, user, year: int, period: str, today: date | None = None):
+    """ISO date the viewed month's KPI set starts, or None.
 
     Only set when viewing the current month before rollover day *and* the
-    user actually has recurring templates for it — otherwise the UI would
-    promise recurring KPIs to people who have none.
+    user actually has templates that will apply once it opens — otherwise
+    the UI would promise KPIs to people who have none.
     """
     today = today or date.today()
     if not (year == today.year and period == MONTH_NAMES[today.month - 1]):
         return None
     if submission_grace.recurring_rollover_open(today, settings.SUBMISSION_GRACE_DAYS):
         return None
-    if not kpi_service.has_recurring_templates(db, user, year, period):
+    if not kpi_service.applicable_templates(
+        db, user, year, period, today=today, apply_rollover_gate=False
+    ):
         return None
     return date(today.year, today.month, settings.SUBMISSION_GRACE_DAYS + 1).isoformat()
 
@@ -213,7 +215,7 @@ def my_kpi(
         "is_future_period": is_future_month(year, period),
         "is_grace_period": is_grace_period,
         "grace_ends_on": grace_ends_on,
-        "recurring_rollover_on": _recurring_rollover_on(db, user, year, period),
+        "rollover_on": _rollover_on(db, user, year, period),
         "combined_score": combined_final_score(submissions),
     }
 
@@ -263,7 +265,7 @@ def dashboard(
             is_future_period=is_future_month(year, period),
             is_grace_period=is_grace_period,
             grace_ends_on=grace_ends_on,
-            recurring_rollover_on=_recurring_rollover_on(db, user, year, period),
+            rollover_on=_rollover_on(db, user, year, period),
             combined_score=combined_final_score(submissions),
         )
         return context

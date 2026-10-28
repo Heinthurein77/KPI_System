@@ -163,30 +163,13 @@ def get_submission_scoped(db: Session, user: User, submission_id: int) -> KPISub
     return submission
 
 
-def has_recurring_templates(
-    db: Session, employee: User, year: int, period: str
-) -> bool:
-    """Whether the employee has any recurring template active for the period.
-
-    Ignores the rollover-day gate on purpose: callers use this to explain
-    *why* nothing recurring is showing yet (rollover opens on day
-    SUBMISSION_GRACE_DAYS + 1), not to decide applicability.
-    """
-    templates = db.scalars(
-        select(KPITemplate).where(
-            KPITemplate.tenant_id == employee.tenant_id,
-            KPITemplate.employee_id == employee.id,
-            KPITemplate.is_recurring.is_(True),
-        )
-    ).all()
-    return any(
-        is_template_active_for_period(template, year, period)
-        for template in templates
-    )
-
-
 def applicable_templates(
-    db: Session, employee: User, year: int, period: str, today: date | None = None
+    db: Session,
+    employee: User,
+    year: int,
+    period: str,
+    today: date | None = None,
+    apply_rollover_gate: bool = True,
 ) -> list[KPITemplate]:
     """Every metric template that would materialise into a draft submission
     for this employee in this period. Read-only — creates nothing.
@@ -194,6 +177,15 @@ def applicable_templates(
     Recurring department/company-wide metrics only apply to Employees — a Dept
     Admin's own KPI is always a custom one-off metric created specifically for
     them, locked to this exact year/period.
+
+    Rollover-day gate (on by default): for the *current* month, NO template
+    of any kind materialises before day SUBMISSION_GRACE_DAYS + 1 (the 8th
+    with the default 7-day grace). Days 1..grace_days belong to closing the
+    previous month, so the new month's whole KPI set — recurring, department
+    and company alike — only starts from the 8th, automatically, every month.
+    Past months — including the grace month — are unaffected. Callers pass
+    apply_rollover_gate=False only to ask "what *would* apply once the
+    rollover opens" (dashboard banner, gated-window handling).
     """
     today = today or date.today()
     custom_condition = (
@@ -221,47 +213,40 @@ def applicable_templates(
     # The guard only applies to employee-scoped (custom) templates:
     # department/company-wide templates have no locked start month and are
     # always applicable.
-    #
-    # Rollover-day gate: for the *current* month, recurring templates only
-    # become applicable from day SUBMISSION_GRACE_DAYS + 1 onward (the 8th
-    # with the default 7-day grace). Days 1..grace_days belong to closing
-    # the previous month, so the new month's recurring set must not appear
-    # yet. Past months — including the grace month — are unaffected.
-    current_month_gated = (
-        year == today.year
-        and period in GRACE_MONTH_NAMES
-        and period == GRACE_MONTH_NAMES[today.month - 1]
-        and not recurring_rollover_open(today, settings.SUBMISSION_GRACE_DAYS)
-    )
-    return [
+    applicable = [
         template for template in templates
         if not template.is_recurring
         or template.employee_id is None
-        or (
-            is_template_active_for_period(template, year, period)
-            and not current_month_gated
-        )
+        or is_template_active_for_period(template, year, period)
     ]
+
+    if (
+        apply_rollover_gate
+        and year == today.year
+        and period in GRACE_MONTH_NAMES
+        and period == GRACE_MONTH_NAMES[today.month - 1]
+        and not recurring_rollover_open(today, settings.SUBMISSION_GRACE_DAYS)
+    ):
+        # Rollover window: the current month's KPI set has not started yet.
+        return []
+
+    return applicable
 
 
 def ensure_period_submissions(
-    db: Session, employee: User, year: int, period: str
+    db: Session, employee: User, year: int, period: str, today: date | None = None
 ) -> list[KPISubmission]:
     """Create draft submissions for every metric template applicable to the employee, idempotently.
 
     Recurring department/company-wide metrics only apply to Employees — a Dept
     Admin's own KPI is always a custom one-off metric created specifically for
     them, locked to this exact year/period.
-    """
-    templates = applicable_templates(db, employee, year, period)
 
-    if not templates:
-        if employee.role == UserRole.EMPLOYEE:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST,
-                "No KPI metrics have been configured for your department yet.",
-            )
-        return []
+    During the rollover window (current month, days 1..grace_days) nothing
+    new materialises, but already-existing submissions stay visible — the
+    month's set simply has not started yet, which is not an error.
+    """
+    templates = applicable_templates(db, employee, year, period, today=today)
 
     existing = db.scalars(
         select(KPISubmission).where(
@@ -271,6 +256,17 @@ def ensure_period_submissions(
             KPISubmission.tenant_id == employee.tenant_id,
         )
     ).all()
+
+    if not templates:
+        if employee.role == UserRole.EMPLOYEE and not applicable_templates(
+            db, employee, year, period, today=today, apply_rollover_gate=False
+        ):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "No KPI metrics have been configured for your department yet.",
+            )
+        return existing
+
     existing_template_ids = {s.kpi_template_id for s in existing}
 
     created: list[KPISubmission] = []

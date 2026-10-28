@@ -1,11 +1,12 @@
-"""Tests for the recurring rollover day (submission_grace + gate).
+"""Tests for the monthly rollover day (submission_grace + gate).
 
-Rule under test: a month's recurring KPIs only start on day
-SUBMISSION_GRACE_DAYS + 1 (the 8th with the default 7-day grace), every
-month, automatically. Days 1..grace_days belong to closing the previous
-month: the current month's recurring templates are not applicable yet,
-and the admin rollover endpoint refuses the current month. Past months
-(including the grace month) and future months are unaffected.
+Rule under test: a month's whole KPI set — recurring, department and
+company alike — only starts on day SUBMISSION_GRACE_DAYS + 1 (the 8th
+with the default 7-day grace), every month, automatically. Days
+1..grace_days belong to closing the previous month: no template for the
+current month is applicable yet, and the admin rollover endpoint refuses
+the current month. Past months (including the grace month) and future
+months are unaffected.
 """
 
 import datetime
@@ -16,11 +17,12 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.user import UserRole
-from app.routers.dashboard import _recurring_rollover_on
+from app.routers.dashboard import _rollover_on
 from app.services import kpi_service, submission_grace
 from app.tests.factories import (
     auth_headers,
     make_department,
+    make_submission,
     make_template,
     make_tenant,
     make_user,
@@ -71,23 +73,43 @@ def test_assert_rollover_open():
 # ---------------------------------------------------------------------------
 
 
-def test_recurring_template_gated_until_8th(db):
+def test_all_templates_gated_until_8th(db):
     _, _, emp, recurring, dept_tpl = _setup_recurring(db)
-    # Nov 3: current month's recurring template is NOT applicable yet,
-    # but the department template still is.
+    # Nov 3: NOTHING for the current month is applicable yet — recurring,
+    # department and company templates alike all wait for rollover day.
     templates = kpi_service.applicable_templates(db, emp, 2026, "November", today=date(2026, 11, 3))
-    assert recurring not in templates
-    assert dept_tpl in templates
-    # Nov 8: the recurring template becomes applicable.
+    assert templates == []
+    # Nov 8: the whole set becomes applicable.
     templates = kpi_service.applicable_templates(db, emp, 2026, "November", today=date(2026, 11, 8))
     assert recurring in templates
+    assert dept_tpl in templates
 
 
-def test_recurring_template_still_applicable_for_grace_month(db):
-    _, _, emp, recurring, _ = _setup_recurring(db)
-    # Nov 3: October is the grace month — its recurring template is unaffected.
+def test_templates_still_applicable_for_grace_month(db):
+    _, _, emp, recurring, dept_tpl = _setup_recurring(db)
+    # Nov 3: October is the grace month — its templates are unaffected.
     templates = kpi_service.applicable_templates(db, emp, 2026, "October", today=date(2026, 11, 3))
     assert recurring in templates
+    assert dept_tpl in templates
+
+
+def test_ensure_in_rollover_window_returns_empty_without_error(db):
+    tenant, _, emp, _, _ = _setup_recurring(db)
+    # Nov 3: no drafts materialise for November, and it is NOT the
+    # "no metrics configured" error — the month simply has not started.
+    assert kpi_service.ensure_period_submissions(db, emp, 2026, "November", today=date(2026, 11, 3)) == []
+    # Nov 8: drafts materialise as usual.
+    subs = kpi_service.ensure_period_submissions(db, emp, 2026, "November", today=date(2026, 11, 8))
+    assert len(subs) == 2
+
+
+def test_ensure_in_rollover_window_keeps_existing_submissions(db):
+    tenant, _, emp, recurring, _ = _setup_recurring(db)
+    existing = make_submission(db, tenant, emp, recurring, period="November", self_score=80.0)
+    # A draft pre-created for November (e.g. by an admin) stays visible
+    # during the rollover window instead of erroring.
+    subs = kpi_service.ensure_period_submissions(db, emp, 2026, "November", today=date(2026, 11, 3))
+    assert [s.id for s in subs] == [existing.id]
 
 
 # ---------------------------------------------------------------------------
@@ -95,16 +117,21 @@ def test_recurring_template_still_applicable_for_grace_month(db):
 # ---------------------------------------------------------------------------
 
 
-def test_recurring_rollover_on_flag(db):
+def test_rollover_on_flag(db):
     _, _, emp, _, _ = _setup_recurring(db)
-    assert _recurring_rollover_on(db, emp, 2026, "November", date(2026, 11, 3)) == "2026-11-08"
-    assert _recurring_rollover_on(db, emp, 2026, "November", date(2026, 11, 8)) is None
-    assert _recurring_rollover_on(db, emp, 2026, "October", date(2026, 11, 3)) is None
-    # An employee with no recurring templates gets no flag.
+    assert _rollover_on(db, emp, 2026, "November", date(2026, 11, 3)) == "2026-11-08"
+    assert _rollover_on(db, emp, 2026, "November", date(2026, 11, 8)) is None
+    assert _rollover_on(db, emp, 2026, "October", date(2026, 11, 3)) is None
+    # An employee with no templates at all gets no flag.
     tenant2 = make_tenant(db, name="Other", slug="other")
     dept2 = make_department(db, tenant2)
     plain = make_user(db, tenant2, UserRole.EMPLOYEE, name="Plain Guy", department=dept2)
-    assert _recurring_rollover_on(db, plain, 2026, "November", date(2026, 11, 3)) is None
+    assert _rollover_on(db, plain, 2026, "November", date(2026, 11, 3)) is None
+    # An employee with only a department template still gets the flag —
+    # the gate now covers every KPI type, not just recurring ones.
+    dept_only_emp = make_user(db, tenant2, UserRole.EMPLOYEE, name="Dept Guy", department=dept2)
+    make_template(db, tenant2, department=dept2)
+    assert _rollover_on(db, dept_only_emp, 2026, "November", date(2026, 11, 3)) == "2026-11-08"
 
 
 # ---------------------------------------------------------------------------

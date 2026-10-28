@@ -263,6 +263,24 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
         <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
       )}
 
+      {/* Info banner: recurring KPIs for this month start on rollover day */}
+      {data.recurring_rollover_on && !isFutureLocked && (
+        <div className="mb-4 rounded-lg bg-sky-50 border border-sky-200 px-4 py-3 flex items-start gap-3">
+          <svg className="h-5 w-5 text-sky-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+          </svg>
+          <p className="text-sm text-sky-800">
+            Recurring KPIs for{" "}
+            <span className="font-semibold">{data.active_period} {data.active_year}</span>{" "}
+            start on{" "}
+            <span className="font-semibold">
+              {new Date(`${data.recurring_rollover_on}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}
+            </span>{" "}
+            — they will appear here automatically from that day.
+          </p>
+        </div>
+      )}
+
       {/* Info banner: grace month — past month still open after month-end */}
       {data.is_grace_period && !isFutureLocked && (
         <div className="mb-4 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3 flex items-start gap-3">

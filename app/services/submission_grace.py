@@ -98,6 +98,47 @@ def assert_employee_window_open(
         )
 
 
+def recurring_rollover_open(today: date, grace_days: int) -> bool:
+    """True once the month's recurring KPIs may start: day grace_days + 1.
+
+    With the default 7-day grace, recurring rollover opens on the 8th of
+    each month. Days 1..grace_days belong to closing the previous month.
+    """
+    return today.day > grace_days
+
+
+def recurring_rollover_date(today: date, grace_days: int) -> date | None:
+    """The date this month's recurring KPIs start, or None if already open."""
+    if recurring_rollover_open(today, grace_days):
+        return None
+    return date(today.year, today.month, grace_days + 1)
+
+
+def assert_recurring_rollover_open(
+    year: int, period: str, today: date, grace_days: int
+) -> None:
+    """Raise 400 when materialising the current month before rollover day.
+
+    Past and future months are unaffected — an admin may always backfill
+    or pre-create those explicitly. Only the current month waits for the
+    8th (grace_days + 1), so the monthly rollover is automatic and uniform.
+    """
+    if period not in MONTH_NAMES:
+        return
+    if (
+        year == today.year
+        and period == MONTH_NAMES[today.month - 1]
+        and not recurring_rollover_open(today, grace_days)
+    ):
+        rollover = date(today.year, today.month, grace_days + 1)
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Recurring KPIs for {period} {year} open on {rollover.isoformat()} "
+            f"(day {grace_days + 1} of the month). Rollover happens "
+            "automatically from that day.",
+        )
+
+
 def _previous_month(year: int, month: int) -> tuple[int, int]:
     if month == 1:
         return year - 1, 12

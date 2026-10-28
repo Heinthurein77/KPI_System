@@ -1,7 +1,10 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
+from app.core.config import settings
 from app.core.deps import get_current_user, require_dept_admin, require_tenant_admin
 from app.core.security import hash_password
 from app.core.tenant import get_tenant_scoped_or_404
@@ -34,6 +37,7 @@ from app.schemas.user import (
     UserSummaryOut,
 )
 from app.services import audit_service, email_service, kpi_export_service, kpi_service, recurring_service
+from app.services import submission_grace
 from app.services.audit_service import fmt_score
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -814,6 +818,13 @@ def run_recurring_kpis(
     """
     if payload.period not in MONTH_NAMES:
         raise HTTPException(422, f"period must be one of: {', '.join(MONTH_NAMES)}")
+
+    # Same rollover rule as the automatic path: the current month's recurring
+    # set only opens on day SUBMISSION_GRACE_DAYS + 1 (the 8th by default).
+    # Backfills for past months and pre-creation for future months are fine.
+    submission_grace.assert_recurring_rollover_open(
+        payload.year, payload.period, date.today(), settings.SUBMISSION_GRACE_DAYS
+    )
 
     result = recurring_service.materialise_recurring_for_period(
         db, payload.year, payload.period, tenant_id=user.tenant_id

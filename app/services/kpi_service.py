@@ -14,7 +14,13 @@ from app.services import email_service
 from app.services import notification_service
 from app.services.audit_service import fmt_score
 from app.services.recurring_service import is_template_active_for_period
-from app.services.submission_grace import assert_employee_window_open
+from app.services.submission_grace import (
+    MONTH_NAMES as GRACE_MONTH_NAMES,
+)
+from app.services.submission_grace import (
+    assert_employee_window_open,
+    recurring_rollover_open,
+)
 
 
 WEIGHT_TOTAL_MESSAGE = (
@@ -157,8 +163,30 @@ def get_submission_scoped(db: Session, user: User, submission_id: int) -> KPISub
     return submission
 
 
-def applicable_templates(
+def has_recurring_templates(
     db: Session, employee: User, year: int, period: str
+) -> bool:
+    """Whether the employee has any recurring template active for the period.
+
+    Ignores the rollover-day gate on purpose: callers use this to explain
+    *why* nothing recurring is showing yet (rollover opens on day
+    SUBMISSION_GRACE_DAYS + 1), not to decide applicability.
+    """
+    templates = db.scalars(
+        select(KPITemplate).where(
+            KPITemplate.tenant_id == employee.tenant_id,
+            KPITemplate.employee_id == employee.id,
+            KPITemplate.is_recurring.is_(True),
+        )
+    ).all()
+    return any(
+        is_template_active_for_period(template, year, period)
+        for template in templates
+    )
+
+
+def applicable_templates(
+    db: Session, employee: User, year: int, period: str, today: date | None = None
 ) -> list[KPITemplate]:
     """Every metric template that would materialise into a draft submission
     for this employee in this period. Read-only — creates nothing.
@@ -167,6 +195,7 @@ def applicable_templates(
     Admin's own KPI is always a custom one-off metric created specifically for
     them, locked to this exact year/period.
     """
+    today = today or date.today()
     custom_condition = (
         (KPITemplate.employee_id == employee.id)
         & (
@@ -192,11 +221,26 @@ def applicable_templates(
     # The guard only applies to employee-scoped (custom) templates:
     # department/company-wide templates have no locked start month and are
     # always applicable.
+    #
+    # Rollover-day gate: for the *current* month, recurring templates only
+    # become applicable from day SUBMISSION_GRACE_DAYS + 1 onward (the 8th
+    # with the default 7-day grace). Days 1..grace_days belong to closing
+    # the previous month, so the new month's recurring set must not appear
+    # yet. Past months — including the grace month — are unaffected.
+    current_month_gated = (
+        year == today.year
+        and period in GRACE_MONTH_NAMES
+        and period == GRACE_MONTH_NAMES[today.month - 1]
+        and not recurring_rollover_open(today, settings.SUBMISSION_GRACE_DAYS)
+    )
     return [
         template for template in templates
         if not template.is_recurring
         or template.employee_id is None
-        or is_template_active_for_period(template, year, period)
+        or (
+            is_template_active_for_period(template, year, period)
+            and not current_month_gated
+        )
     ]
 
 

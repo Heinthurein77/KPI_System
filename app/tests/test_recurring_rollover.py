@@ -135,6 +135,29 @@ def test_rollover_on_flag(db):
 
 
 # ---------------------------------------------------------------------------
+# The user's stated cycle, month by month (same rule every month)
+# ---------------------------------------------------------------------------
+
+
+def test_monthly_cycle_same_every_month_for_recurring(db):
+    """October fillable until Nov 7, November the same way until Dec 7.
+
+    Recurring submissions follow exactly the same grace rule as every other
+    KPI type — the pattern repeats monthly with no special-casing.
+    """
+    tenant, _, emp, recurring, _ = _setup_recurring(db)
+    oct_sub = make_submission(db, tenant, emp, recurring, period="October")
+    kpi_service.save_self_scores(db, emp, {oct_sub.id: 80}, today=date(2026, 11, 7))
+    with pytest.raises(HTTPException):
+        kpi_service.save_self_scores(db, emp, {oct_sub.id: 85}, today=date(2026, 11, 8))
+
+    nov_sub = make_submission(db, tenant, emp, recurring, period="November")
+    kpi_service.save_self_scores(db, emp, {nov_sub.id: 80}, today=date(2026, 12, 7))
+    with pytest.raises(HTTPException):
+        kpi_service.save_self_scores(db, emp, {nov_sub.id: 85}, today=date(2026, 12, 8))
+
+
+# ---------------------------------------------------------------------------
 # Admin endpoint guard
 # ---------------------------------------------------------------------------
 

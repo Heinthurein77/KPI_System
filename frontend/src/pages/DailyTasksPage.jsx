@@ -11,6 +11,8 @@ import {
 } from "recharts";
 import { useAuth } from "../context/AuthContext";
 import AppShell from "../components/layout/AppShell";
+import ConfirmDialog from "../components/ui/ConfirmDialog";
+import { getErrorMessage } from "../api/errors";
 import {
   createDailyTask,
   dailyEvidenceUrl,
@@ -116,6 +118,8 @@ export default function DailyTasksPage() {
   const [audit, setAudit] = useState([]);
   const [notice, setNotice] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [confirm, setConfirm] = useState(null);
+  const [confirmBusy, setConfirmBusy] = useState(false);
   // Success toasts disappear on their own after 4s instead of lingering;
   // error notices stay until the next action.
   useEffect(() => {
@@ -182,9 +186,33 @@ export default function DailyTasksPage() {
     setMonth(m);
   };
 
-  const submitForm = async (e) => {
+  // Submit happens in two steps: first a confirmation dialog, then the save.
+  // The dialog shows what is about to be saved so a mistaken tap can't
+  // silently create or overwrite an entry.
+  const requestSubmit = (e) => {
     e.preventDefault();
     if (!form.work_done.trim() || saving) return;
+    if (evidenceFile && evidenceFile.size > 10 * 1024 * 1024) {
+      setNotice({ text: "သက်သေဖိုင်က 10 MB ထက် ကြီးနေတယ်။ ဖိုင်ကို ချုံ့ပြီး ပြန်တင်ပါ။", ok: false });
+      return;
+    }
+    const statusLabel = STATUS_OPTIONS.find((o) => o.value === form.status)?.label || form.status;
+    setConfirm({
+      title: editingId ? "ပြင်ဆင်ချက်ကို သိမ်းမလား?" : "Diary entry ထည့်မလား?",
+      message: `${form.task_date} · ${statusLabel}${evidenceFile ? `\n📎 ${evidenceFile.name}` : ""}`,
+      details: (
+        <p className="rounded-xl bg-slate-50 px-3 py-2 text-[13px] text-slate-600 whitespace-pre-wrap">
+          {form.work_done.length > 200 ? form.work_done.slice(0, 197) + "…" : form.work_done}
+        </p>
+      ),
+      confirmLabel: "သေချာတယ်၊ သိမ်းမယ်",
+      tone: "success",
+      onConfirm: doSubmit,
+    });
+  };
+
+  const doSubmit = async () => {
+    setConfirmBusy(true);
     setSaving(true);
     try {
       let saved;
@@ -194,22 +222,63 @@ export default function DailyTasksPage() {
         saved = await createDailyTask(form);
       }
       const hadEvidence = !!evidenceFile;
+      let fileError = null;
       if (evidenceFile) {
-        saved = await uploadDailyEvidence(saved.id, evidenceFile);
+        try {
+          saved = await uploadDailyEvidence(saved.id, evidenceFile);
+        } catch (err) {
+          // The entry itself is already saved — only the file failed.
+          // Reporting this as a total save failure was the old misleading
+          // "သိမ်းလို့မရပါ" error; say exactly what failed instead.
+          fileError = getErrorMessage(err, "ဖိုင်တင်လို့မရပါ။");
+        }
         setEvidenceFile(null);
       }
       setEditingId(null);
       setForm(EMPTY_FORM);
-      setNotice({ text: "✓ Diary entry သိမ်းပြီးပါပြီ။", ok: true });
+      if (fileError) {
+        setNotice({ text: `Entry သိမ်းပြီးပါပြီ၊ ဒါပေမဲ့ သက်သေဖိုင်တင်လို့မရပါ: ${fileError}`, ok: false });
+      } else {
+        setNotice({ text: "✓ Diary entry သိမ်းပြီးပါပြီ။", ok: true });
+      }
       load();
-      // With an evidence file attached, jump straight to the filled view so
-      // the file preview is visible immediately.
       if (hadEvidence) setMineView("history");
-    } catch {
-      setNotice({ text: "သိမ်းလို့မရပါ။ ထပ်စမ်းကြည့်ပါ။", ok: false });
+    } catch (err) {
+      // Show the real reason (validation, session, server) instead of a
+      // generic "try again" that hides the cause.
+      setNotice({ text: getErrorMessage(err, "သိမ်းလို့မရပါ။ ထပ်စမ်းကြည့်ပါ။"), ok: false });
     } finally {
+      setConfirmBusy(false);
       setSaving(false);
+      setConfirm(null);
     }
+  };
+
+  const requestDelete = (entry) => {
+    setConfirm({
+      title: "ဒီ entry ကို ဖျက်မလား?",
+      message: `${entry.task_date} · ${entry.author_name}`,
+      details: (
+        <p className="rounded-xl bg-slate-50 px-3 py-2 text-[13px] text-slate-600 whitespace-pre-wrap">
+          {entry.work_done.length > 200 ? entry.work_done.slice(0, 197) + "…" : entry.work_done}
+        </p>
+      ),
+      confirmLabel: "ဖျက်မယ်",
+      danger: true,
+      onConfirm: async () => {
+        setConfirmBusy(true);
+        try {
+          await deleteDailyTask(entry.id);
+          setNotice({ text: "✓ Entry ဖျက်ပြီးပါပြီ။", ok: true });
+          load();
+        } catch (err) {
+          setNotice({ text: getErrorMessage(err, "ဖျက်လို့မရပါ။ ထပ်စမ်းကြည့်ပါ။"), ok: false });
+        } finally {
+          setConfirmBusy(false);
+          setConfirm(null);
+        }
+      },
+    });
   };
 
   const startEdit = (entry) => {
@@ -390,7 +459,7 @@ export default function DailyTasksPage() {
         <h2 className="font-semibold text-slate-800">
           {editingId ? "Entry ပြင်ဆင်ရန် · Edit Entry" : "ဒီနေ့ အလုပ် ထည့်ရန် · New Diary Entry"}
         </h2>
-        <form onSubmit={submitForm} className="mt-4 space-y-4">
+        <form onSubmit={requestSubmit} className="mt-4 space-y-4">
           <div className="grid gap-3 sm:grid-cols-3">
             <Field label="ရက်စွဲ" sub="Date">
               <input type="date" className={inputCls} value={form.task_date}
@@ -523,7 +592,7 @@ export default function DailyTasksPage() {
                 <>
                   <button className="rounded-full border px-3 py-1 text-xs" onClick={() => startEdit(entry)}>ပြင်ဆင်ရန်</button>
                   <button className="rounded-full border px-3 py-1 text-xs text-red-600"
-                    onClick={async () => { await deleteDailyTask(entry.id); load(); }}>
+                    onClick={() => requestDelete(entry)}>
                     ဖျက်ရန်
                   </button>
                 </>
@@ -630,6 +699,19 @@ export default function DailyTasksPage() {
         )}
       </section>
       )}
+      {/* Confirmation dialog for submit and delete */}
+      <ConfirmDialog
+        open={!!confirm}
+        title={confirm?.title}
+        message={confirm?.message}
+        details={confirm?.details}
+        confirmLabel={confirm?.confirmLabel}
+        danger={confirm?.danger}
+        tone={confirm?.tone}
+        submitting={confirmBusy}
+        onConfirm={() => confirm?.onConfirm?.()}
+        onCancel={() => { if (!confirmBusy) setConfirm(null); }}
+      />
     </div>
     </AppShell>
   );

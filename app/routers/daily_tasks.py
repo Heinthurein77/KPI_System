@@ -304,14 +304,25 @@ async def upload_evidence(
     content = await file.read()
     if len(content) > MAX_EVIDENCE_BYTES:
         raise HTTPException(400, "Evidence file must be 10 MB or smaller.")
-    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    safe_name = Path(file.filename or "evidence").name
-    stored = f"{entry.id}_{safe_name}"
-    (UPLOAD_DIR / stored).write_bytes(content)
-    if entry.evidence_file and entry.evidence_file != stored:
-        old = UPLOAD_DIR / entry.evidence_file
-        if old.exists():
-            old.unlink()
+    try:
+        UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        safe_name = Path(file.filename or "evidence").name
+        stored = f"{entry.id}_{safe_name}"
+        (UPLOAD_DIR / stored).write_bytes(content)
+        if entry.evidence_file and entry.evidence_file != stored:
+            old = UPLOAD_DIR / entry.evidence_file
+            if old.exists():
+                old.unlink()
+    except OSError as exc:
+        # E.g. the uploads volume is root-owned so the app user cannot write
+        # into it. The diary entry itself is already saved; say exactly that
+        # instead of letting the generic 500 handler hide the cause.
+        raise HTTPException(
+            500,
+            "Could not save the evidence file on the server (storage permission "
+            "problem). Your diary entry was saved without the file — please ask "
+            "the administrator to fix the uploads folder ownership.",
+        ) from exc
     entry.evidence_file = stored
     audit_service.log(
         db, user, "daily_task_evidence_uploaded", "daily_task", entry.id,

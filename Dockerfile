@@ -36,6 +36,7 @@ COPY alembic.ini ./alembic.ini
 COPY --from=frontend-build /frontend/dist ./frontend_dist
 
 RUN useradd --create-home appuser \
+    && mkdir -p /app/uploads/daily_tasks \
     && chown -R appuser:appuser /app
 USER appuser
 

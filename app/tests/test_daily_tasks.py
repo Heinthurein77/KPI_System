@@ -7,6 +7,7 @@ service's once-per-day idempotency.
 
 from datetime import date
 from io import BytesIO
+from pathlib import Path
 
 import openpyxl
 import pytest
@@ -293,3 +294,24 @@ def test_evidence_file_served_inline_for_viewing(db, client):
     assert r.headers["content-disposition"].startswith("inline")
     assert r.content == png
     client.delete(f"/api/daily-tasks/{entry_id}", headers=auth_headers(emp, tenant))
+
+
+def test_evidence_upload_storage_failure_says_so_clearly(db, client, monkeypatch):
+    """If the uploads folder is not writable, the upload must fail with a
+    clear storage message — not the generic 500 handler text."""
+    from app.routers import daily_tasks as router
+
+    tenant, _, emp, _, _ = _setup(db)
+    r = client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    entry_id = r.json()["id"]
+    monkeypatch.setattr(router, "UPLOAD_DIR", Path("/proc/definitely-not-writable"))
+    r = client.post(f"/api/daily-tasks/{entry_id}/evidence",
+                    files={"file": ("shot.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+                    headers=auth_headers(emp, tenant))
+    assert r.status_code == 500
+    assert "Could not save the evidence file" in r.json()["detail"]
+    assert "unexpected error" not in r.json()["detail"].lower()
+    # The entry itself is untouched and still readable.
+    r = client.get("/api/daily-tasks?year=2026&month=11",
+                   headers=auth_headers(emp, tenant))
+    assert r.status_code == 200

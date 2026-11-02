@@ -14,6 +14,7 @@ from app.tests.factories import (
     make_template,
     make_tenant,
     make_user,
+    open_fillable_period,
 )
 
 
@@ -402,7 +403,8 @@ def test_new_submissions_get_current_weight(client, db):
     assert resp.status_code == 200
     db.refresh(tpl)  # the PATCH ran in another session; drop the stale identity-map copy
 
-    subs = kpi_service.ensure_period_submissions(db, emp, 2026, "November")
+    oy, op = open_fillable_period()
+    subs = kpi_service.ensure_period_submissions(db, emp, oy, op)
     assert len(subs) == 1
     assert subs[0].weight_snapshot == 70
     assert subs[0].target_snapshot == 100

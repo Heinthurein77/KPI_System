@@ -17,6 +17,32 @@ from app.models.user import User, UserRole
 DEFAULT_PASSWORD = "Password123!"
 
 
+MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+
+
+def open_fillable_period(today=None) -> tuple[int, str]:
+    """(year, period) for a month whose KPI set is currently open.
+
+    The KPI cycle gates a new month's whole set until day 8, while the
+    previous month stays fillable through month-end + 7 days (grace).
+    So: from day 8 on, the current month is open; on days 1-7, the
+    previous month (grace month) is the open one. Tests that materialise
+    drafts must use this instead of assuming the calendar month is open,
+    or they fail every month on days 1-7.
+    """
+    from datetime import date as _date
+
+    today = today or _date.today()
+    if today.day >= 8:
+        return today.year, MONTH_NAMES[today.month - 1]
+    if today.month == 1:
+        return today.year - 1, "December"
+    return today.year, MONTH_NAMES[today.month - 2]
+
+
 def make_tenant(db, name="Acme", slug="acme", status=TenantStatus.ACTIVE) -> Tenant:
     tenant = Tenant(name=name, slug=slug, status=status)
     db.add(tenant)

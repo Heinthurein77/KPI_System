@@ -7,8 +7,7 @@ Tenant Admin gives final approval.
 """
 
 from app.models.user import UserRole
-from app.routers.dashboard import current_month_period
-from app.tests.factories import auth_headers, make_department, make_tenant, make_template, make_user
+from app.tests.factories import auth_headers, make_department, make_tenant, make_template, make_user, open_fillable_period
 
 
 def test_dept_admin_self_assessment_skips_dept_review(db, client):
@@ -17,7 +16,7 @@ def test_dept_admin_self_assessment_skips_dept_review(db, client):
     dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, name="Dept Admin", department=dept)
     tenant_admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Tenant Admin")
 
-    year, period = current_month_period()
+    year, period = open_fillable_period()
     # Custom KPI assigned to this Dept Admin specifically, locked to the current period.
     make_template(
         db,
@@ -32,7 +31,13 @@ def test_dept_admin_self_assessment_skips_dept_review(db, client):
     )
 
     # GET /api/my-kpi materializes the draft for the Dept Admin's own custom KPI.
-    resp = client.get("/api/my-kpi", headers=auth_headers(dept_admin, tenant))
+    # Pass the open period explicitly: the default (calendar month) is gated
+    # until day 8 during the rollover window and materialises nothing.
+    resp = client.get(
+        "/api/my-kpi",
+        params={"year": year, "period": period},
+        headers=auth_headers(dept_admin, tenant),
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["is_current_period"] is True

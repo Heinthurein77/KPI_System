@@ -18,6 +18,7 @@ from app.models.notification import Notification
 from app.models.user import UserRole
 from app.tests.factories import (
     auth_headers,
+    open_fillable_period,
     make_department,
     make_submission,
     make_template,
@@ -25,8 +26,9 @@ from app.tests.factories import (
     make_user,
 )
 
-YEAR = 2026
-PERIOD = "October"
+# Open month for the day the suite runs: current month from day 8,
+# else the previous (grace) month. Never assume the calendar month is open.
+YEAR, PERIOD = open_fillable_period()
 
 
 def _world(db):
@@ -48,7 +50,7 @@ def _world(db):
 
 def _sub_id(client, headers, emp_name, metric):
     """Find a submission id for an employee+metric via dashboard."""
-    resp = client.get("/api/dashboard", headers=headers)
+    resp = client.get("/api/dashboard", params={"year": YEAR, "period": PERIOD}, headers=headers)
     assert resp.status_code == 200, resp.text
     for s in resp.json()["submissions"]:
         if s["employee"]["name"] == emp_name and s["kpi_template"]["metric_name"] == metric:

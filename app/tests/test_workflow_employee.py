@@ -9,6 +9,7 @@ reject branch off dept review.
 from app.models.user import UserRole
 from app.tests.factories import (
     auth_headers,
+    open_fillable_period,
     make_department,
     make_tenant,
     make_template,
@@ -32,7 +33,8 @@ def test_full_happy_path_employee_to_approved(db, client):
 
     # Step 1: GET /api/dashboard as the Employee materializes a draft submission
     # for the current period (real client would land here with no query params).
-    resp = client.get("/api/dashboard", headers=auth_headers(employee, tenant))
+    oy, op = open_fillable_period()
+    resp = client.get("/api/dashboard", params={"year": oy, "period": op}, headers=auth_headers(employee, tenant))
     assert resp.status_code == 200
     body = resp.json()
     assert body["is_current_period"] is True
@@ -105,7 +107,8 @@ def test_full_happy_path_employee_to_approved(db, client):
 def test_employee_save_with_comment_persists_and_returns(db, client):
     tenant, dept, employee, dept_admin, tenant_admin, template = _setup_tenant(db)
 
-    resp = client.get("/api/dashboard", headers=auth_headers(employee, tenant))
+    oy, op = open_fillable_period()
+    resp = client.get("/api/dashboard", params={"year": oy, "period": op}, headers=auth_headers(employee, tenant))
     body = resp.json()
     submission_id = body["submissions"][0]["id"]
     year, period = body["active_year"], body["active_period"]
@@ -158,7 +161,8 @@ def test_employee_save_with_comment_persists_and_returns(db, client):
 def test_reject_path_then_reject_and_approve_are_refused(db, client):
     tenant, dept, employee, dept_admin, tenant_admin, template = _setup_tenant(db)
 
-    resp = client.get("/api/dashboard", headers=auth_headers(employee, tenant))
+    oy, op = open_fillable_period()
+    resp = client.get("/api/dashboard", params={"year": oy, "period": op}, headers=auth_headers(employee, tenant))
     body = resp.json()
     submission_id = body["submissions"][0]["id"]
     year, period = body["active_year"], body["active_period"]

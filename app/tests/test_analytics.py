@@ -82,8 +82,39 @@ def test_overview_forbidden_for_employee(client, db):
     assert r.status_code == 403
 
 
-def test_trend_returns_monthly_points(client, setup_data):
-    tenant, admin = setup_data
+def test_trend_returns_monthly_points(client, db):
+    """Trend covers the last 2 calendar months ending at the current month.
+
+    The window is relative to today, so the seeded months are computed
+    from the run date instead of hardcoding October/September (which
+    broke as soon as the calendar moved into November).
+    """
+    from datetime import date as _date
+
+    from app.tests.factories import MONTH_NAMES
+
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant, name="Engineering")
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Boss")
+    emp1 = make_user(db, tenant, UserRole.EMPLOYEE, name="Eng One", department=dept)
+    emp2 = make_user(db, tenant, UserRole.EMPLOYEE, name="Eng Two", department=dept)
+    tpl = make_template(db, tenant)
+    today = _date.today()
+    if today.month == 1:
+        months = [(today.year - 1, "December"), (today.year, "January")]
+    else:
+        months = [
+            (today.year, MONTH_NAMES[today.month - 2]),
+            (today.year, MONTH_NAMES[today.month - 1]),
+        ]
+    (y0, p0), (y1, p1) = months
+    make_submission(db, tenant, emp1, tpl, year=y0, period=p0,
+                    status=KPIStatus.APPROVED, final_score=90, department=dept)
+    make_submission(db, tenant, emp2, tpl, year=y0, period=p0,
+                    status=KPIStatus.APPROVED, final_score=60, department=dept)
+    make_submission(db, tenant, emp1, tpl, year=y1, period=p1,
+                    status=KPIStatus.APPROVED, final_score=80, department=dept)
+    db.commit()
     r = client.get(
         "/api/analytics/trend",
         params={"periods": 2},
@@ -93,9 +124,9 @@ def test_trend_returns_monthly_points(client, setup_data):
     data = r.json()
     assert len(data) == 2
     by_key = {(p["year"], p["period"]): p for p in data}
-    assert by_key[(2026, "October")]["avg_score"] == pytest.approx(75.0)
-    assert by_key[(2026, "October")]["submitted_count"] == 2
-    assert by_key[(2026, "September")]["avg_score"] == pytest.approx(80.0)
+    assert by_key[(y0, p0)]["avg_score"] == pytest.approx(75.0)
+    assert by_key[(y0, p0)]["submitted_count"] == 2
+    assert by_key[(y1, p1)]["avg_score"] == pytest.approx(80.0)
 
 
 def test_analytics_unauthenticated_401(client):

@@ -1,21 +1,27 @@
-"""HTTP coverage for the required 100% KPI-weight save and submit guard."""
+"""HTTP coverage for the KPI-weight save and submit guard.
+
+Production rule (see validate_period_total_weight): a period's weights
+must not EXCEED 100 — under-allocation is intentional and valid. So the
+blocking case is a total over 100, not a total under it.
+"""
 
 import pytest
 
 from app.models.kpi_submission import KPISubmission, KPIStatus
 from app.models.user import UserRole
 from app.services.kpi_service import WEIGHT_TOTAL_MESSAGE
-from app.tests.factories import auth_headers, make_department, make_tenant, make_template, make_user
+from app.tests.factories import auth_headers, make_department, make_tenant, make_template, make_user, open_fillable_period
 
 
 @pytest.mark.parametrize("path", ["/api/kpi/employee/save", "/api/kpi/employee/submit"])
-def test_employee_kpi_actions_require_total_weight_of_100(db, client, path):
+def test_employee_kpi_actions_block_weight_total_over_100(db, client, path):
     tenant = make_tenant(db)
     department = make_department(db, tenant)
     employee = make_user(db, tenant, UserRole.EMPLOYEE, department=department)
-    make_template(db, tenant, target=100.0, weight=99.9, department=department)
+    make_template(db, tenant, target=100.0, weight=100.1, department=department)
 
-    dashboard = client.get("/api/dashboard", headers=auth_headers(employee, tenant)).json()
+    oy, op = open_fillable_period()
+    dashboard = client.get("/api/dashboard", params={"year": oy, "period": op}, headers=auth_headers(employee, tenant)).json()
     submission_id = dashboard["submissions"][0]["id"]
 
     response = client.post(
@@ -44,7 +50,8 @@ def test_employee_kpi_save_accepts_exact_100_total_weight(db, client):
     make_template(db, tenant, metric_name="Delivery", target=100.0, weight=33.33, department=department)
     make_template(db, tenant, metric_name="Safety", target=100.0, weight=33.34, department=department)
 
-    dashboard = client.get("/api/dashboard", headers=auth_headers(employee, tenant)).json()
+    oy, op = open_fillable_period()
+    dashboard = client.get("/api/dashboard", params={"year": oy, "period": op}, headers=auth_headers(employee, tenant)).json()
     response = client.post(
         "/api/kpi/employee/save",
         json={

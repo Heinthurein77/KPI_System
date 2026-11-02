@@ -13,16 +13,17 @@ and served back through an authenticated, scope-checked endpoint.
 from __future__ import annotations
 
 import os
-from datetime import date as date_type
+from datetime import date as date_type, datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, require_diary_author, require_tenant_member
 from app.database import get_db
+from app.models.audit_log import AuditLog
 from app.models.daily_task import (
     TASK_STATUSES,
     DailyTaskEntry,
@@ -30,6 +31,7 @@ from app.models.daily_task import (
 )
 from app.models.department import Department
 from app.models.user import User, UserRole
+from app.schemas.audit_log import AuditLogOut
 from app.schemas.daily_task import (
     DailyTaskEntryCreate,
     DailyTaskEntryOut,
@@ -42,6 +44,7 @@ from app.schemas.daily_task import (
     validate_status,
 )
 from app.services import notification_service
+from app.services import audit_service
 from app.services.daily_task_export import build_export
 
 router = APIRouter(prefix="/api/daily-tasks", tags=["daily-tasks"])
@@ -171,6 +174,13 @@ def create_entry(
         tomorrow_plan_3=payload.tomorrow_plan_3,
     )
     db.add(entry)
+    db.flush()
+    audit_service.log(
+        db, user, "daily_task_created", "daily_task", entry.id,
+        f"{user.name} — {entry.task_date.isoformat()}",
+        f"Created diary entry for {entry.task_date.isoformat()} (status: {entry.status}).",
+        department_id=entry.department_id,
+    )
     db.commit()
     db.refresh(entry)
     return _serialize(db, entry)
@@ -201,8 +211,18 @@ def update_entry(
             validate_status(data["status"])
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+    changed = []
     for key, value in data.items():
+        if getattr(entry, key) != value:
+            changed.append(key)
         setattr(entry, key, value)
+    if changed:
+        audit_service.log(
+            db, user, "daily_task_updated", "daily_task", entry.id,
+            f"{user.name} — {entry.task_date.isoformat()}",
+            f"Updated diary entry for {entry.task_date.isoformat()}: changed {', '.join(changed)}.",
+            department_id=entry.department_id,
+        )
     db.commit()
     db.refresh(entry)
     return _serialize(db, entry)
@@ -221,6 +241,12 @@ def delete_entry(
         path = UPLOAD_DIR / entry.evidence_file
         if path.exists():
             path.unlink()
+    audit_service.log(
+        db, user, "daily_task_deleted", "daily_task", entry.id,
+        f"{user.name} — {entry.task_date.isoformat()}",
+        f"Deleted diary entry for {entry.task_date.isoformat()}.",
+        department_id=entry.department_id,
+    )
     db.delete(entry)
     db.commit()
     return None
@@ -238,6 +264,12 @@ def give_feedback(
         raise HTTPException(403, "Only the department supervisor or tenant admin can give feedback.")
     entry.supervisor_feedback = payload.supervisor_feedback
     entry.feedback_by_id = user.id
+    audit_service.log(
+        db, user, "daily_task_feedback", "daily_task", entry.id,
+        f"{user.name} — {entry.task_date.isoformat()}",
+        f"Supervisor feedback added to diary entry for {entry.task_date.isoformat()}.",
+        department_id=entry.department_id,
+    )
     notification_service.notify_user(
         db,
         tenant_id=user.tenant_id,
@@ -274,6 +306,12 @@ async def upload_evidence(
         if old.exists():
             old.unlink()
     entry.evidence_file = stored
+    audit_service.log(
+        db, user, "daily_task_evidence_uploaded", "daily_task", entry.id,
+        f"{user.name} — {entry.task_date.isoformat()}",
+        f"Evidence file '{safe_name}' attached to diary entry for {entry.task_date.isoformat()}.",
+        department_id=entry.department_id,
+    )
     db.commit()
     db.refresh(entry)
     return _serialize(db, entry)
@@ -292,6 +330,73 @@ def download_evidence(
     if not path.exists():
         raise HTTPException(404, "Evidence file not found on server.")
     return FileResponse(path, filename=Path(entry.evidence_file).name)
+
+
+@router.get("/audit-log", response_model=list[AuditLogOut])
+def daily_task_audit_log(
+    year: int | None = Query(None),
+    month: int | None = Query(None),
+    user_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_tenant_member),
+):
+    """Who did what to the diaries: creations, edits (with changed fields),
+    deletions, feedback, evidence uploads, and review updates.
+
+    Scope mirrors diary visibility: tenant admins see the whole tenant,
+    dept admins see their department, employees see their own diary's trail
+    (their actions plus supervisor actions on their entries).
+    """
+    if user_id is not None and user_id not in _visible_user_ids(db, user):
+        raise HTTPException(403, "Not allowed to view this user's diary trail.")
+    stmt = (
+        select(AuditLog)
+        .where(
+            AuditLog.tenant_id == user.tenant_id,
+            AuditLog.entity_type.in_(["daily_task", "daily_task_review"]),
+        )
+        .order_by(AuditLog.created_at.desc())
+        .limit(500)
+    )
+    if year is not None and month is not None:
+        start, end = _month_bounds(year, month)
+        day_start = datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
+        day_end = datetime(end.year, end.month, end.day, tzinfo=timezone.utc)
+        stmt = stmt.where(AuditLog.created_at >= day_start, AuditLog.created_at < day_end)
+    if user.role == UserRole.DEPT_ADMIN:
+        stmt = stmt.where(
+            or_(
+                AuditLog.department_id == user.department_id,
+                AuditLog.actor_id == user.id,
+            )
+        )
+    if user.role == UserRole.EMPLOYEE:
+        own_entry_ids = select(DailyTaskEntry.id).where(DailyTaskEntry.user_id == user.id)
+        own_review_ids = select(DailyTaskMonthlyReview.id).where(
+            DailyTaskMonthlyReview.user_id == user.id
+        )
+        stmt = stmt.where(
+            or_(
+                AuditLog.actor_id == user.id,
+                (AuditLog.entity_type == "daily_task")
+                & (AuditLog.entity_id.in_(own_entry_ids)),
+                (AuditLog.entity_type == "daily_task_review")
+                & (AuditLog.entity_id.in_(own_review_ids)),
+            )
+        )
+    if user_id is not None:
+        entry_ids = select(DailyTaskEntry.id).where(DailyTaskEntry.user_id == user_id)
+        review_ids = select(DailyTaskMonthlyReview.id).where(
+            DailyTaskMonthlyReview.user_id == user_id
+        )
+        stmt = stmt.where(
+            or_(
+                (AuditLog.entity_type == "daily_task") & (AuditLog.entity_id.in_(entry_ids)),
+                (AuditLog.entity_type == "daily_task_review")
+                & (AuditLog.entity_id.in_(review_ids)),
+            )
+        )
+    return [AuditLogOut.model_validate(e) for e in db.scalars(stmt)]
 
 
 @router.get("/export/file")
@@ -414,6 +519,7 @@ def put_monthly_review(
         db.add(review)
     data = payload.model_dump(exclude_unset=True)
     is_owner = user_id == user.id
+    changed: list[str] = []
     # HOD evaluation is supervisor-only: an owner's own hod_evaluation
     # value is ignored, never stored from the author.
     if "hod_evaluation" in data:
@@ -424,16 +530,29 @@ def put_monthly_review(
             and db.get(User, user_id).department_id == user.department_id
         )
         if allowed:
+            if review.hod_evaluation != data["hod_evaluation"]:
+                changed.append("hod_evaluation")
             review.hod_evaluation = data.pop("hod_evaluation")
         else:
             data.pop("hod_evaluation")
     if is_owner or user.role == UserRole.TENANT_ADMIN:
         for key in ("achievements", "challenges_solutions", "improvements_next_focus"):
             if key in data:
+                if getattr(review, key) != data[key]:
+                    changed.append(key)
                 setattr(review, key, data[key])
     elif user.role == UserRole.DEPT_ADMIN:
         # Dept admins only write the evaluation on a member's review.
         pass
+    if changed:
+        db.flush()
+        target = db.get(User, user_id)
+        audit_service.log(
+            db, user, "daily_task_review_updated", "daily_task_review", review.id,
+            f"{target.name if target else ''} — {year}-{month:02d}",
+            f"Updated month-end review for {year}-{month:02d}: changed {', '.join(changed)}.",
+            department_id=target.department_id if target else None,
+        )
     db.commit()
     db.refresh(review)
     return MonthlyReviewOut.model_validate(review)

@@ -20,6 +20,12 @@ const ACTION_META = {
   kpi_rejected: { label: "Rejected", style: "bg-red-100 text-red-700" },
   kpi_template_created: { label: "Metric Created", style: "bg-blue-100 text-blue-700" },
   kpi_template_deleted: { label: "Metric Deleted", style: "bg-red-100 text-red-700" },
+  daily_task_created: { label: "Diary Created", style: "bg-emerald-100 text-emerald-700" },
+  daily_task_updated: { label: "Diary Edited", style: "bg-blue-100 text-blue-700" },
+  daily_task_deleted: { label: "Diary Deleted", style: "bg-red-100 text-red-700" },
+  daily_task_feedback: { label: "Feedback Given", style: "bg-amber-100 text-amber-700" },
+  daily_task_evidence_uploaded: { label: "Evidence Attached", style: "bg-violet-100 text-violet-700" },
+  daily_task_review_updated: { label: "Review Updated", style: "bg-teal-100 text-teal-700" },
 };
 
 function formatTimestamp(iso) {

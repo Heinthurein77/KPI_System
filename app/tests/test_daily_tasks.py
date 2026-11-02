@@ -221,3 +221,38 @@ def test_evening_reminder_skips_filled_diary(db, client):
     result = daily_task_reminder_service.send_daily_task_reminders(db, today=date(2026, 11, 2))
     assert emp.email in result["skipped"]
     assert emp.email not in result["reminded"]
+
+
+def test_diary_audit_log_records_who_changed_what(db, client):
+    tenant, _, emp, boss, tenant_admin = _setup(db)
+    r = client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    entry_id = r.json()["id"]
+    client.patch(f"/api/daily-tasks/{entry_id}", json={"status": "completed"}, headers=auth_headers(emp, tenant))
+    client.post(f"/api/daily-tasks/{entry_id}/feedback",
+                json={"supervisor_feedback": "Good"}, headers=auth_headers(boss, tenant))
+    r = client.get("/api/daily-tasks/audit-log?year=2026&month=11",
+                   headers=auth_headers(tenant_admin, tenant))
+    assert r.status_code == 200, r.text
+    actions = [e["action"] for e in r.json()]
+    assert "daily_task_created" in actions
+    assert "daily_task_updated" in actions
+    assert "daily_task_feedback" in actions
+    update = [e for e in r.json() if e["action"] == "daily_task_updated"][0]
+    assert "status" in update["summary"]
+    assert update["actor_name"] == "Diary Emp"
+    feedback = [e for e in r.json() if e["action"] == "daily_task_feedback"][0]
+    assert feedback["actor_name"] == "Diary Boss"
+
+
+def test_diary_audit_log_scoped_to_department(db, client):
+    tenant, dept, emp, boss, _ = _setup(db)
+    other_dept = make_department(db, tenant, name="Other Dept")
+    outsider = make_user(db, tenant, UserRole.EMPLOYEE, name="Outsider", department=other_dept)
+    client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(outsider, tenant))
+    r = client.get("/api/daily-tasks/audit-log?year=2026&month=11",
+                   headers=auth_headers(boss, tenant))
+    assert r.status_code == 200
+    labels = [e["entity_label"] for e in r.json()]
+    assert any("Diary Emp" in label for label in labels)
+    assert not any("Outsider" in label for label in labels)

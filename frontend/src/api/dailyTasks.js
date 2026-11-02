@@ -58,6 +58,14 @@ export function saveMonthlyReview(year, month, userId, payload) {
     .then((r) => r.data);
 }
 
+export function getDailyAuditLog(year, month, userId) {
+  const params = {};
+  if (year) params.year = year;
+  if (month) params.month = month;
+  if (userId) params.user_id = userId;
+  return client.get("/api/daily-tasks/audit-log", { params }).then((r) => r.data);
+}
+
 export function exportDailyDiary(year, month, userId) {
   const params = { year, month };
   if (userId) params.user_id = userId;

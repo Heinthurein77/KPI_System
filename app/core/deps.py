@@ -89,6 +89,47 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     return user
 
 
+def get_current_user_no_tenant(request: Request, db: Session = Depends(get_db)) -> User:
+    """Authenticate by session token only, WITHOUT requiring a resolved tenant.
+
+    Use ONLY for endpoints that must work from plain browser navigations and
+    media tags (<img>, <iframe>, a link opened in a new tab): those requests
+    cannot send the X-Tenant-Slug header, so get_current_user would fail them
+    closed with 401 even for a logged-in user. The caller MUST authorize
+    against the resource's own tenant (e.g. entry.tenant_id == user.tenant_id)
+    and visibility — the tenant cross-check is intentionally skipped here, so
+    this dependency must never be used on routes that don't check the
+    resource tenant themselves.
+    """
+    token = _session_token(request)
+    if not token:
+        raise NotAuthenticated()
+
+    claims = decode_session_token(token)
+    if claims is None:
+        raise NotAuthenticated()
+
+    user = db.get(User, claims.user_id)
+    if user is None or not user.is_active:
+        raise NotAuthenticated()
+
+    if claims.token_version != (user.token_version or 0):
+        raise NotAuthenticated()
+
+    if user.must_change_password:
+        path = request.url.path.rstrip("/")
+        if not path.endswith(("/change-password", "/me", "/logout")):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "password_change_required",
+                    "message": "You must change your password before continuing.",
+                },
+            )
+
+    return user
+
+
 def get_current_user_optional(request: Request, db: Session = Depends(get_db)) -> User | None:
     try:
         return get_current_user(request, db)

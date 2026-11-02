@@ -315,3 +315,48 @@ def test_evidence_upload_storage_failure_says_so_clearly(db, client, monkeypatch
     r = client.get("/api/daily-tasks?year=2026&month=11",
                    headers=auth_headers(emp, tenant))
     assert r.status_code == 200
+
+
+def _bearer_only(user):
+    """Headers a plain browser navigation can never send: a session token
+    but NO X-Tenant-Slug (navigations, <img> and <iframe> carry no custom
+    headers)."""
+    from app.core.security import create_session_token
+
+    return {"Authorization": f"Bearer {create_session_token(user.id, user.tenant_id)}"}
+
+
+def test_evidence_download_works_without_tenant_header(db, client):
+    tenant, _, emp, _, _ = _setup(db)
+    r = client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    entry_id = r.json()["id"]
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    client.post(f"/api/daily-tasks/{entry_id}/evidence",
+                files={"file": ("shot.png", png, "image/png")},
+                headers=auth_headers(emp, tenant))
+    # Exactly what a new-tab link / <img> / <iframe> sends: token, no header.
+    r = client.get(f"/api/daily-tasks/{entry_id}/evidence", headers=_bearer_only(emp))
+    assert r.status_code == 200, r.text
+    assert r.headers["content-type"].startswith("image/png")
+    assert r.content == png
+    client.delete(f"/api/daily-tasks/{entry_id}", headers=auth_headers(emp, tenant))
+
+
+def test_evidence_download_without_tenant_header_still_scoped(db, client):
+    from app.tests.factories import make_tenant
+
+    tenant, _, emp, _, _ = _setup(db)
+    r = client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    entry_id = r.json()["id"]
+    client.post(f"/api/daily-tasks/{entry_id}/evidence",
+                files={"file": ("shot.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+                headers=auth_headers(emp, tenant))
+    # Another tenant's user, valid token, no header: must not see the entry.
+    tenant2 = make_tenant(db, name="Other Co", slug="other-co")
+    outsider = make_user(db, tenant2, UserRole.EMPLOYEE, name="Outsider2")
+    r = client.get(f"/api/daily-tasks/{entry_id}/evidence", headers=_bearer_only(outsider))
+    assert r.status_code == 404
+    # No token at all: still 401.
+    r = client.get(f"/api/daily-tasks/{entry_id}/evidence")
+    assert r.status_code == 401
+    client.delete(f"/api/daily-tasks/{entry_id}", headers=auth_headers(emp, tenant))

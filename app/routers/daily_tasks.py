@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user, require_diary_author, require_tenant_admin, require_tenant_member
+from app.core.deps import get_current_user, get_current_user_no_tenant, require_diary_author, require_tenant_admin, require_tenant_member
 from app.database import get_db
 from app.models.audit_log import AuditLog
 from app.models.daily_task import (
@@ -339,7 +339,12 @@ async def upload_evidence(
 def download_evidence(
     entry_id: int,
     db: Session = Depends(get_db),
-    user: User = Depends(require_tenant_member),
+    # Deliberately NOT require_tenant_member: a browser navigation, <img>, or
+    # <iframe> cannot send X-Tenant-Slug, and get_current_user fails closed
+    # without a resolved tenant (401 "Not authenticated" even when logged in).
+    # _get_scoped_entry still enforces entry.tenant_id == user.tenant_id (404)
+    # and department/own visibility (403), so no cross-tenant access is gained.
+    user: User = Depends(get_current_user_no_tenant),
 ):
     entry = _get_scoped_entry(db, user, entry_id)
     if not entry.evidence_file:

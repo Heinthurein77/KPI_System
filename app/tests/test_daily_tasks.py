@@ -1,0 +1,223 @@
+"""Tests for the Daily Task diary module (additive-only).
+
+Covers: entry CRUD + role scoping, supervisor feedback + notification,
+monthly summary counts, Excel export shape, and the evening reminder
+service's once-per-day idempotency.
+"""
+
+from datetime import date
+from io import BytesIO
+
+import openpyxl
+import pytest
+from sqlalchemy import select
+
+from app.models.notification import Notification
+from app.models.user import UserRole
+from app.services import daily_task_reminder_service
+from app.tests.factories import (
+    auth_headers,
+    make_department,
+    make_tenant,
+    make_user,
+)
+
+
+def _setup(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    emp = make_user(db, tenant, UserRole.EMPLOYEE, name="Diary Emp", department=dept)
+    dept_admin = make_user(
+        db, tenant, UserRole.DEPT_ADMIN, name="Diary Boss", department=dept
+    )
+    tenant_admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Diary Admin")
+    return tenant, dept, emp, dept_admin, tenant_admin
+
+
+def _entry_payload(**overrides):
+    payload = {
+        "task_date": "2026-11-02",
+        "plan_linkage": "November Plan — Monthly Report",
+        "work_done": "October Monthly Report draft finished",
+        "status": "in_progress",
+        "figure_output": "Report 1",
+        "evidence_link": "Monthly_Report_Oct.docx",
+        "difficulties": "BU data late",
+        "support_needed": "HOD reminder",
+        "self_reflection": "Ask data earlier",
+        "tomorrow_plan_1": "BU follow-up",
+        "tomorrow_plan_2": "Report final",
+        "tomorrow_plan_3": "KPI data check",
+    }
+    payload.update(overrides)
+    return payload
+
+
+def test_employee_creates_and_lists_own_entry(db, client):
+    tenant, _, emp, _, _ = _setup(db)
+    resp = client.post(
+        "/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant)
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["work_done"].startswith("October Monthly")
+    assert body["author_name"] == "Diary Emp"
+    assert body["has_evidence_file"] is False
+
+    resp = client.get(
+        "/api/daily-tasks?year=2026&month=11", headers=auth_headers(emp, tenant)
+    )
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+
+
+def test_employee_cannot_see_other_users_entries(db, client):
+    tenant, dept, emp, _, _ = _setup(db)
+    # Second employee in the same tenant/department.
+    other = make_user(db, tenant, UserRole.EMPLOYEE, name="Other Emp", department=dept)
+    resp = client.post(
+        "/api/daily-tasks", json=_entry_payload(), headers=auth_headers(other, tenant)
+    )
+    assert resp.status_code == 201
+    resp = client.get(
+        "/api/daily-tasks?year=2026&month=11", headers=auth_headers(emp, tenant)
+    )
+    assert resp.status_code == 200
+    assert resp.json() == []
+    resp = client.get(
+        f"/api/daily-tasks?year=2026&month=11&user_id={other.id}",
+        headers=auth_headers(emp, tenant),
+    )
+    assert resp.status_code == 403
+
+
+def test_dept_admin_feedback_notifies_employee(db, client):
+    tenant, _, emp, boss, _ = _setup(db)
+    resp = client.post(
+        "/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant)
+    )
+    entry_id = resp.json()["id"]
+    resp = client.post(
+        f"/api/daily-tasks/{entry_id}/feedback",
+        json={"supervisor_feedback": "Good progress. Remind sent."},
+        headers=auth_headers(boss, tenant),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["supervisor_feedback"].startswith("Good progress")
+    notes = db.scalars(
+        select(Notification).where(
+            Notification.user_id == emp.id, Notification.type == "daily_task_feedback"
+        )
+    ).all()
+    assert len(notes) == 1
+
+
+def test_employee_cannot_give_own_feedback(db, client):
+    tenant, _, emp, _, _ = _setup(db)
+    resp = client.post(
+        "/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant)
+    )
+    entry_id = resp.json()["id"]
+    resp = client.post(
+        f"/api/daily-tasks/{entry_id}/feedback",
+        json={"supervisor_feedback": "self praise"},
+        headers=auth_headers(emp, tenant),
+    )
+    assert resp.status_code == 403
+
+
+def test_monthly_summary_counts(db, client):
+    tenant, _, emp, _, tenant_admin = _setup(db)
+    client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    client.post(
+        "/api/daily-tasks",
+        json=_entry_payload(task_date="2026-11-02", status="completed", work_done="Second task same day"),
+        headers=auth_headers(emp, tenant),
+    )
+    client.post(
+        "/api/daily-tasks",
+        json=_entry_payload(task_date="2026-11-03", status="completed", work_done="Next day task"),
+        headers=auth_headers(emp, tenant),
+    )
+    resp = client.get(
+        "/api/daily-tasks/summary/month?year=2026&month=11",
+        headers=auth_headers(tenant_admin, tenant),
+    )
+    assert resp.status_code == 200, resp.text
+    row = [u for u in resp.json()["users"] if u["user_id"] == emp.id][0]
+    assert row["working_days"] == 2  # two distinct dates, not three rows
+    assert row["completed"] == 2
+    assert row["in_progress_or_pending"] == 1
+    assert row["total"] == 3
+
+
+def test_export_returns_workbook(db, client):
+    tenant, _, emp, _, _ = _setup(db)
+    client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    resp = client.get(
+        "/api/daily-tasks/export/file?year=2026&month=11",
+        headers=auth_headers(emp, tenant),
+    )
+    assert resp.status_code == 200, resp.text
+    wb = openpyxl.load_workbook(BytesIO(resp.content))
+    assert "Monthly Dashboard" in wb.sheetnames
+    diary = wb.sheetnames[0]
+    ws = wb[diary]
+    assert ws["A1"].value.startswith("HEAD OFFICE - DAILY WORKING DIARY")
+    # Header row is row 5; the entry row follows.
+    assert ws.cell(row=6, column=3).value.startswith("October Monthly")
+
+
+def test_evening_reminder_idempotent(db):
+    tenant, _, emp, _, _ = _setup(db)
+    result = daily_task_reminder_service.send_daily_task_reminders(db, today=date(2026, 11, 2))
+    assert emp.email in result["reminded"]
+    result2 = daily_task_reminder_service.send_daily_task_reminders(db, today=date(2026, 11, 2))
+    assert result2["reminded"] == []
+    notes = db.scalars(
+        select(Notification).where(
+            Notification.user_id == emp.id, Notification.type == "daily_task_reminder"
+        )
+    ).all()
+    assert len(notes) == 1
+
+
+def test_tenant_admin_cannot_create_entry(db, client):
+    tenant, _, _, _, tenant_admin = _setup(db)
+    resp = client.post(
+        "/api/daily-tasks", json=_entry_payload(), headers=auth_headers(tenant_admin, tenant)
+    )
+    assert resp.status_code == 403
+
+
+def test_monthly_summary_excludes_tenant_admin(db, client):
+    tenant, _, emp, _, tenant_admin = _setup(db)
+    client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    resp = client.get(
+        "/api/daily-tasks/summary/month?year=2026&month=11",
+        headers=auth_headers(tenant_admin, tenant),
+    )
+    assert resp.status_code == 200
+    assert all(u["user_id"] != tenant_admin.id for u in resp.json()["users"])
+    assert any(u["user_id"] == emp.id for u in resp.json()["users"])
+
+
+def test_evening_reminder_skips_weekend(db):
+    _, _, emp, _, _ = _setup(db)
+    # 2026-11-07 is a Saturday.
+    result = daily_task_reminder_service.send_daily_task_reminders(db, today=date(2026, 11, 7))
+    assert result["reminded"] == []
+    notes = db.scalars(
+        select(Notification).where(
+            Notification.user_id == emp.id, Notification.type == "daily_task_reminder"
+        )
+    ).all()
+    assert notes == []
+
+
+def test_evening_reminder_skips_filled_diary(db, client):
+    tenant, _, emp, _, _ = _setup(db)
+    client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    result = daily_task_reminder_service.send_daily_task_reminders(db, today=date(2026, 11, 2))
+    assert emp.email in result["skipped"]
+    assert emp.email not in result["reminded"]

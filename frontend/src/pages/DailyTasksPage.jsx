@@ -10,6 +10,7 @@ import {
   YAxis,
 } from "recharts";
 import { useAuth } from "../context/AuthContext";
+import AppShell from "../components/layout/AppShell";
 import {
   createDailyTask,
   dailyEvidenceUrl,
@@ -97,6 +98,9 @@ export default function DailyTasksPage() {
   // "team" (department diaries + feedback). Tenant admins only ever see
   // the team view (they never fill a diary); employees only see "mine".
   const [tab, setTab] = useState(user.role === "tenant_admin" ? "team" : "mine");
+  // Mine view split: the fill form and the filled entries never share one
+  // screen — "fill" shows only the form, "history" shows only filled entries.
+  const [mineView, setMineView] = useState("fill");
   const effectiveUserId = tab === "mine" ? String(user.id) : (viewUserId || undefined);
   const [form, setForm] = useState(EMPTY_FORM);
   const [editingId, setEditingId] = useState(null);
@@ -110,7 +114,15 @@ export default function DailyTasksPage() {
     hod_evaluation: "",
   });
   const [audit, setAudit] = useState([]);
-  const [notice, setNotice] = useState("");
+  const [notice, setNotice] = useState(null);
+  const [saving, setSaving] = useState(false);
+  // Success toasts disappear on their own after 4s instead of lingering;
+  // error notices stay until the next action.
+  useEffect(() => {
+    if (!notice?.ok) return undefined;
+    const t = setTimeout(() => setNotice(null), 4000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   const isSupervisor = user.role === "dept_admin" || user.role === "tenant_admin";
   const reviewUserId = useMemo(() => {
@@ -123,7 +135,10 @@ export default function DailyTasksPage() {
     const [list, sum, trail] = await Promise.all([
       listDailyTasks(year, month, effectiveUserId),
       monthlyDailySummary(year, month),
-      getDailyAuditLog(year, month, effectiveUserId).catch(() => []),
+      // Audit trail is tenant-admin-only; others never even request it.
+      user.role === "tenant_admin"
+        ? getDailyAuditLog(year, month, effectiveUserId).catch(() => [])
+        : Promise.resolve([]),
     ]);
     setEntries(list);
     setSummary(sum);
@@ -131,7 +146,7 @@ export default function DailyTasksPage() {
   }, [year, month, effectiveUserId]);
 
   useEffect(() => {
-    load().catch(() => setNotice("Diary ကို load လုပ်လို့မရပါ။"));
+    load().catch(() => setNotice({ text: "Diary ကို load လုပ်လို့မရပါ။", ok: false }));
   }, [load]);
 
   useEffect(() => {
@@ -169,7 +184,8 @@ export default function DailyTasksPage() {
 
   const submitForm = async (e) => {
     e.preventDefault();
-    if (!form.work_done.trim()) return;
+    if (!form.work_done.trim() || saving) return;
+    setSaving(true);
     try {
       let saved;
       if (editingId) {
@@ -177,21 +193,28 @@ export default function DailyTasksPage() {
       } else {
         saved = await createDailyTask(form);
       }
+      const hadEvidence = !!evidenceFile;
       if (evidenceFile) {
         saved = await uploadDailyEvidence(saved.id, evidenceFile);
         setEvidenceFile(null);
       }
       setEditingId(null);
       setForm(EMPTY_FORM);
-      setNotice("Diary entry သိမ်းပြီးပါပြီ။");
+      setNotice({ text: "✓ Diary entry သိမ်းပြီးပါပြီ။", ok: true });
       load();
+      // With an evidence file attached, jump straight to the filled view so
+      // the file preview is visible immediately.
+      if (hadEvidence) setMineView("history");
     } catch {
-      setNotice("သိမ်းလို့မရပါ။ ထပ်စမ်းကြည့်ပါ။");
+      setNotice({ text: "သိမ်းလို့မရပါ။ ထပ်စမ်းကြည့်ပါ။", ok: false });
+    } finally {
+      setSaving(false);
     }
   };
 
   const startEdit = (entry) => {
     setEditingId(entry.id);
+    setMineView("fill");
     setForm({
       task_date: entry.task_date,
       plan_linkage: entry.plan_linkage || "",
@@ -206,7 +229,10 @@ export default function DailyTasksPage() {
       tomorrow_plan_2: entry.tomorrow_plan_2 || "",
       tomorrow_plan_3: entry.tomorrow_plan_3 || "",
     });
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    // AppShell scrolls inside <main>, not the window.
+    const main = document.querySelector("main");
+    if (main) main.scrollTo({ top: 0, behavior: "smooth" });
+    else window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const ownSummary = summary?.users.find((u) => u.user_id === user.id);
@@ -215,9 +241,14 @@ export default function DailyTasksPage() {
   const displayUsers = useMemo(() => {
     if (!summary) return [];
     if (tab === "mine") return ownSummary ? [ownSummary] : [];
+    // Team tab with a member selected shows ONLY that member — per-user view.
+    if (viewUserId) {
+      const one = summary.users.find((u) => String(u.user_id) === String(viewUserId));
+      return one ? [one] : [];
+    }
     if (user.role === "dept_admin") return summary.users.filter((u) => u.user_id !== user.id);
     return summary.users;
-  }, [summary, tab, ownSummary, user]);
+  }, [summary, tab, viewUserId, ownSummary, user]);
   const teamChartData = displayUsers.map((u) => ({
     name: u.author_name,
     Completed: u.completed,
@@ -233,7 +264,8 @@ export default function DailyTasksPage() {
     : null;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5 p-4">
+    <AppShell title="နေ့စဉ် အလုပ် မှတ်တမ်း · Daily Tasks">
+    <div className="mx-auto max-w-5xl space-y-5">
       {/* Header */}
       <div className="rounded-3xl bg-gradient-to-r from-indigo-600 via-indigo-500 to-violet-500 p-5 text-white shadow">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -296,7 +328,29 @@ export default function DailyTasksPage() {
         </div>
       )}
 
-      {notice && <p className="rounded-2xl bg-indigo-50 px-4 py-2 text-sm text-indigo-800">{notice}</p>}
+      {/* Mine view split: form and filled entries live on separate tabs */}
+      {tab === "mine" && user.role !== "tenant_admin" && (
+        <div className="flex gap-2">
+          <button
+            className={`rounded-full px-5 py-2 text-sm font-medium ${mineView === "fill" ? "bg-indigo-600 text-white" : "bg-white text-slate-700 shadow-sm"}`}
+            onClick={() => setMineView("fill")}
+          >
+            ✏️ ဖြည့်ရန် · Fill Form
+          </button>
+          <button
+            className={`rounded-full px-5 py-2 text-sm font-medium ${mineView === "history" ? "bg-indigo-600 text-white" : "bg-white text-slate-700 shadow-sm"}`}
+            onClick={() => setMineView("history")}
+          >
+            📋 ဖြည့်ပြီးသား · Filled Entries
+          </button>
+        </div>
+      )}
+
+      {notice && (
+        <p className={`rounded-2xl px-4 py-2 text-sm ${notice.ok ? "bg-emerald-50 text-emerald-800" : "bg-red-50 text-red-700"}`}>
+          {notice.text}
+        </p>
+      )}
 
       {/* Monthly summary + chart */}
       {summary && (
@@ -330,8 +384,8 @@ export default function DailyTasksPage() {
         </section>
       )}
 
-      {/* Entry form — diary authors only, and only on the "mine" dashboard */}
-      {user.role !== "tenant_admin" && tab === "mine" && (
+      {/* Entry form — diary authors only, and only on the "fill" sub-tab */}
+      {user.role !== "tenant_admin" && tab === "mine" && mineView === "fill" && (
       <section className="rounded-3xl bg-white p-5 shadow-sm">
         <h2 className="font-semibold text-slate-800">
           {editingId ? "Entry ပြင်ဆင်ရန် · Edit Entry" : "ဒီနေ့ အလုပ် ထည့်ရန် · New Diary Entry"}
@@ -395,8 +449,8 @@ export default function DailyTasksPage() {
             </div>
           </div>
           <div className="flex gap-2">
-            <button type="submit" className="rounded-full bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700">
-              {editingId ? "ပြင်ဆင်ချက်ကို သိမ်းရန်" : "Entry ထည့်ရန်"}
+            <button type="submit" disabled={saving} className="rounded-full bg-indigo-600 px-5 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50">
+              {saving ? "သိမ်းနေတယ်…" : editingId ? "ပြင်ဆင်ချက်ကို သိမ်းရန်" : "Entry ထည့်ရန်"}
             </button>
             {editingId && (
               <button type="button" className="rounded-full border px-5 py-2 text-sm"
@@ -409,7 +463,9 @@ export default function DailyTasksPage() {
       </section>
       )}
 
-      {/* Entries */}
+      {/* Entries — team tab always; mine tab only on the "history" sub-tab,
+          never under the form */}
+      {(tab === "team" || mineView === "history") && (
       <section className="space-y-3">
         <h2 className="px-1 font-semibold text-slate-800">
           {tab === "team" ? "ဌာန Diary Entries" : "ကိုယ့် Diary Entries"} {viewingName ? `— ${viewingName}` : ""}
@@ -432,9 +488,23 @@ export default function DailyTasksPage() {
               {entry.figure_output && <p>ရလဒ်: {entry.figure_output}</p>}
               {entry.evidence_link && <p>သက်သေ: {entry.evidence_link}</p>}
               {entry.has_evidence_file && (
-                <a className="text-indigo-600 underline" href={dailyEvidenceUrl(entry.id)} target="_blank" rel="noreferrer">
-                  📎 တွဲထားသော evidence ဖိုင်ကို ဒေါင်းလုဒ်လုပ်ရန်
-                </a>
+                <div className="mt-2 space-y-1">
+                  {["jpg", "jpeg", "png", "webp", "gif"].includes(
+                    (entry.evidence_file || "").split(".").pop().toLowerCase(),
+                  ) && (
+                    <a href={dailyEvidenceUrl(entry.id)} target="_blank" rel="noreferrer">
+                      <img src={dailyEvidenceUrl(entry.id)} alt="Evidence" className="max-h-64 rounded-2xl border object-contain" />
+                    </a>
+                  )}
+                  {(entry.evidence_file || "").toLowerCase().endsWith(".pdf") && (
+                    <iframe src={dailyEvidenceUrl(entry.id)} title="Evidence preview" className="h-80 w-full rounded-2xl border" />
+                  )}
+                  <div>
+                    <a className="text-indigo-600 underline" href={dailyEvidenceUrl(entry.id)} target="_blank" rel="noreferrer">
+                      📎 ဖိုင်ကို အပြည့်ကြည့်ရန် / ဒေါင်းလုဒ်လုပ်ရန်
+                    </a>
+                  </div>
+                </div>
               )}
               {entry.difficulties && <p>အခက်အခဲ: {entry.difficulties}</p>}
               {entry.support_needed && <p>လိုအပ်သော ပံ့ပိုးမှု: {entry.support_needed}</p>}
@@ -467,7 +537,7 @@ export default function DailyTasksPage() {
                 <button className="shrink-0 rounded-full bg-indigo-600 px-4 py-1 text-xs text-white"
                   onClick={async () => {
                     await giveDailyFeedback(entry.id, feedbackDraft[entry.id] || "");
-                    setNotice("Feedback ပို့ပြီးပါပြီ — ဝန်ထမ်းဆီ notification ရောက်မယ်။");
+                    setNotice({ text: "Feedback ပို့ပြီးပါပြီ — ဝန်ထမ်းဆီ notification ရောက်မယ်။", ok: true });
                     load();
                   }}>
                   ပို့ရန်
@@ -484,9 +554,10 @@ export default function DailyTasksPage() {
           </p>
         )}
       </section>
+      )}
 
-      {/* Month-end review — mine tab: own review; team tab: selected member only */}
-      {((tab === "mine" && user.role !== "tenant_admin") ||
+      {/* Month-end review — mine history tab: own review; team tab: selected member only */}
+      {((tab === "mine" && mineView === "history" && user.role !== "tenant_admin") ||
         (tab === "team" && viewUserId !== "")) && (
       <section className="rounded-3xl bg-white p-5 shadow-sm">
         <h2 className="font-semibold text-slate-800">လဆုံး သုံးသပ်ချက် · Month-End Review</h2>
@@ -515,7 +586,7 @@ export default function DailyTasksPage() {
           <button className="w-fit rounded-full bg-indigo-600 px-5 py-2 text-sm text-white"
             onClick={async () => {
               await saveMonthlyReview(year, month, reviewUserId, reviewDraft);
-              setNotice("Month-end review သိမ်းပြီးပါပြီ။");
+              setNotice({ text: "Month-end review သိမ်းပြီးပါပြီ။", ok: true });
             }}>
             Review သိမ်းရန်
           </button>
@@ -523,13 +594,15 @@ export default function DailyTasksPage() {
       </section>
       )}
 
-      {/* Audit log — who changed what */}
+      {/* Audit log — TENANT ADMIN ONLY. Dept admins and employees never see
+          this section, and the API now rejects their requests too. */}
+      {user.role === "tenant_admin" && (
       <section className="rounded-3xl bg-white p-5 shadow-sm">
         <h2 className="font-semibold text-slate-800">
           ပြင်ဆင်မှတ်တမ်း · Audit Log {viewingName ? `— ${viewingName}` : ""}
         </h2>
         <p className="mt-1 text-xs text-slate-500">
-          ဘယ်သူက ဘယ်အချိန်မှာ ဘာကို ဖန်တီး / ပြင်ဆင် / ဖျက်ခဲ့လဲ — {tab === "team" ? "ဌာန / tenant အလိုက် မြင်ရမယ်။" : "ကိုယ့် diary နဲ့ ဆိုင်တာပဲ မြင်ရမယ်။"}
+          ဘယ်သူက ဘယ်အချိန်မှာ ဘယ်နေရာမှာ ဘာကို ပြင်ခဲ့လဲ (အဟောင်း → အသစ်)၊ ဘာကို ဖျက်ခဲ့လဲ — အတိအကျ။
         </p>
         {audit.length === 0 ? (
           <p className="mt-3 text-sm text-slate-500">ဒီလမှာ မှတ်တမ်း မရှိသေးပါ။</p>
@@ -556,6 +629,8 @@ export default function DailyTasksPage() {
           </ul>
         )}
       </section>
+      )}
     </div>
+    </AppShell>
   );
 }

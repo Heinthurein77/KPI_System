@@ -21,7 +21,7 @@ from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from app.core.deps import get_current_user, require_diary_author, require_tenant_member
+from app.core.deps import get_current_user, require_diary_author, require_tenant_admin, require_tenant_member
 from app.database import get_db
 from app.models.audit_log import AuditLog
 from app.models.daily_task import (
@@ -51,6 +51,12 @@ router = APIRouter(prefix="/api/daily-tasks", tags=["daily-tasks"])
 
 MAX_EVIDENCE_BYTES = 10 * 1024 * 1024
 UPLOAD_DIR = Path(os.getenv("DAILY_TASK_UPLOAD_DIR", "uploads/daily_tasks"))
+
+
+def _short(value) -> str:
+    """Truncate a value for audit summaries so long diary text stays readable."""
+    text = "" if value is None else str(value)
+    return text if len(text) <= 40 else text[:37] + "…"
 
 
 def _visible_user_ids(db: Session, user: User) -> list[int]:
@@ -213,14 +219,15 @@ def update_entry(
             raise HTTPException(400, str(exc)) from exc
     changed = []
     for key, value in data.items():
-        if getattr(entry, key) != value:
-            changed.append(key)
+        old = getattr(entry, key)
+        if old != value:
+            changed.append(f"{key}: '{_short(old)}' → '{_short(value)}'")
         setattr(entry, key, value)
     if changed:
         audit_service.log(
             db, user, "daily_task_updated", "daily_task", entry.id,
             f"{user.name} — {entry.task_date.isoformat()}",
-            f"Updated diary entry for {entry.task_date.isoformat()}: changed {', '.join(changed)}.",
+            f"Updated diary entry for {entry.task_date.isoformat()}: {'; '.join(changed)}.",
             department_id=entry.department_id,
         )
     db.commit()
@@ -244,7 +251,7 @@ def delete_entry(
     audit_service.log(
         db, user, "daily_task_deleted", "daily_task", entry.id,
         f"{user.name} — {entry.task_date.isoformat()}",
-        f"Deleted diary entry for {entry.task_date.isoformat()}.",
+        f"Deleted diary entry for {entry.task_date.isoformat()} (work: '{_short(entry.work_done)}').",
         department_id=entry.department_id,
     )
     db.delete(entry)
@@ -329,7 +336,13 @@ def download_evidence(
     path = UPLOAD_DIR / entry.evidence_file
     if not path.exists():
         raise HTTPException(404, "Evidence file not found on server.")
-    return FileResponse(path, filename=Path(entry.evidence_file).name)
+    return FileResponse(
+        path,
+        filename=Path(entry.evidence_file).name,
+        # Inline (not attachment) so images and PDFs open in the browser
+        # for viewing instead of forcing a download.
+        content_disposition_type="inline",
+    )
 
 
 @router.get("/audit-log", response_model=list[AuditLogOut])
@@ -338,14 +351,13 @@ def daily_task_audit_log(
     month: int | None = Query(None),
     user_id: int | None = Query(None),
     db: Session = Depends(get_db),
-    user: User = Depends(require_tenant_member),
+    user: User = Depends(require_tenant_admin),
 ):
-    """Who did what to the diaries: creations, edits (with changed fields),
-    deletions, feedback, evidence uploads, and review updates.
+    """Who did what to the diaries, in exact detail: creations, edits with
+    old → new values, deletions with the deleted text, feedback, evidence
+    uploads, and review updates.
 
-    Scope mirrors diary visibility: tenant admins see the whole tenant,
-    dept admins see their department, employees see their own diary's trail
-    (their actions plus supervisor actions on their entries).
+    TENANT ADMIN ONLY. Dept admins and employees must not see this trail.
     """
     if user_id is not None and user_id not in _visible_user_ids(db, user):
         raise HTTPException(403, "Not allowed to view this user's diary trail.")
@@ -363,27 +375,6 @@ def daily_task_audit_log(
         day_start = datetime(start.year, start.month, start.day, tzinfo=timezone.utc)
         day_end = datetime(end.year, end.month, end.day, tzinfo=timezone.utc)
         stmt = stmt.where(AuditLog.created_at >= day_start, AuditLog.created_at < day_end)
-    if user.role == UserRole.DEPT_ADMIN:
-        stmt = stmt.where(
-            or_(
-                AuditLog.department_id == user.department_id,
-                AuditLog.actor_id == user.id,
-            )
-        )
-    if user.role == UserRole.EMPLOYEE:
-        own_entry_ids = select(DailyTaskEntry.id).where(DailyTaskEntry.user_id == user.id)
-        own_review_ids = select(DailyTaskMonthlyReview.id).where(
-            DailyTaskMonthlyReview.user_id == user.id
-        )
-        stmt = stmt.where(
-            or_(
-                AuditLog.actor_id == user.id,
-                (AuditLog.entity_type == "daily_task")
-                & (AuditLog.entity_id.in_(own_entry_ids)),
-                (AuditLog.entity_type == "daily_task_review")
-                & (AuditLog.entity_id.in_(own_review_ids)),
-            )
-        )
     if user_id is not None:
         entry_ids = select(DailyTaskEntry.id).where(DailyTaskEntry.user_id == user_id)
         review_ids = select(DailyTaskMonthlyReview.id).where(
@@ -531,7 +522,7 @@ def put_monthly_review(
         )
         if allowed:
             if review.hod_evaluation != data["hod_evaluation"]:
-                changed.append("hod_evaluation")
+                changed.append(f"hod_evaluation: '{_short(review.hod_evaluation)}' → '{_short(data['hod_evaluation'])}'")
             review.hod_evaluation = data.pop("hod_evaluation")
         else:
             data.pop("hod_evaluation")
@@ -539,7 +530,7 @@ def put_monthly_review(
         for key in ("achievements", "challenges_solutions", "improvements_next_focus"):
             if key in data:
                 if getattr(review, key) != data[key]:
-                    changed.append(key)
+                    changed.append(f"{key}: '{_short(getattr(review, key))}' → '{_short(data[key])}'")
                 setattr(review, key, data[key])
     elif user.role == UserRole.DEPT_ADMIN:
         # Dept admins only write the evaluation on a member's review.
@@ -550,7 +541,7 @@ def put_monthly_review(
         audit_service.log(
             db, user, "daily_task_review_updated", "daily_task_review", review.id,
             f"{target.name if target else ''} — {year}-{month:02d}",
-            f"Updated month-end review for {year}-{month:02d}: changed {', '.join(changed)}.",
+            f"Updated month-end review for {year}-{month:02d}: {'; '.join(changed)}.",
             department_id=target.department_id if target else None,
         )
     db.commit()

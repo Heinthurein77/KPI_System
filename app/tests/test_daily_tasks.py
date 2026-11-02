@@ -244,15 +244,52 @@ def test_diary_audit_log_records_who_changed_what(db, client):
     assert feedback["actor_name"] == "Diary Boss"
 
 
-def test_diary_audit_log_scoped_to_department(db, client):
-    tenant, dept, emp, boss, _ = _setup(db)
-    other_dept = make_department(db, tenant, name="Other Dept")
-    outsider = make_user(db, tenant, UserRole.EMPLOYEE, name="Outsider", department=other_dept)
+def test_diary_audit_log_tenant_admin_only(db, client):
+    tenant, dept, emp, boss, tenant_admin = _setup(db)
     client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
-    client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(outsider, tenant))
+    # Dept admins and employees must NOT see the trail at all.
     r = client.get("/api/daily-tasks/audit-log?year=2026&month=11",
                    headers=auth_headers(boss, tenant))
+    assert r.status_code == 403
+    r = client.get("/api/daily-tasks/audit-log?year=2026&month=11",
+                   headers=auth_headers(emp, tenant))
+    assert r.status_code == 403
+    # Tenant admin sees everything.
+    r = client.get("/api/daily-tasks/audit-log?year=2026&month=11",
+                   headers=auth_headers(tenant_admin, tenant))
     assert r.status_code == 200
-    labels = [e["entity_label"] for e in r.json()]
-    assert any("Diary Emp" in label for label in labels)
-    assert not any("Outsider" in label for label in labels)
+    assert any(e["action"] == "daily_task_created" for e in r.json())
+
+
+def test_diary_audit_log_shows_old_new_and_deleted_text(db, client):
+    tenant, _, emp, _, tenant_admin = _setup(db)
+    r = client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    entry_id = r.json()["id"]
+    client.patch(f"/api/daily-tasks/{entry_id}", json={"status": "completed"},
+                 headers=auth_headers(emp, tenant))
+    client.delete(f"/api/daily-tasks/{entry_id}", headers=auth_headers(emp, tenant))
+    r = client.get("/api/daily-tasks/audit-log?year=2026&month=11",
+                   headers=auth_headers(tenant_admin, tenant))
+    assert r.status_code == 200
+    update = [e for e in r.json() if e["action"] == "daily_task_updated"][0]
+    assert "in_progress" in update["summary"] and "completed" in update["summary"]
+    deleted = [e for e in r.json() if e["action"] == "daily_task_deleted"][0]
+    assert "October Monthly Report draft finished" in deleted["summary"]
+
+
+def test_evidence_file_served_inline_for_viewing(db, client):
+    tenant, _, emp, _, _ = _setup(db)
+    r = client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    entry_id = r.json()["id"]
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+    r = client.post(f"/api/daily-tasks/{entry_id}/evidence",
+                    files={"file": ("shot.png", png, "image/png")},
+                    headers=auth_headers(emp, tenant))
+    assert r.status_code == 200, r.text
+    assert r.json()["has_evidence_file"] is True
+    r = client.get(f"/api/daily-tasks/{entry_id}/evidence", headers=auth_headers(emp, tenant))
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("image/png")
+    assert r.headers["content-disposition"].startswith("inline")
+    assert r.content == png
+    client.delete(f"/api/daily-tasks/{entry_id}", headers=auth_headers(emp, tenant))

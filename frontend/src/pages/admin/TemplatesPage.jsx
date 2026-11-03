@@ -195,8 +195,16 @@ export default function TemplatesPage() {
 
   // Update a single existing template's in-form weight override.
   function handleAdjustWeight(templateId, value) {
-    setAdjustedWeights((prev) => ({ ...prev, [templateId]: value }));
+    setAdjustedWeights((prev) => ({ ...prev, [templateId]: clampWeight(value) }));
     setWeightError(null);
+  }
+
+  // Weights can never exceed 100%: clamp at input time (the max attribute
+  // alone does not stop typing a bigger number) instead of failing at save.
+  // Empty stays empty so clearing the field still works.
+  function clampWeight(value) {
+    if (value === "" || value === null || value === undefined) return value;
+    return Number.isNaN(Number(value)) || Number(value) <= 100 ? value : "100";
   }
 
   // Reset a single template's weight override back to its saved value.
@@ -416,7 +424,7 @@ export default function TemplatesPage() {
                   required
                   placeholder="Weight %"
                   value={customWeight}
-                  onChange={(e) => { setCustomWeight(e.target.value); setWeightError(null); }}
+                  onChange={(e) => { setCustomWeight(clampWeight(e.target.value)); setWeightError(null); }}
                   className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 transition ${
                     weightError
                       ? "border-red-400 focus:ring-red-400"

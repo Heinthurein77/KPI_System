@@ -200,7 +200,14 @@ export default function KpiCard({
   }
 
   function handleScoreChange(setScore, field, value) {
-    setScore(value);
+    // Scores can never exceed the target: clamp at input time instead of
+    // letting an over-target value sit in the field until save/approve
+    // rejects it. Empty stays empty so clearing the field still works.
+    const capped = value === "" || value === null || value === undefined
+      ? value
+      : (Number.isNaN(Number(value)) ? value : (Number(value) > Number(snapTarget) ? String(snapTarget) : value));
+    setScore(capped);
+    value = capped;
     // Lets the review board's Approve-all collect each card's current
     // reviewer input (dept/final paths only — self scores and overrides
     // are never bulk-approved).
@@ -249,9 +256,15 @@ export default function KpiCard({
               type="number"
               step="0.1"
               min="0"
-              max="200"
+              max={snapTarget}
               value={selfScoreValue ?? ""}
-              onChange={(e) => onSelfScoreChange(s.id, e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                // Same input-time cap as the reviewer scores: a self score
+                // can never be typed past its target in the first place.
+                const capped = v === "" || Number.isNaN(Number(v)) || Number(v) <= Number(snapTarget) ? v : String(snapTarget);
+                onSelfScoreChange(s.id, capped);
+              }}
               aria-invalid={selfScoreInvalid}
               className={`w-full rounded-lg border px-2 py-2 text-base font-bold text-center tabular-nums focus:outline-none focus:ring-2 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${selfScoreInvalid ? "border-red-500 focus:ring-red-500" : "border-slate-300 focus:ring-brand-500"}`}
             />
@@ -325,7 +338,7 @@ export default function KpiCard({
               type="number"
               step="0.1"
               min="0"
-              max="200"
+              max={snapTarget}
               value={deptScore}
               onChange={(e) => handleScoreChange(setDeptScore, "dept", e.target.value)}
               aria-invalid={invalidScoreField === "dept"}
@@ -386,7 +399,7 @@ export default function KpiCard({
                   type="number"
                   step="0.1"
                   min="0"
-                  max="200"
+                  max={snapTarget}
                   value={finalScore}
                   onChange={(e) => handleScoreChange(setFinalScore, "final", e.target.value)}
                   aria-invalid={invalidScoreField === "final"}
@@ -437,7 +450,7 @@ export default function KpiCard({
                     type="number"
                     step="0.1"
                     min="0"
-                    max="200"
+                    max={snapTarget}
                     placeholder="Score"
                     value={overrideScore}
                     onChange={(e) => handleScoreChange(setOverrideScore, "override", e.target.value)}

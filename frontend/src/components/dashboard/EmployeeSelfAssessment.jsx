@@ -121,21 +121,29 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     // An emptied field is not a corrected value. Keep this validation message
     // visible until the previously invalid value is replaced with one at or
     // below its target.
+    //
+    // Validity is computed LOCALLY (never read back from `error` state after
+    // setError): React state updates are async, so reading `error` here
+    // returned the previous render's value — the first Save after
+    // correcting an over-target score was silently swallowed.
+    let valid = true;
     if (invalidScoreId !== null) {
       const previousInvalidValue = nextScores[invalidScoreId];
       const previousInvalidSubmission = data.submissions.find((s) => s.id === invalidScoreId);
-      if (
+      const corrected =
         previousInvalidSubmission
         && previousInvalidValue !== ""
         && previousInvalidValue !== null
         && previousInvalidValue !== undefined
-        && Number(previousInvalidValue) <= Number(previousInvalidSubmission.target_snapshot ?? previousInvalidSubmission.kpi_template.target)
-      ) {
+        && Number(previousInvalidValue) <= Number(previousInvalidSubmission.target_snapshot ?? previousInvalidSubmission.kpi_template.target);
+      if (corrected) {
         setInvalidScoreId(null);
         if (error === TARGET_EXCEEDED_MESSAGE) setError(null);
+      } else if (error === TARGET_EXCEEDED_MESSAGE) {
+        valid = false;
       }
     }
-    return error !== TARGET_EXCEEDED_MESSAGE;
+    return valid;
   }
 
   function handleSelfScoreChange(id, value) {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -104,10 +104,36 @@ export default function DailyTasksPage() {
   // screen — "fill" shows only the form, "history" shows only filled entries.
   const [mineView, setMineView] = useState("fill");
   const effectiveUserId = tab === "mine" ? String(user.id) : (viewUserId || undefined);
-  const [form, setForm] = useState(EMPTY_FORM);
-  const [editingId, setEditingId] = useState(null);
+  // F-M5: diary drafts survive a 401 hard redirect (session expiry) via
+  // sessionStorage — the form (plus which entry is being edited) and the
+  // review draft are restored on mount. The attached evidence File cannot
+  // be persisted (browser security), so a file selection is still lost
+  // on redirect; everything typed is kept.
+  const formStorageKey = `kpi-daily-form-${user.id}`;
+  const reviewStorageKey = (y, m, uid) => `kpi-daily-review-${user.id}-${y}-${m}-${uid ?? "none"}`;
+  const loadStoredForm = () => {
+    try {
+      const parsed = JSON.parse(sessionStorage.getItem(formStorageKey) || "null");
+      if (!parsed || typeof parsed !== "object") return { form: EMPTY_FORM, editingId: null };
+      const { form: storedForm, editingId: storedEditingId } = parsed;
+      if (!storedForm || typeof storedForm !== "object") return { form: EMPTY_FORM, editingId: null };
+      // A restored draft is always for today — a stale date would otherwise
+      // submit yesterday's half-written entry under yesterday's date.
+      return {
+        form: { ...EMPTY_FORM, ...storedForm, task_date: EMPTY_FORM.task_date },
+        editingId: storedEditingId || null,
+      };
+    } catch {
+      return { form: EMPTY_FORM, editingId: null };
+    }
+  };
+  const [initialForm] = useState(loadStoredForm);
+  const [form, setForm] = useState(initialForm.form);
+  const [editingId, setEditingId] = useState(initialForm.editingId);
   const [evidenceFile, setEvidenceFile] = useState(null);
   const [feedbackDraft, setFeedbackDraft] = useState({});
+  const [feedbackSending, setFeedbackSending] = useState({});
+  const reviewHydratedRef = useRef(false);
   const [review, setReview] = useState(null);
   const [reviewDraft, setReviewDraft] = useState({
     achievements: "",
@@ -134,6 +160,17 @@ export default function DailyTasksPage() {
     if (viewUserId) return Number(viewUserId);
     return null;
   }, [tab, viewUserId, user.id]);
+
+  // F-M1: a dept admin viewing a MEMBER's review may only write the HOD
+  // evaluation — the backend silently drops the other three sections for
+  // them (tenant admins, by contrast, may write all four). So the author
+  // sections are disabled with a note, the save-confirm lists only HOD,
+  // and the save payload carries only HOD. Nothing the UI shows will be
+  // dropped anymore.
+  const isDeptAdminViewingMember = user.role === "dept_admin"
+    && tab === "team"
+    && reviewUserId !== null
+    && reviewUserId !== user.id;
 
   const load = useCallback(async () => {
     const [list, sum, trail] = await Promise.all([
@@ -162,20 +199,57 @@ export default function DailyTasksPage() {
         improvements_next_focus: "",
         hod_evaluation: "",
       });
+      reviewHydratedRef.current = true;
       return;
     }
     getMonthlyReview(year, month, reviewUserId)
       .then((r) => {
         setReview(r);
-        setReviewDraft({
+        // F-M5: a stored unsaved draft for this exact review wins over
+        // the server values — it is the user's newer, not-yet-saved work.
+        let stored = null;
+        try {
+          stored = JSON.parse(sessionStorage.getItem(reviewStorageKey(year, month, reviewUserId)) || "null");
+        } catch {
+          stored = null;
+        }
+        setReviewDraft(stored && typeof stored === "object" ? {
+          achievements: stored.achievements || "",
+          challenges_solutions: stored.challenges_solutions || "",
+          improvements_next_focus: stored.improvements_next_focus || "",
+          hod_evaluation: stored.hod_evaluation || "",
+        } : {
           achievements: r?.achievements || "",
           challenges_solutions: r?.challenges_solutions || "",
           improvements_next_focus: r?.improvements_next_focus || "",
           hod_evaluation: r?.hod_evaluation || "",
         });
+        reviewHydratedRef.current = true;
       })
-      .catch(() => setReview(null));
+      .catch(() => {
+        setReview(null);
+        reviewHydratedRef.current = true;
+      });
   }, [year, month, reviewUserId]);
+
+  // F-M5 persistence: form + review draft are written on every change.
+  // The review write is skipped until the server load hydrates the draft,
+  // so the initial empty draft never clobbers a stored one on mount.
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(formStorageKey, JSON.stringify({ form, editingId }));
+    } catch {
+      // Private-mode quota errors must never break the diary itself.
+    }
+  }, [form, editingId]);
+  useEffect(() => {
+    if (!reviewHydratedRef.current) return;
+    try {
+      sessionStorage.setItem(reviewStorageKey(year, month, reviewUserId), JSON.stringify(reviewDraft));
+    } catch {
+      // See above.
+    }
+  }, [reviewDraft, year, month, reviewUserId]);
 
   const shiftMonth = (delta) => {
     let m = month + delta;
@@ -285,12 +359,16 @@ export default function DailyTasksPage() {
     if (confirmBusy || !reviewUserId) return;
     const monthLabel = `${year}-${String(month).padStart(2, "0")}`;
     const ownerLabel = viewingName ? `${viewingName} ၏ review` : "ကိုယ့် review";
-    const fields = [
+    const allFields = [
       ["အောင်မြင်မှုများ", reviewDraft.achievements],
       ["အခက်အခဲ & ဖြေရှင်းပုံ", reviewDraft.challenges_solutions],
       ["ပိုကောင်းအောင် ပြင်ဆင်မည့်အချက်", reviewDraft.improvements_next_focus],
       ["HOD အကဲဖြတ်ချက်", reviewDraft.hod_evaluation],
-    ].filter(([, v]) => v.trim());
+    ];
+    // A dept admin viewing a member's review can only save HOD — never
+    // list the author sections in the confirm dialog (they would be dropped).
+    const fields = (isDeptAdminViewingMember ? allFields.slice(3) : allFields)
+      .filter(([, v]) => v.trim());
     setConfirm({
       title: "Month-end review သိမ်းမလား?",
       message: `${monthLabel} · ${ownerLabel}`,
@@ -318,8 +396,19 @@ export default function DailyTasksPage() {
   const doSaveReview = async () => {
     setConfirmBusy(true);
     try {
-      const saved = await saveMonthlyReview(year, month, reviewUserId, reviewDraft);
+      // Dept admins viewing a member send HOD only — the author sections
+      // would be dropped server-side, so they are not sent at all.
+      const payload = isDeptAdminViewingMember
+        ? { hod_evaluation: reviewDraft.hod_evaluation }
+        : reviewDraft;
+      const saved = await saveMonthlyReview(year, month, reviewUserId, payload);
       setReview(saved);
+      // F-M5: the saved review supersedes the stored draft for this key.
+      try {
+        sessionStorage.removeItem(reviewStorageKey(year, month, reviewUserId));
+      } catch {
+        // See above.
+      }
       setNotice({ text: "✓ Month-end review သိမ်းပြီးပါပြီ။", ok: true });
     } catch (err) {
       // The old button had no error handling at all — a failed save died
@@ -331,8 +420,29 @@ export default function DailyTasksPage() {
     }
   };
 
+  // F-M3: feedback send with error handling, a sending-disabled state,
+  // and empty feedback skipped — previously a failed send died silently
+  // and empty feedback could be sent.
+  const sendFeedback = async (entry) => {
+    const text = (feedbackDraft[entry.id] || "").trim();
+    if (!text || feedbackSending[entry.id]) return;
+    setFeedbackSending((prev) => ({ ...prev, [entry.id]: true }));
+    try {
+      await giveDailyFeedback(entry.id, text);
+      setNotice({ text: "Feedback ပို့ပြီးပါပြီ — ဝန်ထမ်းဆီ notification ရောက်မယ်။", ok: true });
+      setFeedbackDraft((prev) => ({ ...prev, [entry.id]: "" }));
+      load();
+    } catch (err) {
+      setNotice({ text: getErrorMessage(err, "Feedback ပို့လို့မရပါ။ ထပ်စမ်းကြည့်ပါ။"), ok: false });
+    } finally {
+      setFeedbackSending((prev) => ({ ...prev, [entry.id]: false }));
+    }
+  };
+
   const startEdit = (entry) => {
     setEditingId(entry.id);
+    // F-M4: a file picked for another entry must never leak into this one.
+    setEvidenceFile(null);
     setMineView("fill");
     setForm({
       task_date: entry.task_date,
@@ -541,7 +651,10 @@ export default function DailyTasksPage() {
             </Field>
           </div>
           <Field label="Evidence ဖိုင် တိုက်ရိုက်တင်ရန်" sub="ဖိုင်တွဲရန် · max 10 MB">
-            <input type="file" className="text-sm" onChange={(e) => setEvidenceFile(e.target.files[0] || null)} />
+            {/* Keyed by the entry being edited so switching entries (or
+                cancelling) remounts the input and clears the picked file —
+                otherwise the DOM value survives setEvidenceFile(null). */}
+            <input key={editingId ?? "new"} type="file" className="text-sm" onChange={(e) => setEvidenceFile(e.target.files[0] || null)} />
           </Field>
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="အခက်အခဲ / မပြီးသေးသည့် အကြောင်းရင်း" sub="Difficulties & Pending">
@@ -573,7 +686,7 @@ export default function DailyTasksPage() {
             </button>
             {editingId && (
               <button type="button" className="rounded-full border px-5 py-2 text-sm"
-                onClick={() => { setEditingId(null); setForm(EMPTY_FORM); }}>
+                onClick={() => { setEditingId(null); setForm(EMPTY_FORM); setEvidenceFile(null); }}>
                 မလုပ်တော့ပါ
               </button>
             )}
@@ -653,13 +766,10 @@ export default function DailyTasksPage() {
                 <input className={inputCls} placeholder="Supervisor feedback ရေးရန်…"
                   value={feedbackDraft[entry.id] || ""}
                   onChange={(e) => setFeedbackDraft({ ...feedbackDraft, [entry.id]: e.target.value })} />
-                <button className="shrink-0 rounded-full bg-indigo-600 px-4 py-1 text-xs text-white"
-                  onClick={async () => {
-                    await giveDailyFeedback(entry.id, feedbackDraft[entry.id] || "");
-                    setNotice({ text: "Feedback ပို့ပြီးပါပြီ — ဝန်ထမ်းဆီ notification ရောက်မယ်။", ok: true });
-                    load();
-                  }}>
-                  ပို့ရန်
+                <button className="shrink-0 rounded-full bg-indigo-600 px-4 py-1 text-xs text-white disabled:opacity-50"
+                  disabled={feedbackSending[entry.id] || !(feedbackDraft[entry.id] || "").trim()}
+                  onClick={() => sendFeedback(entry)}>
+                  {feedbackSending[entry.id] ? "ပို့နေတယ်…" : "ပို့ရန်"}
                 </button>
               </div>
             )}
@@ -703,17 +813,22 @@ export default function DailyTasksPage() {
       )}
       <section className="rounded-3xl bg-white p-5 shadow-sm">
         <h2 className="font-semibold text-slate-800">သုံးသပ်ချက် ပြင်ဆင်ရန် · Edit Review</h2>
+        {isDeptAdminViewingMember && (
+          <p className="mt-2 rounded-xl bg-amber-50 px-3 py-2 text-[13px] text-amber-800">
+            ဒီ review က အဖွဲ့ဝင်ရဲ့ ကိုယ်ပိုင်သုံးသပ်ချက်ပါ — dept admin အနေနဲ့ HOD အကဲဖြတ်ချက်ကိုသာ ဖြည့်နိုင်ပါတယ်။ အောက်ပါ ၃ ချက်ကို ပြင်လို့မရပါ။
+          </p>
+        )}
         <div className="mt-3 grid gap-3">
           <Field label="ဒီလ၏ အဓိက အောင်မြင်ပြီးစီးမှုများ" sub="Major Achievements">
-            <textarea rows={2} className={inputCls} value={reviewDraft.achievements}
+            <textarea rows={2} className={inputCls} value={reviewDraft.achievements} disabled={isDeptAdminViewingMember}
               onChange={(e) => setReviewDraft({ ...reviewDraft, achievements: e.target.value })} />
           </Field>
           <Field label="ကြုံတွေ့ခဲ့သော အခက်အခဲများနှင့် ဖြေရှင်းပုံ" sub="Key Challenges & Solutions">
-            <textarea rows={2} className={inputCls} value={reviewDraft.challenges_solutions}
+            <textarea rows={2} className={inputCls} value={reviewDraft.challenges_solutions} disabled={isDeptAdminViewingMember}
               onChange={(e) => setReviewDraft({ ...reviewDraft, challenges_solutions: e.target.value })} />
           </Field>
           <Field label="နောက်လတွင် ပိုမိုကောင်းမွန်အောင် ပြင်ဆင်မည့်အချက်များ" sub="Improvement / Next Month Focus">
-            <textarea rows={2} className={inputCls} value={reviewDraft.improvements_next_focus}
+            <textarea rows={2} className={inputCls} value={reviewDraft.improvements_next_focus} disabled={isDeptAdminViewingMember}
               onChange={(e) => setReviewDraft({ ...reviewDraft, improvements_next_focus: e.target.value })} />
           </Field>
           {isSupervisor && reviewUserId !== user.id && (

@@ -1,3 +1,4 @@
+import fcntl
 import logging
 import os
 from pathlib import Path
@@ -7,12 +8,10 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from slowapi.errors import RateLimitExceeded
-from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.core.tenant import TenantResolutionMiddleware
-from app.database import engine
 from app.routers import admin, analytics, auth, daily_tasks, dashboard, importer, kpi, notifications, platform, reminders, reports
 logger = logging.getLogger("kpi_system")
 
@@ -40,9 +39,11 @@ app.add_middleware(
 
 app.add_middleware(TenantResolutionMiddleware)
 
-# Arbitrary fixed id for the schema-migration advisory lock — any int64 works,
-# it just needs to be the same value everywhere this runs.
-_SCHEMA_LOCK_ID = 727271
+# Inter-process file lock for schema migrations (see on_startup). Workers
+# in one container share the filesystem, so this serializes them; the
+# deploy is a single container (docker compose up -d --build), so one
+# lock file is sufficient. Override via env for tests.
+_MIGRATION_LOCK_PATH = Path(os.environ.get("KPI_MIGRATION_LOCK_FILE", "/tmp/kpi-migration.lock"))
 
 _ALEMBIC_CFG = Config(str(Path(__file__).resolve().parent.parent / "alembic.ini"))
 
@@ -56,16 +57,18 @@ def on_startup() -> None:
     # Production runs multiple gunicorn workers that each boot this startup hook
     # concurrently. Alembic's DDL isn't safe run concurrently from multiple
     # processes (e.g. two workers racing to create the same enum type crash with
-    # a UniqueViolation). A session-level advisory lock serializes migrations
-    # across worker processes: whoever gets there first runs them; the rest
-    # block, then find everything already at head.
-    with engine.connect() as conn:
-        conn.execute(text("SELECT pg_advisory_lock(:id)"), {"id": _SCHEMA_LOCK_ID})
+    # a UniqueViolation). The previous pg advisory lock did NOT protect
+    # anything: it was held on a connection from `engine`, while Alembic
+    # opens its own engine/connection in env.py, so the lock and the DDL
+    # never shared a session. The file lock below is held for the whole
+    # upgrade call itself, so whichever worker gets there first runs the
+    # migrations and the rest block, then find everything already at head.
+    with open(_MIGRATION_LOCK_PATH, "a+") as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
         try:
             command.upgrade(_ALEMBIC_CFG, "head")
         finally:
-            conn.execute(text("SELECT pg_advisory_unlock(:id)"), {"id": _SCHEMA_LOCK_ID})
-            conn.commit()
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
     response = await call_next(request)

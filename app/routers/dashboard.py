@@ -157,7 +157,15 @@ def combined_final_score(submissions: List[Any]) -> Optional[Dict[str, Any]]:
     if not valid_items:
         return None
 
-    total_score, rating = calculate_kpi(valid_items)
+    try:
+        total_score, rating = calculate_kpi(valid_items)
+    except ValueError:
+        # One over-target row must not 500 a whole dashboard or team
+        # view: that employee's group simply has no combined score
+        # (per_employee_combined_scores maps it to None). This is a
+        # display-layer guard only — calculate_kpi itself still raises
+        # when called directly, and the scoring formula is untouched.
+        return None
 
     return {
         "attainment": total_score,

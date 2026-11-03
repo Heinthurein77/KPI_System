@@ -10,7 +10,7 @@ from datetime import date
 import pytest
 from fastapi import HTTPException
 
-from app.models.kpi_submission import KPIStatus
+from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.user import UserRole
 from app.services import kpi_service
 from app.tests.factories import (
@@ -765,3 +765,100 @@ def test_submit_rejects_future_month(db):
     with pytest.raises(HTTPException) as exc_info:
         kpi_service.submit_for_dept_approval(db, employee, 2026, "December", today=date(2026, 11, 3))
     assert exc_info.value.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# M8 weight caps + guard, M12 atomic bulk approve
+# ---------------------------------------------------------------------------
+
+
+def test_create_custom_kpi_over_100_period_total_rejected(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN, department=dept)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    kpi_service.create_custom_employee_kpi(
+        db, admin, employee, "Metric A", 100.0, 60.0, 2026, "September"
+    )
+    # A second metric pushing the period total to 120 is refused, and the
+    # first metric is untouched.
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.create_custom_employee_kpi(
+            db, admin, employee, "Metric B", 100.0, 60.0, 2026, "September"
+        )
+    assert exc_info.value.status_code == 400
+    db.rollback()  # the refused create was never committed; discard its pending rows
+    subs = db.query(KPISubmission).filter_by(employee_id=employee.id).all()
+    assert len(subs) == 1
+
+
+def test_create_custom_kpi_single_weight_over_100_rejected(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN, department=dept)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    # The API schema caps single weights at 100; the service guard catches
+    # the same case via the period total for non-API paths (bulk import).
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.create_custom_employee_kpi(
+            db, admin, employee, "Huge Metric", 100.0, 150.0, 2026, "September"
+        )
+    assert exc_info.value.status_code == 400
+
+
+def test_dept_approve_blocked_when_period_over_100(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    reviewer = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    t1 = make_template(db, tenant, metric_name="M1", weight=60.0)
+    t2 = make_template(db, tenant, metric_name="M2", weight=60.0)
+    s1 = make_submission(
+        db, tenant, employee, t1, period="September",
+        status=KPIStatus.PENDING_DEPT_APPROVAL, self_score=80.0,
+    )
+    make_submission(
+        db, tenant, employee, t2, period="September",
+        status=KPIStatus.PENDING_DEPT_APPROVAL, self_score=80.0,
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.dept_approve(db, reviewer, s1, None, None)
+    assert exc_info.value.status_code == 400
+    db.refresh(s1)
+    assert s1.status == KPIStatus.PENDING_DEPT_APPROVAL
+
+
+def test_bulk_approve_rolls_back_whole_batch_on_mid_loop_failure(db):
+    from unittest.mock import patch
+
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN, department=dept)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    t1 = make_template(db, tenant, metric_name="Bulk M1")
+    t2 = make_template(db, tenant, metric_name="Bulk M2")
+    s1 = make_submission(
+        db, tenant, employee, t1, period="September",
+        status=KPIStatus.PENDING_FINAL_APPROVAL, self_score=80.0,
+    )
+    s2 = make_submission(
+        db, tenant, employee, t2, period="September",
+        status=KPIStatus.PENDING_FINAL_APPROVAL, self_score=80.0,
+    )
+    real_final = kpi_service.final_approve
+
+    def flaky(db_, reviewer, submission, score, remarks, commit=True):
+        if submission.id == s2.id:
+            raise RuntimeError("boom mid-batch")
+        return real_final(db_, reviewer, submission, score, remarks, commit=commit)
+
+    with patch.object(kpi_service, "final_approve", side_effect=flaky):
+        with pytest.raises(RuntimeError):
+            kpi_service.bulk_approve(
+                db, admin, 2026, "September", [(s1.id, None, None), (s2.id, None, None)]
+            )
+    db.refresh(s1)
+    db.refresh(s2)
+    # Atomic: the first item's approval was rolled back with the batch.
+    assert s1.status == KPIStatus.PENDING_FINAL_APPROVAL
+    assert s2.status == KPIStatus.PENDING_FINAL_APPROVAL

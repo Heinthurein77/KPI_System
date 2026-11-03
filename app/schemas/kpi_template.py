@@ -54,9 +54,11 @@ class CreateTemplateRequest(BaseModel):
     # A metric with a zero or negative target/weight would corrupt the weighted
     # combined-score math in dashboard.combined_final_score (divide-by-near-zero
     # attainment, or a negative contribution that pulls the whole weighted
-    # average the wrong way) -- reject it at the door instead.
+    # average the wrong way) -- reject it at the door instead. A single
+    # metric above 100% is likewise meaningless (weights are percentages
+    # of one period's total), so it is capped here too.
     target: float = Field(gt=0)
-    weight: float = Field(gt=0)
+    weight: float = Field(gt=0, le=100)
     department_id: int | None = None
 
 
@@ -64,7 +66,7 @@ class CreateCustomTemplateRequest(_PeriodYearValidated):
     employee_id: int
     metric_name: str
     target: float = Field(gt=0)
-    weight: float = Field(gt=0)
+    weight: float = Field(gt=0, le=100)  # single-metric cap; the period total guard runs in the service
     year: int
     period: str
     # New custom assignments recur by default. Existing persisted templates
@@ -89,7 +91,7 @@ class CreateCustomTemplateWithRebalanceRequest(_PeriodYearValidated):
     employee_id: int
     metric_name: str
     target: float = Field(gt=0)
-    weight: float = Field(gt=0)
+    weight: float = Field(gt=0, le=100)
     year: int
     period: str
     is_recurring: bool = True

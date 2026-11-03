@@ -181,3 +181,20 @@ def test_is_current_or_future_period_true_for_future_year():
 def test_is_current_or_future_period_false_for_past_year():
     today = date(2026, 3, 15)
     assert is_current_or_future_period(2025, "December", today) is False
+
+
+def test_over_target_row_yields_none_instead_of_500():
+    """M9: one over-target row must not 500 a whole dashboard/team view —
+    that employee's group simply has no combined score."""
+    from app.routers.dashboard import per_employee_combined_scores
+
+    over = _submission(150.0, _template(target=100.0, weight=1.0))
+    over.employee_id = 1
+    over.employee = SimpleNamespace(name="Over")
+    ok = _submission(80.0, _template(target=100.0, weight=1.0))
+    ok.employee_id = 2
+    ok.employee = SimpleNamespace(name="Ok")
+    assert combined_final_score([over]) is None
+    result = per_employee_combined_scores([over, ok])
+    assert result[1] is None
+    assert result[2] is not None

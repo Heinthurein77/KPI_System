@@ -356,6 +356,13 @@ def create_custom_employee_kpi(
         target_snapshot=template.target,
     )
     db.add(submission)
+    db.flush()
+    # Period-total guard at creation time: a single 150%-weight metric (or
+    # a create that pushes the period total over 100%) is refused here,
+    # instead of only surfacing later at save/submit. Callers roll back
+    # on error (rebalance and bulk import wrap the whole transaction;
+    # the single-create endpoint's session is discarded uncommitted).
+    validate_period_total_weight(db, employee, year, period)
     recurring_note = " Marked as monthly recurring." if is_recurring else ""
     audit_service.log(
         db, actor, "kpi_template_created", "kpi_template", template.id,
@@ -584,13 +591,26 @@ def dept_approve(
     submission: KPISubmission,
     dept_score: float | None,
     remarks: str | None,
-) -> None:
-    """Dept Admin approves and forwards to the Super Admin for final review."""
+    commit: bool = True,
+) -> list:
+    """Dept Admin approves and forwards to the Super Admin for final review.
+
+    With commit=False (bulk_approve), no commit and no email send happen;
+    the created notification objects are returned so the caller can send
+    their emails after its single commit. With commit=True (default),
+    behavior is unchanged: commit + send, and [] is returned.
+    """
     if submission.status != KPIStatus.PENDING_DEPT_APPROVAL:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not awaiting department review.")
     if reviewer.id == submission.employee_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot approve your own KPI.")
     _validate_score_within_target(submission, dept_score, "Dept score")
+    # Weight guard at approval time too: an over-100 period must not be
+    # approvable into the record. (tenant_admin_override stays the
+    # documented escape hatch for legacy over-100 periods.)
+    validate_period_total_weight(
+        db, submission.employee, submission.year, submission.month_or_quarter
+    )
     old_score = submission.dept_score
     submission.dept_score = dept_score if dept_score is not None else (
         submission.dept_score if submission.dept_score is not None else submission.self_score
@@ -626,8 +646,11 @@ def dept_approve(
         "department review and awaits final approval.",
         link=dashboard_link,
     )
+    if not commit:
+        return emailed
     db.commit()
     email_service.send_for_notifications(db, emailed)
+    return []
 
 
 def final_approve(
@@ -636,11 +659,20 @@ def final_approve(
     submission: KPISubmission,
     final_score: float | None,
     remarks: str | None,
-) -> None:
-    """Super Admin gives final approval, optionally adjusting the score."""
+    commit: bool = True,
+) -> list:
+    """Super Admin gives final approval, optionally adjusting the score.
+
+    commit=False behaves like dept_approve's: no commit, no email send,
+    notification objects returned for the caller's single commit + send.
+    """
     if submission.status != KPIStatus.PENDING_FINAL_APPROVAL:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not awaiting final approval.")
     _validate_score_within_target(submission, final_score, "Final score")
+    # Weight guard at approval time too (see dept_approve).
+    validate_period_total_weight(
+        db, submission.employee, submission.year, submission.month_or_quarter
+    )
     submission.final_score = final_score if final_score is not None else (
         submission.dept_score if submission.dept_score is not None else submission.self_score
     )
@@ -666,8 +698,11 @@ def final_approve(
         )
     else:
         emailed = []
+    if not commit:
+        return emailed
     db.commit()
     email_service.send_for_notifications(db, emailed)
+    return []
 
 
 def bulk_approve(
@@ -685,6 +720,11 @@ def bulk_approve(
     fails, nothing is processed. Approved items go through the exact same
     single-item functions, so notifications, audit logs and emails behave
     identically to one-by-one approval. Each item carries its own remarks.
+
+    Atomic: all items share one commit at the end. If any item fails
+    mid-loop, the whole batch rolls back — previously each item
+    committed on its own, so a failure halfway left half the batch
+    approved with no way to tell which half.
     """
     seen: set[int] = set()
     planned: list[tuple[str, KPISubmission, float | None, str | None]] = []
@@ -713,12 +753,19 @@ def bulk_approve(
             planned.append(("final", submission, score, remarks))
 
     approved_ids: list[int] = []
-    for kind, submission, score, remarks in planned:
-        if kind == "dept":
-            dept_approve(db, reviewer, submission, score, remarks)
-        else:
-            final_approve(db, reviewer, submission, score, remarks)
-        approved_ids.append(submission.id)
+    emailed_all: list = []
+    try:
+        for kind, submission, score, remarks in planned:
+            if kind == "dept":
+                emailed_all += dept_approve(db, reviewer, submission, score, remarks, commit=False)
+            else:
+                emailed_all += final_approve(db, reviewer, submission, score, remarks, commit=False)
+            approved_ids.append(submission.id)
+    except Exception:
+        db.rollback()
+        raise
+    db.commit()
+    email_service.send_for_notifications(db, emailed_all)
     return {"approved": approved_ids, "count": len(approved_ids)}
 
 

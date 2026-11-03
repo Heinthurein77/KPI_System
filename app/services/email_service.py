@@ -100,10 +100,17 @@ def send_for_notifications(db: Session, notifications: list[Notification]) -> No
         _send_in_background(payloads)
 
 
-def send_welcome_email(to_email: str, name: str, password: str, org_name: str | None = None) -> None:
-    """Send a new user their login details. Call AFTER the user row is committed.
+def send_welcome_email(to_email: str, name: str, org_name: str | None = None) -> None:
+    """Tell a new user their account is ready. Call AFTER the user row is committed.
 
     Best-effort: does nothing when SMTP is unconfigured, never raises.
+
+    The email deliberately carries NO password: credentials must never
+    travel by email (or in an API response). The admin who created the
+    account hands the initial password to the user out of band (for
+    manual creation they chose it; for bulk import they set one per user
+    with Reset Password), and the account forces a password change on
+    first login.
     """
     if not settings.smtp_configured:
         return
@@ -117,9 +124,9 @@ def send_welcome_email(to_email: str, name: str, password: str, org_name: str | 
         f"Your KPI account has been created.\n\n"
         f"{org_line}"
         f"Login: {login_url}\n"
-        f"Email: {to_email}\n"
-        f"Password: {password}\n\n"
-        f"Please change your password after your first login "
+        f"Email: {to_email}\n\n"
+        f"Please ask your department admin for your initial password, "
+        f"then change it after your first login "
         f"(Account -> Change Password)."
     )
     _send_in_background([(to_email, "Your KPI account is ready", body, None)])

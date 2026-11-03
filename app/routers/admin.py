@@ -405,10 +405,11 @@ def create_user(
     )
     db.add(target)
     db.commit()
-    # Welcome email with login details (best-effort; skipped when SMTP unconfigured).
+    # Welcome email with account details only — never the password. The
+    # admin chose this password, so they hand it to the user out of band.
     tenant = db.get(Tenant, user.tenant_id)
     email_service.send_welcome_email(
-        email, target.name, payload.password, org_name=tenant.name if tenant else None
+        email, target.name, org_name=tenant.name if tenant else None
     )
     return target
 

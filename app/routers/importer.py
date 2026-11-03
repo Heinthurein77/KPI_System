@@ -101,6 +101,5 @@ async def upload_import(
         "kpis_created": result.kpis_created,
         "year": result.year,
         "period": result.period,
-        "initial_password": bulk_import_service.DEFAULT_PASSWORD,
         "errors": [],
     }

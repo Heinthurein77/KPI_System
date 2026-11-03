@@ -127,7 +127,10 @@ def test_execute_creates_users_templates_and_drafts(db, dept_admin):
     assert len(users) == 2
     for u in users:
         assert u.department_id == dept.id
-        assert verify_password("password", u.password_hash)
+        # Per-user random initial passwords: never the old shared default,
+        # and never the same hash twice.
+        assert not verify_password("password", u.password_hash)
+    assert users[0].password_hash != users[1].password_hash
     by_email = {u.email: u for u in users}
     assert by_email["aung@example.com"].position == "Sales Executive"
     assert by_email["may@example.com"].position == "Senior Sales"
@@ -174,7 +177,7 @@ def test_upload_executes_and_reports(client, db, dept_admin):
     data = r.json()
     assert data["users_created"] == 2
     assert data["kpis_created"] == 3
-    assert data["initial_password"] == "password"
+    assert "initial_password" not in data  # passwords are never returned
 
 
 def test_upload_with_errors_returns_422(client, db, dept_admin):
@@ -271,7 +274,7 @@ def test_execute_sends_welcome_emails(db, dept_admin):
     sent_to = {c.args[0] for c in mock_welcome.call_args_list}
     assert sent_to == {"aung@example.com", "may@example.com"}
     for c in mock_welcome.call_args_list:
-        assert c.args[2] == "password"
+        assert len(c.args) == 2  # (email, name) — no password argument
         assert c.kwargs["org_name"] == "Acme"
 
 

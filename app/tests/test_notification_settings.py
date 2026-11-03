@@ -135,5 +135,5 @@ def test_welcome_email_ignores_preference(db):
                 "_send_in_background",
                 side_effect=lambda payloads: email_service._run_sender(payloads),
             ):
-                email_service.send_welcome_email(user.email, user.name, "Secret123!", org_name="Acme")
+                email_service.send_welcome_email(user.email, user.name, org_name="Acme")
                 mock_smtp.send_message.assert_called_once()

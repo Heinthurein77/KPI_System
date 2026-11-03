@@ -123,7 +123,7 @@ def test_send_welcome_email_content(db):
                 "_send_in_background",
                 side_effect=lambda payloads: email_service._run_sender(payloads),
             ):
-                email_service.send_welcome_email("new@example.com", "New Hire", "Secret123!", org_name="Acme Corp")
+                email_service.send_welcome_email("new@example.com", "New Hire", org_name="Acme Corp")
 
             mock_smtp.send_message.assert_called_once()
             sent = mock_smtp.send_message.call_args[0][0]
@@ -132,7 +132,7 @@ def test_send_welcome_email_content(db):
             body = sent.get_content()
             assert "https://kpi.example.com/login" in body
             assert "new@example.com" in body
-            assert "Secret123!" in body
+            assert "Secret123!" not in body  # welcome emails never carry a password
             assert "New Hire" in body
             assert "Organization: Acme Corp" in body
 
@@ -142,5 +142,5 @@ def test_send_welcome_email_skipped_when_unconfigured():
     s.smtp_configured = False
     with patch.object(email_service, "settings", s):
         with patch("smtplib.SMTP") as mock_smtp:
-            email_service.send_welcome_email("new@example.com", "New Hire", "Secret123!")
+            email_service.send_welcome_email("new@example.com", "New Hire")
             mock_smtp.assert_not_called()

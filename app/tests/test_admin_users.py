@@ -585,6 +585,8 @@ def test_create_user_sends_welcome_email(db, client):
             headers=auth_headers(admin, tenant),
         )
     assert resp.status_code == 200
+    # The welcome email carries account details only — the admin-chosen
+    # password is handed to the user out of band, never emailed.
     mock_welcome.assert_called_once_with(
-        "welcome@example.com", "New Hire", "InitPass123!", org_name="Acme"
+        "welcome@example.com", "New Hire", org_name="Acme"
     )

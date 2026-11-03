@@ -156,3 +156,40 @@ def test_reminder_endpoint_tenant_admin_ok(client, db):
         r = client.post("/api/admin/reminders/deadline", headers=auth_headers(admin, tenant))
     assert r.status_code == 200
     assert r.json()["window_open"] is False
+
+
+def test_sync_email_failure_retries_next_run(db):
+    """Cron (sync) mode: a failed email's notification row is deleted, so
+    the next run retries it — instead of the failure being silently lost
+    behind the idempotency marker. The other user's reminder is kept."""
+    from app.services import email_service
+
+    tenant, emp_draft, emp_rejected, _, _ = _setup(db)
+    failing = emp_draft.email
+    real_send_one = email_service._send_one
+
+    def flaky(to_email, subject, body, link):
+        if to_email == failing:
+            raise RuntimeError("SMTP down")
+
+    with patch.object(email_service, "settings") as cfg:
+        cfg.smtp_configured = True
+        with patch.object(email_service, "_send_one", side_effect=flaky):
+            result = deadline_reminder_service.send_deadline_reminders(
+                db, today=date(2026, 10, 29), sync_email=True
+            )
+    assert result.errors  # the failure is surfaced, not swallowed
+    notified = _notified_user_ids(db, tenant)
+    assert emp_draft.id not in notified  # failed -> row dropped -> retried next run
+    assert emp_rejected.id in notified
+    assert result.reminded == 2  # idle user + rejected user kept
+
+    # Next run (SMTP healthy) retries the failed user.
+    with patch.object(email_service, "settings") as cfg:
+        cfg.smtp_configured = True
+        with patch.object(email_service, "_send_one", side_effect=lambda *a: None):
+            result2 = deadline_reminder_service.send_deadline_reminders(
+                db, today=date(2026, 10, 29), sync_email=True
+            )
+    assert emp_draft.id in _notified_user_ids(db, tenant)
+    assert result2.reminded == 1

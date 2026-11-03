@@ -469,3 +469,19 @@ def test_dept_admin_cannot_write_self_hod_evaluation(db, client):
     assert r.status_code == 200, r.text
     assert r.json()["achievements"] == "Did things"
     assert r.json()["hod_evaluation"] in (None, "")
+
+
+def test_evening_reminder_skips_suspended_tenant(db):
+    from app.models.tenant import TenantStatus
+
+    tenant, _, emp, _, _ = _setup(db)
+    tenant.status = TenantStatus.SUSPENDED
+    db.commit()
+    result = daily_task_reminder_service.send_daily_task_reminders(db, today=date(2026, 11, 2))
+    assert emp.email not in result["reminded"]
+    notes = db.scalars(
+        select(Notification).where(
+            Notification.user_id == emp.id, Notification.type == "daily_task_reminder"
+        )
+    ).all()
+    assert notes == []

@@ -79,10 +79,21 @@ def send_for_notifications(db: Session, notifications: list[Notification]) -> No
 
     Best-effort: does nothing when SMTP is unconfigured, never raises.
     Only plain data is extracted here — the actual SMTP work happens in a
-    background thread with no database access.
+    background thread with no database access. Fine for web requests (the
+    process lives on), but NOT for cron jobs: a daemon thread can be
+    killed when the short-lived job process exits, silently losing the
+    email while the notification row already marks the user reminded.
+    Cron paths must use send_for_notifications_sync instead.
     """
     if not settings.smtp_configured or not notifications:
         return
+    payloads = _notification_payloads(db, notifications)
+    if payloads:
+        _send_in_background(payloads)
+
+
+def _notification_payloads(db: Session, notifications: list[Notification]) -> list[tuple[str, str, str, str | None]]:
+    """Extract (to_email, subject, body, link) for emailable notifications."""
     try:
         payloads: list[tuple[str, str, str, str | None]] = []
         for n in notifications:
@@ -95,9 +106,31 @@ def send_for_notifications(db: Session, notifications: list[Notification]) -> No
             payloads.append((user.email, n.title, n.message, n.link))
     except Exception:
         logger.exception("Failed to prepare notification emails")
-        return
-    if payloads:
-        _send_in_background(payloads)
+        return []
+    return payloads
+
+
+def send_for_notifications_sync(db: Session, notifications: list[Notification]) -> list[str]:
+    """Synchronously email each notification's recipient; returns the list
+    of recipient emails that FAILED to send (empty when all succeeded).
+
+    This is the cron path: the caller waits for delivery, so an email is
+    never silently lost to a dying daemon thread, and the caller can
+    retry the failures on the next run (e.g. by deleting the
+    corresponding notification rows, which are the idempotency marker).
+    Does nothing when SMTP is unconfigured (returns [] — nothing to retry).
+    """
+    if not settings.smtp_configured or not notifications:
+        return []
+    payloads = _notification_payloads(db, notifications)
+    failed: list[str] = []
+    for to_email, subject, body, link in payloads:
+        try:
+            _send_one(to_email, subject, body, link)
+        except Exception:
+            logger.exception("Failed to send notification email to %s", to_email)
+            failed.append(to_email)
+    return failed
 
 
 def send_welcome_email(to_email: str, name: str, org_name: str | None = None) -> None:

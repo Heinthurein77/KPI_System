@@ -31,6 +31,7 @@ grace week after a month ends (targeting that previous month) — see
 from __future__ import annotations
 
 import calendar
+import logging
 from dataclasses import dataclass, field
 from datetime import date
 
@@ -49,6 +50,8 @@ from app.services.kpi_service import applicable_templates
 
 REMINDER_TYPE = "deadline_reminder"
 
+logger = logging.getLogger(__name__)
+
 # Statuses that mean "you still have something to do this period".
 ACTIONABLE_STATUSES = (KPIStatus.DRAFT, KPIStatus.REJECTED)
 
@@ -60,6 +63,9 @@ class DeadlineReminderResult:
     reminded: int = 0
     already_reminded: int = 0
     per_tenant: dict = field(default_factory=dict)
+    # Per-tenant failures (a tenant whose reminders errored, or emails
+    # that failed in sync mode and will be retried next run).
+    errors: list = field(default_factory=list)
 
 
 def _days_until_month_end(today: date) -> int:
@@ -84,13 +90,19 @@ def send_deadline_reminders(
     db: Session,
     today: date | None = None,
     tenant_id: int | None = None,
+    sync_email: bool = False,
 ) -> DeadlineReminderResult:
     """Remind employees with DRAFT/REJECTED submissions for the current period.
 
     Args:
-        db: database session (caller commits).
+        db: database session (this function commits per tenant).
         today: override for testing; defaults to the app timezone date (see app/core/timezone.py).
         tenant_id: scope to one tenant; None covers every tenant.
+        sync_email: when True (the cron path), emails are sent
+            synchronously and a failed email's notification row is deleted,
+            so the next run retries it instead of the failure being lost
+            behind the idempotency marker. When False (the on-demand
+            endpoint), emails go out in a background thread as before.
     """
     today = today or app_today()
     # Reminder target: the current month inside its pre-month-end window,
@@ -133,84 +145,132 @@ def send_deadline_reminders(
     created_all: list = []
     actionable = set(ACTIONABLE_STATUSES)
     for tid in tenant_ids:
-        # Every active employee AND dept admin (who also self-assess) in the
-        # tenant — not just the ones who already opened the app this period.
-        # Users who never opened it have no (lazily created) submissions yet;
-        # they are exactly the people this nudge exists for.
-        users = db.scalars(
-            select(User).where(
-                User.tenant_id == tid,
-                User.is_active == True,  # noqa: E712
-                User.role.in_([UserRole.EMPLOYEE, UserRole.DEPT_ADMIN]),
+        try:
+            tenant_created, tenant_reminded, tenant_already = _remind_tenant(
+                db, tid, year, period, in_grace, when, link, actionable
             )
-        ).all()
-
-        # This period's submission statuses, grouped by employee.
-        statuses_by_user: dict[int, set[KPIStatus]] = {}
-        for emp_id, st in db.execute(
-            select(KPISubmission.employee_id, KPISubmission.status).where(
-                KPISubmission.tenant_id == tid,
-                KPISubmission.year == year,
-                KPISubmission.month_or_quarter == period,
-            )
-        ).all():
-            statuses_by_user.setdefault(emp_id, set()).add(st)
-
-        tenant_reminded = 0
-        for user in users:
-            statuses = statuses_by_user.get(user.id, set())
-            if statuses and not (statuses & actionable):
-                continue  # nothing actionable — already submitted/approved
-            if _already_reminded(db, user.id, link):
-                result.already_reminded += 1
-                continue
-            if not statuses:
-                # Never started this period (no lazy-created rows). Only nudge
-                # when they actually have KPIs to do — no templates, no nag.
-                if not applicable_templates(db, user, year, period):
-                    continue
-                if in_grace:
-                    title = f"KPI submission grace period ends {when}"
-                    message = (
-                        f"Your {period} {year} KPI grace period ends {when}, and "
-                        "you haven't started it yet. Please open My KPI, enter "
-                        "your scores and submit it for review."
-                    )
-                else:
-                    title = f"KPI submission due {when}"
-                    message = (
-                        f"Your {period} {year} KPI is due {when}, and you haven't "
-                        "started it yet. Please open My KPI, enter your scores and "
-                        "submit it for review."
-                    )
-            else:
-                if in_grace:
-                    title = f"KPI submission grace period ends {when}"
-                    message = (
-                        f"Your {period} {year} KPI grace period ends {when}. "
-                        "Please finish your scores and submit it for review."
-                    )
-                else:
-                    title = f"KPI submission due {when}"
-                    message = (
-                        f"Your {period} {year} KPI is due {when}. "
-                        "Please finish your scores and submit it for review."
-                    )
-            created = notification_service.notify_user(
-                db,
-                tenant_id=tid,
-                user_id=user.id,
-                type=REMINDER_TYPE,
-                title=title,
-                message=message,
-                link=link,
-            )
-            created_all.extend(created)
-            result.reminded += 1
-            tenant_reminded += 1
+        except Exception:
+            # One tenant's failure must not lose every other tenant's
+            # reminders: roll back just this tenant and keep going.
+            db.rollback()
+            logger.exception("Deadline reminders failed for tenant %s; continuing", tid)
+            result.errors.append({"tenant_id": tid, "error": "see server log"})
+            result.per_tenant[tid] = 0
+            continue
+        db.commit()
+        result.reminded += tenant_reminded
+        result.already_reminded += tenant_already
         result.per_tenant[tid] = tenant_reminded
+        if sync_email:
+            failed = email_service.send_for_notifications_sync(db, tenant_created)
+            if failed:
+                # Idempotency is only marked AFTER delivery: drop the rows
+                # whose email failed, so the next run retries them (both
+                # the in-app notification and the email) instead of the
+                # failure being silently lost forever.
+                email_to_notes: dict[str, list] = {}
+                for n in tenant_created:
+                    u = db.get(User, n.user_id)
+                    if u is not None and u.email:
+                        email_to_notes.setdefault(u.email, []).append(n)
+                dropped = 0
+                for email in failed:
+                    for n in email_to_notes.get(email, []):
+                        db.delete(n)
+                        dropped += 1
+                db.commit()
+                result.reminded -= dropped
+                result.per_tenant[tid] = tenant_reminded - dropped
+                result.errors.append({"tenant_id": tid, "failed_emails": failed})
+        else:
+            created_all.extend(tenant_created)
 
-    db.commit()
-    # Emails go out after the commit, best-effort (never raises).
-    email_service.send_for_notifications(db, created_all)
+    if not sync_email:
+        # Web-request path: emails go out after the commits, best-effort
+        # (never raises) in a background thread; the process lives on.
+        email_service.send_for_notifications(db, created_all)
     return result
+
+
+def _remind_tenant(db, tid, year, period, in_grace, when, link, actionable):
+    """Create one tenant's reminder notifications (caller commits).
+
+    Returns (created_notifications, reminded_count, already_reminded_count).
+    """
+    # Every active employee AND dept admin (who also self-assess) in the
+    # tenant — not just the ones who already opened the app this period.
+    # Users who never opened it have no (lazily created) submissions yet;
+    # they are exactly the people this nudge exists for.
+    users = db.scalars(
+        select(User).where(
+            User.tenant_id == tid,
+            User.is_active == True,  # noqa: E712
+            User.role.in_([UserRole.EMPLOYEE, UserRole.DEPT_ADMIN]),
+        )
+    ).all()
+
+    # This period's submission statuses, grouped by employee.
+    statuses_by_user: dict[int, set[KPIStatus]] = {}
+    for emp_id, st in db.execute(
+        select(KPISubmission.employee_id, KPISubmission.status).where(
+            KPISubmission.tenant_id == tid,
+            KPISubmission.year == year,
+            KPISubmission.month_or_quarter == period,
+        )
+    ).all():
+        statuses_by_user.setdefault(emp_id, set()).add(st)
+
+    created_all: list = []
+    tenant_reminded = 0
+    tenant_already = 0
+    for user in users:
+        statuses = statuses_by_user.get(user.id, set())
+        if statuses and not (statuses & actionable):
+            continue  # nothing actionable — already submitted/approved
+        if _already_reminded(db, user.id, link):
+            tenant_already += 1
+            continue
+        if not statuses:
+            # Never started this period (no lazy-created rows). Only nudge
+            # when they actually have KPIs to do — no templates, no nag.
+            if not applicable_templates(db, user, year, period):
+                continue
+            if in_grace:
+                title = f"KPI submission grace period ends {when}"
+                message = (
+                    f"Your {period} {year} KPI grace period ends {when}, and "
+                    "you haven't started it yet. Please open My KPI, enter "
+                    "your scores and submit it for review."
+                )
+            else:
+                title = f"KPI submission due {when}"
+                message = (
+                    f"Your {period} {year} KPI is due {when}, and you haven't "
+                    "started it yet. Please open My KPI, enter your scores and "
+                    "submit it for review."
+                )
+        else:
+            if in_grace:
+                title = f"KPI submission grace period ends {when}"
+                message = (
+                    f"Your {period} {year} KPI grace period ends {when}. "
+                    "Please finish your scores and submit it for review."
+                )
+            else:
+                title = f"KPI submission due {when}"
+                message = (
+                    f"Your {period} {year} KPI is due {when}. "
+                    "Please finish your scores and submit it for review."
+                )
+        created = notification_service.notify_user(
+            db,
+            tenant_id=tid,
+            user_id=user.id,
+            type=REMINDER_TYPE,
+            title=title,
+            message=message,
+            link=link,
+        )
+        created_all.extend(created)
+        tenant_reminded += 1
+    return created_all, tenant_reminded, tenant_already

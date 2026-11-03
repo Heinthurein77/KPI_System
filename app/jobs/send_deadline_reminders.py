@@ -18,20 +18,29 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("kpi_system.jobs")
 
 
+logger = logging.getLogger("kpi_system.jobs")
+
+
 def main() -> int:
     db = SessionLocal()
     try:
-        result = deadline_reminder_service.send_deadline_reminders(db)
+        # Sync email delivery: the cron process exits right after this
+        # call, so a background thread could be killed mid-send and the
+        # failure would never be retried (the notification row already
+        # marks the user reminded). In sync mode a failed email's row is
+        # deleted, so the next run retries it.
+        result = deadline_reminder_service.send_deadline_reminders(db, sync_email=True)
     finally:
         db.close()
     logger.info(
-        "Deadline reminders: window_open=%s year=%s period=%s reminded=%s already_reminded=%s per_tenant=%s",
+        "Deadline reminders: window_open=%s year=%s period=%s reminded=%s already_reminded=%s per_tenant=%s errors=%s",
         result.window_open,
         result.year,
         result.period,
         result.reminded,
         result.already_reminded,
         result.per_tenant,
+        result.errors,
     )
     return 0
 

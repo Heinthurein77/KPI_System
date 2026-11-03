@@ -135,5 +135,6 @@ async def upload_import(
         "kpis_created": result.kpis_created,
         "year": result.year,
         "period": result.period,
+        "email_failures": result.email_failures,
         "errors": [],
     }

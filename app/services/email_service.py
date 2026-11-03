@@ -133,33 +133,83 @@ def send_for_notifications_sync(db: Session, notifications: list[Notification]) 
     return failed
 
 
-def send_welcome_email(to_email: str, name: str, org_name: str | None = None) -> None:
+def _welcome_body(to_email: str, name: str, initial_password: str | None, org_name: str | None) -> str:
+    """Body for a new-user welcome email.
+
+    The login link is included only when APP_BASE_URL is set — without a
+    configured base URL there is no link to give, so the line is omitted
+    (the password is still included). The recipient must change this
+    password on first login (must_change_password), so it is only usable
+    until the real user first signs in.
+    """
+    org_line = f"Organization: {org_name}\n" if org_name else ""
+    login_line = (
+        f"Login: {settings.APP_BASE_URL.rstrip('/')}/login\n"
+        if settings.APP_BASE_URL
+        else ""
+    )
+    password_line = (
+        f"Initial password: {initial_password}\n"
+        if initial_password is not None
+        else ""
+    )
+    return (
+        f"Hi {name},\n\n"
+        f"Your KPI account has been created.\n\n"
+        f"{org_line}"
+        f"{login_line}"
+        f"Email: {to_email}\n"
+        f"{password_line}\n"
+        f"Please change your password after your first login "
+        f"(Account -> Change Password)."
+    )
+
+
+def send_welcome_email(
+    to_email: str, name: str, initial_password: str | None = None, org_name: str | None = None
+) -> None:
     """Tell a new user their account is ready. Call AFTER the user row is committed.
 
     Best-effort: does nothing when SMTP is unconfigured, never raises.
 
-    The email deliberately carries NO password: credentials must never
-    travel by email (or in an API response). The admin who created the
-    account hands the initial password to the user out of band (for
-    manual creation they chose it; for bulk import they set one per user
-    with Reset Password), and the account forces a password change on
-    first login.
+    At the user's explicit request, the email carries the initial password
+    and (when APP_BASE_URL is set) the login link, for both bulk import
+    and manual user creation. This deliberately differs from the earlier
+    policy of never emailing passwords: the emailed password is only
+    usable until the recipient first logs in, because the account forces
+    a password change on first login (must_change_password). Callers
+    that need to know whether delivery succeeded must use
+    send_welcome_email_sync instead — this background variant swallows
+    failures by design.
     """
     if not settings.smtp_configured:
         return
-    if settings.APP_BASE_URL:
-        login_url = f"{settings.APP_BASE_URL.rstrip('/')}/login"
-    else:
-        login_url = "the KPI login page"
-    org_line = f"Organization: {org_name}\n" if org_name else ""
-    body = (
-        f"Hi {name},\n\n"
-        f"Your KPI account has been created.\n\n"
-        f"{org_line}"
-        f"Login: {login_url}\n"
-        f"Email: {to_email}\n\n"
-        f"Please ask your department admin for your initial password, "
-        f"then change it after your first login "
-        f"(Account -> Change Password)."
-    )
+    body = _welcome_body(to_email, name, initial_password, org_name)
     _send_in_background([(to_email, "Your KPI account is ready", body, None)])
+
+
+def send_welcome_email_sync(
+    to_email: str, name: str, initial_password: str, org_name: str | None = None
+) -> bool:
+    """Synchronously send a new-user welcome email; returns True on success.
+
+    Returns False (and logs) when SMTP is unconfigured or delivery fails —
+    it never raises, so a failed welcome email can never roll back the
+    user creation that already committed. Callers surface the False
+    result to the admin (bulk import reports it per user in the result;
+    manual creation logs it).
+    """
+    if not settings.smtp_configured:
+        logger.warning("Welcome email to %s skipped: SMTP is not configured", to_email)
+        return False
+    try:
+        _send_one(
+            to_email,
+            "Your KPI account is ready",
+            _welcome_body(to_email, name, initial_password, org_name),
+            None,
+        )
+    except Exception:
+        logger.exception("Failed to send welcome email to %s", to_email)
+        return False
+    return True

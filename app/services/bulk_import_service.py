@@ -19,10 +19,14 @@ the same email. Position is optional.
 
 - Every imported user becomes an EMPLOYEE in the importing dept admin's own
   department, with a unique random initial password per user (never a
-  shared default, never emailed, never returned by the API). The admin
-  hands each user their initial password out of band — or sets one with
-  Reset Password — and the account forces a password change on first
-  login via ``must_change_password``.
+  shared default, never returned by the API). At the user's explicit
+  request, each user's welcome email carries their initial password and
+  the login link (built from APP_BASE_URL; omitted when unset) — the
+  account still forces a password change on first login via
+  ``must_change_password``, so the emailed password is only usable until
+  the real user first signs in. If a welcome email fails to send, the
+  import still stands and the failure is reported per user in
+  ``ImportResult.email_failures``.
 - Every KPI row becomes a *recurring* template locked to the chosen
   period, plus a draft submission for that period — later months are
   carried forward by the existing recurrence mechanism. The period
@@ -121,6 +125,11 @@ class ImportResult:
     kpis_created: int
     year: int
     period: str
+    # Welcome emails that did NOT go out (delivery failure, or SMTP
+    # unconfigured). The users themselves are still created — email
+    # failure never rolls back an import — but the admin must know who
+    # never received their initial password.
+    email_failures: list[str] = field(default_factory=list)
 
 
 def _norm_header(value) -> str:
@@ -308,14 +317,19 @@ def execute_import(
 
     try:
         created_users: dict[str, User] = {}
+        # Plaintext initial passwords, kept in memory only for the welcome
+        # emails below: hashed immediately, never stored, never returned.
+        initial_passwords: dict[str, str] = {}
         for imp_user in parsed.users:
+            initial_password = generate_initial_password()
+            initial_passwords[imp_user.email] = initial_password
             user = User(
                 tenant_id=dept_admin.tenant_id,
                 name=imp_user.name,
                 email=imp_user.email,
                 # Unique random password per user — never a shared default,
                 # and never returned to the caller (see module docstring).
-                password_hash=hash_password(generate_initial_password()),
+                password_hash=hash_password(initial_password),
                 role=UserRole.EMPLOYEE,
                 department_id=dept_admin.department_id,
                 position=imp_user.position,
@@ -367,18 +381,29 @@ def execute_import(
         db.rollback()
         raise
 
-    # Welcome emails with account details (best-effort; skipped when SMTP unconfigured).
-    # They carry no password — see send_welcome_email.
+    # Welcome emails, sent synchronously AFTER the commit so a delivery
+    # failure can be reported per user without ever rolling back the
+    # import. Each email carries that user's initial password and the
+    # login link (see email_service.send_welcome_email_sync).
     tenant = db.get(Tenant, dept_admin.tenant_id)
     org_name = tenant.name if tenant else None
+    email_failures: list[str] = []
     for imp_user in parsed.users:
-        email_service.send_welcome_email(imp_user.email, imp_user.name, org_name=org_name)
+        sent = email_service.send_welcome_email_sync(
+            imp_user.email,
+            imp_user.name,
+            initial_passwords[imp_user.email],
+            org_name=org_name,
+        )
+        if not sent:
+            email_failures.append(imp_user.email)
 
     return ImportResult(
         users_created=len(created_users),
         kpis_created=kpis_created,
         year=year,
         period=period,
+        email_failures=email_failures,
     )
 
 
@@ -404,9 +429,8 @@ def build_import_template() -> BytesIO:
         "   name, email and position (the email identifies the person - name and",
         "   position must match on all their rows). Position is optional.",
         "2. Everyone is added as an Employee in YOUR department with a unique",
-        "   random initial password (it is not emailed and not shown here).",
-        "   Hand each person their password yourself, or set one per person",
-        "   with Reset Password — they must change it on first login.",
+        "   random initial password, emailed to them together with the login",
+        "   link. They must change it on first login.",
         "3. Each employee's weights must total exactly 100.",
         "4. Every KPI becomes a recurring monthly template for the period you",
         "   select (previous month during days 1–7, current month from day 8),",

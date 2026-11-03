@@ -291,14 +291,37 @@ def test_execute_sends_welcome_emails(db, dept_admin):
     tenant, _, admin = dept_admin
     parsed = bulk_import_service.parse_import_file(_valid_contents(), db, tenant.id)
     assert parsed.ok
-    with patch("app.services.bulk_import_service.email_service.send_welcome_email") as mock_welcome:
-        bulk_import_service.execute_import(db, admin, parsed)
+    with patch("app.services.bulk_import_service.email_service.send_welcome_email_sync",
+               return_value=True) as mock_welcome:
+        result = bulk_import_service.execute_import(db, admin, parsed)
     assert mock_welcome.call_count == 2
     sent_to = {c.args[0] for c in mock_welcome.call_args_list}
     assert sent_to == {"aung@example.com", "may@example.com"}
+    passwords = [c.args[2] for c in mock_welcome.call_args_list]
+    assert all(isinstance(p, str) and len(p) >= 8 for p in passwords)
+    assert len(set(passwords)) == 2  # unique per user
     for c in mock_welcome.call_args_list:
-        assert len(c.args) == 2  # (email, name) — no password argument
         assert c.kwargs["org_name"] == "Acme"
+    assert result.email_failures == []
+    # API responses never carry passwords — only the email does.
+    assert not any(p in str(result) for p in passwords)
+
+
+def test_execute_welcome_email_failure_reported_not_rolled_back(db, dept_admin):
+    from unittest.mock import patch
+
+    tenant, _, admin = dept_admin
+    parsed = bulk_import_service.parse_import_file(_valid_contents(), db, tenant.id)
+    assert parsed.ok
+
+    def _send(to_email, name, password, org_name=None):
+        return to_email != "may@example.com"
+
+    with patch("app.services.bulk_import_service.email_service.send_welcome_email_sync",
+               side_effect=_send):
+        result = bulk_import_service.execute_import(db, admin, parsed)
+    assert result.users_created == 2  # failure never rolls back the import
+    assert result.email_failures == ["may@example.com"]
 
 
 def test_upload_rejects_file_over_10mb(client, db, dept_admin):

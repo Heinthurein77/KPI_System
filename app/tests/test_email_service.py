@@ -123,7 +123,9 @@ def test_send_welcome_email_content(db):
                 "_send_in_background",
                 side_effect=lambda payloads: email_service._run_sender(payloads),
             ):
-                email_service.send_welcome_email("new@example.com", "New Hire", org_name="Acme Corp")
+                email_service.send_welcome_email(
+                    "new@example.com", "New Hire", initial_password="Secret123!", org_name="Acme Corp"
+                )
 
             mock_smtp.send_message.assert_called_once()
             sent = mock_smtp.send_message.call_args[0][0]
@@ -132,9 +134,50 @@ def test_send_welcome_email_content(db):
             body = sent.get_content()
             assert "https://kpi.example.com/login" in body
             assert "new@example.com" in body
-            assert "Secret123!" not in body  # welcome emails never carry a password
+            assert "Secret123!" in body  # user-requested: password + link are emailed
             assert "New Hire" in body
             assert "Organization: Acme Corp" in body
+
+
+def test_send_welcome_email_link_omitted_without_base_url(db):
+    s = _configured_settings(APP_BASE_URL=None)
+    with patch.object(email_service, "settings", s):
+        with patch("smtplib.SMTP") as mock_smtp_cls:
+            mock_smtp = mock_smtp_cls.return_value
+            with patch.object(
+                email_service,
+                "_send_in_background",
+                side_effect=lambda payloads: email_service._run_sender(payloads),
+            ):
+                email_service.send_welcome_email(
+                    "new@example.com", "New Hire", initial_password="Secret123!"
+                )
+            body = mock_smtp.send_message.call_args[0][0].get_content()
+            assert "Secret123!" in body  # password kept even without a link
+            assert "Login:" not in body
+
+
+def test_send_welcome_email_sync_reports_success_and_failure(db):
+    with patch.object(email_service, "settings", _configured_settings()):
+        with patch("smtplib.SMTP") as mock_smtp_cls:
+            assert email_service.send_welcome_email_sync(
+                "ok@example.com", "Ok User", "Pass123!"
+            ) is True
+            mock_smtp_cls.return_value.send_message.side_effect = RuntimeError("smtp down")
+            assert email_service.send_welcome_email_sync(
+                "bad@example.com", "Bad User", "Pass123!"
+            ) is False
+
+
+def test_send_welcome_email_sync_skipped_when_unconfigured(db):
+    s = _configured_settings()
+    s.smtp_configured = False
+    with patch.object(email_service, "settings", s):
+        with patch("smtplib.SMTP") as mock_smtp:
+            assert email_service.send_welcome_email_sync(
+                "new@example.com", "New Hire", "Pass123!"
+            ) is False
+            mock_smtp.assert_not_called()
 
 
 def test_send_welcome_email_skipped_when_unconfigured():

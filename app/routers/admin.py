@@ -1,4 +1,5 @@
 from datetime import date
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -40,6 +41,8 @@ from app.schemas.user import (
 from app.services import audit_service, email_service, kpi_export_service, kpi_service, recurring_service
 from app.services import submission_grace
 from app.services.audit_service import fmt_score
+
+logger = logging.getLogger("kpi_system")
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -405,12 +408,16 @@ def create_user(
     )
     db.add(target)
     db.commit()
-    # Welcome email with account details only — never the password. The
-    # admin chose this password, so they hand it to the user out of band.
+    # Welcome email with the admin-chosen password and the login link
+    # (user-requested). Sent AFTER the commit; a delivery failure is
+    # logged but never rolls the user back — the admin chose this
+    # password, so they can still hand it to the user out of band.
     tenant = db.get(Tenant, user.tenant_id)
-    email_service.send_welcome_email(
-        email, target.name, org_name=tenant.name if tenant else None
+    sent = email_service.send_welcome_email_sync(
+        email, target.name, payload.password, org_name=tenant.name if tenant else None
     )
+    if not sent:
+        logger.warning("Welcome email to %s failed to send (user %s created anyway)", email, target.id)
     return target
 
 

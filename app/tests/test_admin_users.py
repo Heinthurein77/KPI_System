@@ -578,15 +578,17 @@ def test_create_user_sends_welcome_email(db, client):
     admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
     dept = make_department(db, tenant)
 
-    with patch("app.routers.admin.email_service.send_welcome_email") as mock_welcome:
+    with patch("app.routers.admin.email_service.send_welcome_email_sync",
+               return_value=True) as mock_welcome:
         resp = client.post(
             "/api/admin/users",
             json=_user_payload(email="welcome@example.com", department_id=dept.id, password="InitPass123!"),
             headers=auth_headers(admin, tenant),
         )
     assert resp.status_code == 200
-    # The welcome email carries account details only — the admin-chosen
-    # password is handed to the user out of band, never emailed.
+    # The welcome email carries the admin-chosen password and the login
+    # link (user-requested); the API response itself never does.
     mock_welcome.assert_called_once_with(
-        "welcome@example.com", "New Hire", org_name="Acme"
+        "welcome@example.com", "New Hire", "InitPass123!", org_name="Acme"
     )
+    assert "InitPass123!" not in resp.text

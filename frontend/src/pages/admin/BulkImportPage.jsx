@@ -197,8 +197,8 @@ export default function BulkImportPage() {
               {preview.users_found} users and {preview.kpis_found} KPIs found, no errors.
             </p>
             <p className="mt-2 text-sm text-emerald-800">
-              Every new user gets a unique random initial password — hand it to them yourself
-              or set one with Reset Password; they must change it on first login.
+              Every new user gets a unique random initial password, emailed to them
+              together with the login link; they must change it on first login.
             </p>
             <button
               onClick={handleImport}
@@ -249,9 +249,16 @@ export default function BulkImportPage() {
               KPIs are recurring, so they will carry forward to next months automatically.
             </p>
             <p className="mt-2 text-sm text-emerald-800">
-              Each new user got a unique random initial password — hand it to them yourself
-              or set one with Reset Password; they must change it on first login.
+              Each new user got a unique random initial password, emailed to them
+              together with the login link; they must change it on first login.
             </p>
+            {result.email_failures?.length > 0 && (
+              <p className="mt-2 text-sm font-medium text-red-700">
+                Welcome email failed for: {result.email_failures.join(", ")} — those users
+                were still created; hand them their initial password yourself or set one
+                with Reset Password.
+              </p>
+            )}
           </div>
         )}
       </div>

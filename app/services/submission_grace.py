@@ -186,3 +186,47 @@ def resolve_reminder_target(
     if end is not None and today <= end:
         return prev_year, prev_period, True, True
     return today.year, current_period, False, False
+
+
+def assert_admin_creation_window_open(
+    year: int, period: str, today: date, grace_days: int
+) -> None:
+    """Gate for ADMIN custom-KPI creation (tenant admins and dept admins).
+
+    User rule: during days 1..grace_days of a month, admins may add the
+    PREVIOUS month's KPI (the grace week exists to close the previous
+    month), but NOT the current month's — its set materialises
+    automatically on day grace_days + 1 — and NOT months already past
+    their grace window. This is the intended admin override for the
+    grace month, not a bypass of the day-8 rollover: employees' own
+    automatic set still appears only on day 8.
+
+    - Future months: allowed (admins pre-create those explicitly; the
+      approved-month shift in create_custom_template also moves a
+      fully-approved current month's new KPI to next month).
+    - Unparseable period labels: left alone (schemas validate month names).
+    """
+    if period not in MONTH_NAMES:
+        return
+    month = MONTH_NAMES.index(period) + 1
+    if (year, month) > (today.year, today.month):
+        return  # future month: admin pre-creation
+    if (year, month) == (today.year, today.month):
+        # Current month: only once rollover opened (day grace_days + 1).
+        if not recurring_rollover_open(today, grace_days):
+            rollover = date(today.year, today.month, grace_days + 1)
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"KPIs for {period} {year} open on {rollover.isoformat()} "
+                f"(day {grace_days + 1} of the month). During days 1–{grace_days} "
+                f"you may only add the previous month's KPIs.",
+            )
+        return
+    # Past month: allowed only while its grace window is still open.
+    end = grace_end(year, period, grace_days)
+    if end is not None and today > end:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"KPIs for {period} {year} closed on {end.isoformat()} "
+            f"({grace_days} days after month-end) and can no longer be added.",
+        )

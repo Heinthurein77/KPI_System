@@ -317,6 +317,13 @@ def execute_import(db: Session, dept_admin: User, parsed: ParsedImport) -> Impor
                 period,
                 is_recurring=True,
                 commit=False,
+                # Bulk import always targets the current month, so it
+                # follows the same admin creation window: during days
+                # 1..grace_days the current month is blocked (its set
+                # materialises on day 8) and the import fails. The import
+                # has no period parameter to retarget it at the previous
+                # month — that would be a separate feature, not this gate.
+                today=today,
             )
             kpis_created += 1
 

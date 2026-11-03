@@ -19,6 +19,7 @@ from app.services.submission_grace import (
     MONTH_NAMES as GRACE_MONTH_NAMES,
 )
 from app.services.submission_grace import (
+    assert_admin_creation_window_open,
     assert_employee_window_open,
     assert_not_future_month,
     is_within_grace,
@@ -305,6 +306,7 @@ def create_custom_employee_kpi(
     period: str,
     is_recurring: bool = True,
     commit: bool = True,
+    today: date | None = None,
 ) -> KPISubmission:
     """Dept Admin creates a one-off (or recurring) custom metric for a single employee.
 
@@ -314,7 +316,15 @@ def create_custom_employee_kpi(
 
     Materializes the KPISubmission immediately so it's visible right away, rather
     than waiting for the employee to load their dashboard for that period.
+
+    Admin creation window (M6): during days 1..SUBMISSION_GRACE_DAYS of a
+    month, admins may add the PREVIOUS month's KPI, but not the current
+    month's (its set materialises on day 8) nor months past their grace
+    window. Future months stay allowed (admin pre-creation). Endpoints
+    use the default (app timezone today); tests pass today explicitly.
     """
+    today = today or app_today()
+    assert_admin_creation_window_open(year, period, today, settings.SUBMISSION_GRACE_DAYS)
     existing_template = db.scalar(
         select(KPITemplate).where(
             KPITemplate.employee_id == employee.id,

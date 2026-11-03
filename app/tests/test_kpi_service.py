@@ -141,6 +141,7 @@ def test_create_custom_employee_kpi_creates_template_and_submission(db):
 
     submission = kpi_service.create_custom_employee_kpi(
         db, admin, employee, "Special Project", target=50.0, weight=2.0, year=2026, period="July",
+        today=date(2026, 7, 20),  # M6 gate: July is the current month here
     )
 
     assert submission.kpi_template.metric_name == "Special Project"
@@ -161,11 +162,13 @@ def test_create_custom_employee_kpi_duplicate_metric_name_raises_400(db):
 
     kpi_service.create_custom_employee_kpi(
         db, admin, employee, "Special Project", target=50.0, weight=2.0, year=2026, period="July",
+        today=date(2026, 7, 20),
     )
 
     with pytest.raises(HTTPException) as exc_info:
         kpi_service.create_custom_employee_kpi(
             db, admin, employee, "Special Project", target=75.0, weight=1.0, year=2026, period="July",
+            today=date(2026, 7, 20),
         )
 
     assert exc_info.value.status_code == 400
@@ -778,13 +781,15 @@ def test_create_custom_kpi_over_100_period_total_rejected(db):
     admin = make_user(db, tenant, UserRole.TENANT_ADMIN, department=dept)
     employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
     kpi_service.create_custom_employee_kpi(
-        db, admin, employee, "Metric A", 100.0, 60.0, 2026, "September"
+        db, admin, employee, "Metric A", 100.0, 60.0, 2026, "September",
+        today=date(2026, 9, 20),  # M6 gate: September is the current month here
     )
     # A second metric pushing the period total to 120 is refused, and the
     # first metric is untouched.
     with pytest.raises(HTTPException) as exc_info:
         kpi_service.create_custom_employee_kpi(
-            db, admin, employee, "Metric B", 100.0, 60.0, 2026, "September"
+            db, admin, employee, "Metric B", 100.0, 60.0, 2026, "September",
+            today=date(2026, 9, 20),
         )
     assert exc_info.value.status_code == 400
     db.rollback()  # the refused create was never committed; discard its pending rows
@@ -801,7 +806,8 @@ def test_create_custom_kpi_single_weight_over_100_rejected(db):
     # the same case via the period total for non-API paths (bulk import).
     with pytest.raises(HTTPException) as exc_info:
         kpi_service.create_custom_employee_kpi(
-            db, admin, employee, "Huge Metric", 100.0, 150.0, 2026, "September"
+            db, admin, employee, "Huge Metric", 100.0, 150.0, 2026, "September",
+            today=date(2026, 9, 20),
         )
     assert exc_info.value.status_code == 400
 

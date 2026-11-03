@@ -24,6 +24,23 @@ MONTH_NAMES = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _import_day_after_rollover():
+    """M6 gate: bulk import always targets the current month, which the
+    admin creation window blocks during days 1..grace_days. Pin the
+    import clock to day 10 of the real current month so these tests
+    exercise the import itself, not the gate (the gate's own tests live
+    in test_admin_creation_window.py). Month/year are unchanged, so
+    existing period assertions still hold."""
+    from unittest.mock import patch
+
+    from app.core.timezone import today as _app_today
+
+    pinned = _app_today().replace(day=10)
+    with patch.object(bulk_import_service, "app_today", return_value=pinned):
+        yield
+
+
 def _workbook(rows):
     wb = Workbook()
     ws = wb.active

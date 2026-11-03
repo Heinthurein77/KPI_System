@@ -73,23 +73,31 @@ def test_delete_template_success(db, client):
 
 
 def test_create_custom_template_success_dept_admin_own_employee(db, client):
+    from datetime import date
+    from unittest.mock import patch
+
+    from app.services import kpi_service
+
     tenant = make_tenant(db)
     dept = make_department(db, tenant)
     dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
     employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
 
-    resp = client.post(
-        "/api/admin/templates/custom",
-        json={
-            "employee_id": employee.id,
-            "metric_name": "Special Project",
-            "target": 50.0,
-            "weight": 1.0,
-            "year": 2026,
-            "period": "March",
-        },
-        headers=auth_headers(dept_admin, tenant),
-    )
+    # M6 gate: March 2026 is long past grace on a real today, so pin the
+    # service clock to a March day when creation is open.
+    with patch.object(kpi_service, "app_today", return_value=date(2026, 3, 20)):
+        resp = client.post(
+            "/api/admin/templates/custom",
+            json={
+                "employee_id": employee.id,
+                "metric_name": "Special Project",
+                "target": 50.0,
+                "weight": 1.0,
+                "year": 2026,
+                "period": "March",
+            },
+            headers=auth_headers(dept_admin, tenant),
+        )
     assert resp.status_code == 200
     body = resp.json()
     assert body["metric_name"] == "Special Project"
@@ -473,16 +481,23 @@ def _rebalance_setup(db):
 
 
 def test_custom_with_rebalance_success_applies_both(db, client):
+    from datetime import date
+    from unittest.mock import patch
+
+    from app.services import kpi_service
+
     tenant, dept_admin, employee, existing = _rebalance_setup(db)
-    resp = client.post(
-        "/api/admin/templates/custom-with-rebalance",
-        json={
-            **_custom_payload(employee, metric_name="New KPI", weight=20.0),
-            "is_recurring": True,
-            "weight_adjustments": [{"template_id": existing.id, "weight": 40.0}],
-        },
-        headers=auth_headers(dept_admin, tenant),
-    )
+    # M6 gate: the March payload is long past grace on a real today.
+    with patch.object(kpi_service, "app_today", return_value=date(2026, 3, 20)):
+        resp = client.post(
+            "/api/admin/templates/custom-with-rebalance",
+            json={
+                **_custom_payload(employee, metric_name="New KPI", weight=20.0),
+                "is_recurring": True,
+                "weight_adjustments": [{"template_id": existing.id, "weight": 40.0}],
+            },
+            headers=auth_headers(dept_admin, tenant),
+        )
     assert resp.status_code == 200
     body = resp.json()
     assert body["metric_name"] == "New KPI"

@@ -1,10 +1,15 @@
 """Bulk import endpoints — department admins only.
 
 - GET  /api/admin/import/template — blank .xlsx template with examples.
-- POST /api/admin/import/upload?dry_run=true|false — validate (dry run) or
+- POST /api/admin/import/upload?dry_run=true|false[&year=YYYY&month=M] — validate (dry run) or
   validate + execute a bulk import of employees + their KPIs.
 
-Only DEPT_ADMIN may use these endpoints (tenant admins create departments and
+The optional year/month query params select the target period (month is
+1–12). When omitted, the import targets the current month. During the
+grace week (days 1..SUBMISSION_GRACE_DAYS) the previous month may be
+selected instead; the current month before day 8 and past-grace months
+are rejected by the same M6 admin-creation gate as single custom-KPI
+creation. Only DEPT_ADMIN may use these endpoints (tenant admins create departments and
 dept admin accounts manually). Every imported user becomes an EMPLOYEE in the
 importing admin's own department.
 """
@@ -13,11 +18,14 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.deps import get_current_user, require_dept_admin
 from app.core.rate_limit import UPLOAD_RATE_LIMIT, limiter
+from app.core.timezone import today as app_today
 from app.database import get_db
 from app.models.user import User, UserRole
 from app.services import bulk_import_service
+from app.services.submission_grace import assert_admin_creation_window_open
 
 router = APIRouter(prefix="/api/admin/import", tags=["import"])
 
@@ -59,12 +67,36 @@ def download_import_template(
 async def upload_import(
     request: Request,
     dry_run: bool = True,
+    year: int | None = None,
+    month: int | None = None,
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
     user: User = Depends(require_dept_admin),
 ):
-    """Validate (dry_run=true) or validate + execute (dry_run=false) a bulk import."""
+    """Validate (dry_run=true) or validate + execute (dry_run=false) a bulk import.
+
+    ``year``/``month`` select the target period (month is 1–12); when
+    omitted the current month is used. The resolved period is checked
+    against the M6 admin-creation gate up front so even a dry run
+    reports a blocked period instead of validating rows that can never
+    be imported (the execute path re-checks per KPI inside
+    ``create_custom_employee_kpi``)."""
     _require_importer(user)
+    if (year is None) != (month is None):
+        raise HTTPException(400, "year and month must be given together.")
+    if month is not None and not 1 <= month <= 12:
+        raise HTTPException(400, "month must be between 1 and 12.")
+    if year is not None and not 2000 <= year <= 2100:
+        raise HTTPException(400, "year must be between 2000 and 2100.")
+    today = app_today()
+    if year is None:
+        target_year, target_period = today.year, bulk_import_service.MONTH_NAMES[today.month - 1]
+    else:
+        target_year, target_period = year, bulk_import_service.MONTH_NAMES[month - 1]
+    # Same M6 gate as single custom-KPI creation — no second, divergent gate.
+    assert_admin_creation_window_open(
+        target_year, target_period, today, settings.SUBMISSION_GRACE_DAYS
+    )
     filename = (file.filename or "").lower()
     if not filename.endswith(".xlsx"):
         raise HTTPException(400, "Please upload an Excel (.xlsx) file.")
@@ -93,7 +125,9 @@ async def upload_import(
     if not parsed.ok:
         raise HTTPException(422, detail={"errors": _errors_payload(parsed)})
 
-    result = bulk_import_service.execute_import(db, user, parsed)
+    result = bulk_import_service.execute_import(
+        db, user, parsed, year=target_year, period=target_period
+    )
     return {
         "dry_run": False,
         "ok": True,

@@ -23,9 +23,14 @@ the same email. Position is optional.
   hands each user their initial password out of band — or sets one with
   Reset Password — and the account forces a password change on first
   login via ``must_change_password``.
-- Every KPI row becomes a *recurring* template locked to the current month,
-  plus a draft submission for the current period — later months are carried
-  forward by the existing recurrence mechanism.
+- Every KPI row becomes a *recurring* template locked to the chosen
+  period, plus a draft submission for that period — later months are
+  carried forward by the existing recurrence mechanism. The period
+  defaults to the current month; during the grace week (days 1..7) the
+  caller may instead target the previous month. The target period is
+  enforced by the same M6 admin-creation gate as single custom-KPI
+  creation (``create_custom_employee_kpi``) — current month before day 8
+  and past-grace months are rejected there, not here.
 
 Validation is all-or-nothing: ``parse_import_file`` checks every row first and
 collects per-row errors; ``execute_import`` only runs when there are none.
@@ -33,7 +38,7 @@ collects per-row errors; ``execute_import`` only runs when there are none.
 Public surface
 --------------
 parse_import_file(contents) -> ParsedImport
-execute_import(db, dept_admin, parsed) -> ImportResult
+execute_import(db, dept_admin, parsed, year=None, period=None, today=None) -> ImportResult
 build_import_template() -> BytesIO  (blank template with examples)
 """
 
@@ -264,7 +269,14 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
     return parsed
 
 
-def execute_import(db: Session, dept_admin: User, parsed: ParsedImport) -> ImportResult:
+def execute_import(
+    db: Session,
+    dept_admin: User,
+    parsed: ParsedImport,
+    year: int | None = None,
+    period: str | None = None,
+    today: date | None = None,
+) -> ImportResult:
     """Create users + recurring KPI templates + draft submissions.
 
     ``parsed`` must have no errors. The whole import runs in a single
@@ -272,14 +284,27 @@ def execute_import(db: Session, dept_admin: User, parsed: ParsedImport) -> Impor
     committed together at the end, so a mid-import failure rolls everything
     back instead of leaving half-created users. Welcome emails go out only
     after the commit succeeds.
+
+    ``year``/``period`` select the target period (``period`` is a month
+    name, e.g. "October"). When omitted, the import targets the current
+    month. When given, the period is enforced by the same M6 admin
+    creation gate that ``create_custom_employee_kpi`` applies: the
+    previous month is allowed during days 1..grace_days, the current
+    month is blocked before day grace_days + 1, and past-grace months
+    are blocked — the gate raises the user-facing error.
     """
     if not parsed.ok:
         raise ValueError("Cannot execute an import that has validation errors.")
     if dept_admin.department_id is None:
         raise ValueError("Importing admin has no department.")
+    if (year is None) != (period is None):
+        raise ValueError("year and period must be given together.")
+    if period is not None and period not in MONTH_NAMES:
+        raise ValueError(f"Unknown period: {period!r}.")
 
-    today = app_today()
-    year, period = today.year, MONTH_NAMES[today.month - 1]
+    today = today or app_today()
+    if year is None:
+        year, period = today.year, MONTH_NAMES[today.month - 1]
 
     try:
         created_users: dict[str, User] = {}
@@ -317,12 +342,10 @@ def execute_import(db: Session, dept_admin: User, parsed: ParsedImport) -> Impor
                 period,
                 is_recurring=True,
                 commit=False,
-                # Bulk import always targets the current month, so it
-                # follows the same admin creation window: during days
-                # 1..grace_days the current month is blocked (its set
-                # materialises on day 8) and the import fails. The import
-                # has no period parameter to retarget it at the previous
-                # month — that would be a separate feature, not this gate.
+                # The target period (current month by default, previous
+                # month when the caller selects it during grace week)
+                # passes through the same M6 admin creation gate inside
+                # create_custom_employee_kpi — no second gate here.
                 today=today,
             )
             kpis_created += 1
@@ -385,8 +408,10 @@ def build_import_template() -> BytesIO:
         "   Hand each person their password yourself, or set one per person",
         "   with Reset Password — they must change it on first login.",
         "3. Each employee's weights must total exactly 100.",
-        "4. Every KPI becomes a recurring monthly template starting this month, and a",
-        "   draft submission is created right away so employees can start filling scores.",
+        "4. Every KPI becomes a recurring monthly template for the period you",
+        "   select (previous month during days 1–7, current month from day 8),",
+        "   and a draft submission is created right away so employees can",
+        "   start filling scores.",
         "5. If any row has an error, nothing is imported - fix the rows and upload",
         "   again. Use the Validate button to check before importing.",
         "6. Delete the example rows before uploading your real data.",

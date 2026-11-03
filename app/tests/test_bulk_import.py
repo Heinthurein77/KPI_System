@@ -31,13 +31,19 @@ def _import_day_after_rollover():
     import clock to day 10 of the real current month so these tests
     exercise the import itself, not the gate (the gate's own tests live
     in test_admin_creation_window.py). Month/year are unchanged, so
-    existing period assertions still hold."""
+    existing period assertions still hold. Both clocks are pinned: the
+    service's (used by execute_import) and the router's (used by the
+    up-front gate check on the upload endpoint)."""
     from unittest.mock import patch
 
     from app.core.timezone import today as _app_today
+    from app.routers import importer as importer_router
 
     pinned = _app_today().replace(day=10)
-    with patch.object(bulk_import_service, "app_today", return_value=pinned):
+    with (
+        patch.object(bulk_import_service, "app_today", return_value=pinned),
+        patch.object(importer_router, "app_today", return_value=pinned),
+    ):
         yield
 
 
@@ -319,3 +325,141 @@ def test_upload_accepts_file_just_under_10mb(client, db, dept_admin):
         headers=auth_headers(admin, tenant),
     )
     assert r.status_code == 200
+
+
+# --- Previous-month targeting (grace week) --------------------------------
+# Fixed dates, mirroring test_admin_creation_window.py: DAY_3 is grace week
+# (previous month October is open, current month November is blocked,
+# September is past its grace window); DAY_10 is after the grace week
+# (September is past grace, October's window has also closed).
+
+DAY_3 = date(2026, 11, 3)
+DAY_10 = date(2026, 11, 10)
+
+
+def _pin_day(day):
+    """Patch both import clocks (service + router gate check) to ``day``."""
+    from unittest.mock import patch
+
+    from app.routers import importer as importer_router
+
+    return (
+        patch.object(bulk_import_service, "app_today", return_value=day),
+        patch.object(importer_router, "app_today", return_value=day),
+    )
+
+
+def _upload(client, tenant, admin, dry_run, year=None, month=None):
+    params = {"dry_run": dry_run}
+    if year is not None:
+        params["year"] = year
+    if month is not None:
+        params["month"] = month
+    return client.post(
+        "/api/admin/import/upload",
+        params=params,
+        files={"file": ("import.xlsx", _valid_contents(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=auth_headers(admin, tenant),
+    )
+
+
+def test_execute_previous_month_on_day_3_succeeds(db, dept_admin):
+    from unittest.mock import patch
+
+    tenant, dept, admin = dept_admin
+    parsed = bulk_import_service.parse_import_file(_valid_contents(), db, tenant.id)
+    assert parsed.ok
+    with patch.object(bulk_import_service, "app_today", return_value=DAY_3):
+        result = bulk_import_service.execute_import(db, admin, parsed, year=2026, period="October")
+    assert result.users_created == 2
+    assert result.kpis_created == 3
+    assert (result.year, result.period) == (2026, "October")
+    subs = db.query(KPISubmission).filter(
+        KPISubmission.tenant_id == tenant.id,
+        KPISubmission.year == 2026,
+        KPISubmission.month_or_quarter == "October",
+    ).all()
+    assert len(subs) == 3
+    users = db.query(User).filter(User.tenant_id == tenant.id, User.role == UserRole.EMPLOYEE).all()
+    assert len(users) == 2
+    assert all(u.department_id == dept.id for u in users)
+
+
+def test_execute_current_month_on_day_3_rejected(db, dept_admin):
+    from unittest.mock import patch
+
+    import pytest
+    from fastapi import HTTPException
+
+    tenant, _, admin = dept_admin
+    parsed = bulk_import_service.parse_import_file(_valid_contents(), db, tenant.id)
+    assert parsed.ok
+    with patch.object(bulk_import_service, "app_today", return_value=DAY_3):
+        with pytest.raises(HTTPException) as exc:
+            bulk_import_service.execute_import(db, admin, parsed, year=2026, period="November")
+    assert exc.value.status_code == 400
+    assert db.query(User).filter(User.tenant_id == tenant.id, User.role == UserRole.EMPLOYEE).count() == 0
+
+
+def test_execute_past_grace_month_rejected(db, dept_admin):
+    from unittest.mock import patch
+
+    import pytest
+    from fastapi import HTTPException
+
+    tenant, _, admin = dept_admin
+    parsed = bulk_import_service.parse_import_file(_valid_contents(), db, tenant.id)
+    assert parsed.ok
+    with patch.object(bulk_import_service, "app_today", return_value=DAY_10):
+        with pytest.raises(HTTPException) as exc:
+            bulk_import_service.execute_import(db, admin, parsed, year=2026, period="September")
+    assert exc.value.status_code == 400
+
+
+def test_upload_previous_month_on_day_3_succeeds(client, db, dept_admin):
+    tenant, dept, admin = dept_admin
+    p1, p2 = _pin_day(DAY_3)
+    with p1, p2:
+        r = _upload(client, tenant, admin, dry_run=False, year=2026, month=10)
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["users_created"] == 2
+    assert data["kpis_created"] == 3
+    assert (data["year"], data["period"]) == (2026, "October")
+    users = db.query(User).filter(User.tenant_id == tenant.id, User.role == UserRole.EMPLOYEE).all()
+    assert all(u.department_id == dept.id for u in users)
+
+
+def test_upload_dry_run_previous_month_on_day_3_reports_ok(client, db, dept_admin):
+    tenant, _, admin = dept_admin
+    p1, p2 = _pin_day(DAY_3)
+    with p1, p2:
+        r = _upload(client, tenant, admin, dry_run=True, year=2026, month=10)
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True
+
+
+def test_upload_current_month_on_day_3_rejected(client, db, dept_admin):
+    tenant, _, admin = dept_admin
+    p1, p2 = _pin_day(DAY_3)
+    with p1, p2:
+        r = _upload(client, tenant, admin, dry_run=False, year=2026, month=11)
+    assert r.status_code == 400, r.text
+    assert "previous month" in r.json()["detail"]
+    assert db.query(User).filter(User.tenant_id == tenant.id, User.role == UserRole.EMPLOYEE).count() == 0
+
+
+def test_upload_past_grace_month_rejected(client, db, dept_admin):
+    tenant, _, admin = dept_admin
+    p1, p2 = _pin_day(DAY_10)
+    with p1, p2:
+        r = _upload(client, tenant, admin, dry_run=False, year=2026, month=9)
+    assert r.status_code == 400, r.text
+
+
+def test_upload_period_params_validated(client, db, dept_admin):
+    tenant, _, admin = dept_admin
+    r = _upload(client, tenant, admin, dry_run=True, year=2026, month=13)
+    assert r.status_code == 400
+    r = _upload(client, tenant, admin, dry_run=True, year=2026)
+    assert r.status_code == 400

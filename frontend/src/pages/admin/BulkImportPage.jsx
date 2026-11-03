@@ -15,6 +15,29 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
 
+const MONTH_NAMES_EN = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+// The only period the M6 admin-creation gate allows right now: during the
+// grace week (days 1..SUBMISSION_GRACE_DAYS, default 7) the previous month;
+// from day 8 on, the current month. The backend stays the authority and
+// rejects anything else with a clear message (shown via getErrorMessage).
+function allowedImportPeriod(now = new Date()) {
+  let year = now.getFullYear();
+  let month = now.getMonth() + 1;
+  const graceWeek = now.getDate() <= 7;
+  if (graceWeek) {
+    month -= 1;
+    if (month === 0) {
+      month = 12;
+      year -= 1;
+    }
+  }
+  return { year, month, label: `${MONTH_NAMES_EN[month - 1]} ${year}`, graceWeek };
+}
+
 export default function BulkImportPage() {
   const fileRef = useRef(null);
   const [fileName, setFileName] = useState("");
@@ -23,6 +46,7 @@ export default function BulkImportPage() {
   const [preview, setPreview] = useState(null); // dry-run result
   const [result, setResult] = useState(null); // final import result
   const [confirmImport, setConfirmImport] = useState(false);
+  const [period, setPeriod] = useState(() => allowedImportPeriod());
 
   async function handleTemplate() {
     setError("");
@@ -52,7 +76,7 @@ export default function BulkImportPage() {
     setError("");
     setPreview(null);
     try {
-      const data = await uploadImport(f, true);
+      const data = await uploadImport(f, true, period.year, period.month);
       setPreview(data);
     } catch (e) {
       setError(getErrorMessage(e));
@@ -74,7 +98,7 @@ export default function BulkImportPage() {
     setBusy(true);
     setError("");
     try {
-      const data = await uploadImport(f, false);
+      const data = await uploadImport(f, false, period.year, period.month);
       setResult(data);
       setPreview(null);
       if (fileRef.current) fileRef.current.value = "";
@@ -132,7 +156,28 @@ export default function BulkImportPage() {
             {fileName && <span className="text-sm text-slate-500">{fileName}</span>}
           </div>
 
-          <h3 className="mb-3 mt-6 text-base font-semibold text-slate-900">2. Validate</h3>
+          <h3 className="mb-3 mt-6 text-base font-semibold text-slate-900">2. Target period</h3>
+          <div className="flex flex-wrap items-center gap-3">
+            <select
+              value={`${period.year}-${period.month}`}
+              onChange={(e) => {
+                const [y, m] = e.target.value.split("-").map(Number);
+                setPeriod({ year: y, month: m, label: `${MONTH_NAMES_EN[m - 1]} ${y}`, graceWeek: period.graceWeek });
+                setPreview(null);
+                setResult(null);
+              }}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700"
+            >
+              <option value={`${period.year}-${period.month}`}>{period.label}</option>
+            </select>
+            <span className="text-xs text-slate-500">
+              {period.graceWeek
+                ? "Days 1–7 (grace week): imports target the previous month. The current month opens on day 8."
+                : "Imports target the current month. The previous month's grace window has closed."}
+            </span>
+          </div>
+
+          <h3 className="mb-3 mt-6 text-base font-semibold text-slate-900">3. Validate</h3>
           <button
             onClick={handleValidate}
             disabled={busy || !fileName}
@@ -152,8 +197,8 @@ export default function BulkImportPage() {
               {preview.users_found} users and {preview.kpis_found} KPIs found, no errors.
             </p>
             <p className="mt-2 text-sm text-emerald-800">
-              Every new user starts with the initial password <code className="rounded bg-emerald-100 px-1 font-mono">password</code> —
-              ask them to change it on first login.
+              Every new user gets a unique random initial password — hand it to them yourself
+              or set one with Reset Password; they must change it on first login.
             </p>
             <button
               onClick={handleImport}
@@ -204,8 +249,8 @@ export default function BulkImportPage() {
               KPIs are recurring, so they will carry forward to next months automatically.
             </p>
             <p className="mt-2 text-sm text-emerald-800">
-              Initial password for everyone: <code className="rounded bg-emerald-100 px-1 font-mono">password</code> —
-              remind them to change it on first login.
+              Each new user got a unique random initial password — hand it to them yourself
+              or set one with Reset Password; they must change it on first login.
             </p>
           </div>
         )}
@@ -215,8 +260,8 @@ export default function BulkImportPage() {
         title="Import users and KPIs?"
         message={
           preview
-            ? `Import ${preview.users_found} users and ${preview.kpis_found} KPIs? This cannot be undone.`
-            : "Import the validated users and KPIs? This cannot be undone."
+            ? `Import ${preview.users_found} users and ${preview.kpis_found} KPIs for ${period.label}? This cannot be undone.`
+            : `Import the validated users and KPIs for ${period.label}? This cannot be undone.`
         }
         confirmLabel="Import"
         danger={false}

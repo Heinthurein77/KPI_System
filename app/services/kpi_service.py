@@ -20,6 +20,8 @@ from app.services.submission_grace import (
 )
 from app.services.submission_grace import (
     assert_employee_window_open,
+    assert_not_future_month,
+    is_within_grace,
     recurring_rollover_open,
 )
 
@@ -372,6 +374,8 @@ def save_self_scores(
     scores: dict[int, float],
     comments: dict[int, str] | None = None,
     today: date | None = None,
+    expected_year: int | None = None,
+    expected_period: str | None = None,
 ) -> None:
     comments = comments or {}
     today = today or app_today()
@@ -389,6 +393,19 @@ def save_self_scores(
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, "Cannot edit a submission that has already been submitted."
             )
+        # The caller claims a period (employee save/submit endpoints); every
+        # touched submission must actually belong to it — a mismatched id
+        # must not silently edit another month's row.
+        if expected_year is not None and expected_period is not None:
+            if (submission.year, submission.month_or_quarter) != (expected_year, expected_period):
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"Submission {submission.id} belongs to {submission.month_or_quarter} "
+                    f"{submission.year}, not the claimed {expected_period} {expected_year}.",
+                )
+        # Future months are never employee-editable (admin pre-creation
+        # territory), regardless of DRAFT/REJECTED status.
+        assert_not_future_month(submission.year, submission.month_or_quarter, today)
         # Grace rule: a DRAFT may only be edited while its month's window is
         # open (month-end + SUBMISSION_GRACE_DAYS). A REJECTED submission may
         # still be corrected after grace — the delay there was the reviewer's.
@@ -412,8 +429,18 @@ def save_self_scores(
 
 def submit_for_dept_approval(
     db: Session, employee: User, year: int, period: str, today: date | None = None
-) -> None:
+) -> dict:
+    """Submit a period's DRAFT/REJECTED rows for approval.
+
+    Returns {"submitted": [...ids], "skipped": [...ids]}. Skipped rows are
+    DRAFT rows left untouched because their grace window closed — only the
+    REJECTED subset is submitted in that case, so a late reviewer
+    correction is never blocked by an unrelated stale draft.
+    """
     today = today or app_today()
+    # Defense in depth alongside save_self_scores: a future period can
+    # never be submitted by an employee, even via a direct API call.
+    assert_not_future_month(year, period, today)
     submissions = db.scalars(
         select(KPISubmission).where(
             KPISubmission.employee_id == employee.id,
@@ -438,24 +465,44 @@ def submit_for_dept_approval(
             "No draft or rejected KPI found for this period.",
         )
 
-    missing = [s for s in submittable if s.self_score is None]
+    # Per-submission grace: the window is per period, so when it closed,
+    # DRAFT rows stay DRAFT (untouched) and only the REJECTED subset is
+    # submitted. Previously the whole submit was refused whenever any
+    # DRAFT existed, so a rejected correction could never be resubmitted
+    # after grace while a stale draft lingered. (Unparseable period
+    # labels count as within grace, as in is_within_grace.)
+    window_open = is_within_grace(year, period, today, settings.SUBMISSION_GRACE_DAYS)
+    to_submit = [
+        s for s in submittable
+        if s.status == KPIStatus.REJECTED or window_open
+    ]
+    skipped = [s for s in submittable if s not in to_submit]
+    if not to_submit:
+        end = None
+        from app.services.submission_grace import grace_end
+
+        end = grace_end(year, period, settings.SUBMISSION_GRACE_DAYS)
+        if end is not None:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"The submission window for {period} {year} closed on {end.isoformat()}; "
+                "only rejected items can still be resubmitted.",
+            )
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "No draft or rejected KPI found for this period.",
+        )
+
+    missing = [s for s in to_submit if s.self_score is None]
     if missing:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Please score every metric before submitting.")
-
-    # Grace rule: a first-time (DRAFT) submit after the window closed is
-    # refused. A REJECTED-only resubmit is still allowed — same reasoning
-    # as in save_self_scores.
-    if any(s.status == KPIStatus.DRAFT for s in submittable):
-        assert_employee_window_open(
-            year, period, today, settings.SUBMISSION_GRACE_DAYS
-        )
 
     # A Dept Admin cannot review their own KPI, so their own submissions skip
     # department review and go straight to the Tenant Admin for final approval.
     # Everyone else goes through department review first.
     skip_dept_review = employee.role == UserRole.DEPT_ADMIN
     next_status = KPIStatus.PENDING_FINAL_APPROVAL if skip_dept_review else KPIStatus.PENDING_DEPT_APPROVAL
-    for submission in submittable:
+    for submission in to_submit:
         submission.status = next_status
         submission.submitted_at = _now()
         audit_service.log(
@@ -489,6 +536,7 @@ def submit_for_dept_approval(
         emailed = []
     db.commit()
     email_service.send_for_notifications(db, emailed)
+    return {"submitted": [s.id for s in to_submit], "skipped": [s.id for s in skipped]}
 
 
 def _entity_label(submission: KPISubmission) -> str:

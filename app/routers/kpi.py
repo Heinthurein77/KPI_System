@@ -50,6 +50,8 @@ def employee_save_scores(
             user,
             {int(k): v for k, v in payload.scores.items()},
             {int(k): v for k, v in payload.comments.items()},
+            expected_year=payload.year,
+            expected_period=payload.period,
         )
 
     return _own_submissions_for_period(db, user, payload.year, payload.period)
@@ -71,6 +73,8 @@ def employee_submit(
             user,
             {int(k): v for k, v in payload.scores.items()},
             {int(k): v for k, v in payload.comments.items()},
+            expected_year=payload.year,
+            expected_period=payload.period,
         )
 
     kpi_service.submit_for_dept_approval(db, user, payload.year, payload.period)

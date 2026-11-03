@@ -686,3 +686,82 @@ def test_get_submission_scoped_self_review_blocked_for_tenant_admin(db):
 
     assert exc_info.value.status_code == 403
     assert exc_info.value.detail == "You cannot review your own KPI submission."
+
+
+# ---------------------------------------------------------------------------
+# M5 period validation + M7 per-submission grace at submit
+# ---------------------------------------------------------------------------
+
+
+def test_submit_after_grace_submits_rejected_only(db):
+    """A stale DRAFT must not block a REJECTED correction's resubmission
+    after the grace window closed: only the REJECTED subset is submitted,
+    the DRAFT stays untouched as DRAFT."""
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    t1 = make_template(db, tenant, metric_name="Metric 1")
+    t2 = make_template(db, tenant, metric_name="Metric 2")
+    draft = make_submission(db, tenant, employee, t1, period="September", self_score=80.0)
+    rejected = make_submission(
+        db, tenant, employee, t2, period="September",
+        status=KPIStatus.REJECTED, self_score=70.0,
+    )
+    # Sep 2026 grace ended Oct 7; Oct 15 is past it.
+    result = kpi_service.submit_for_dept_approval(db, employee, 2026, "September", today=date(2026, 10, 15))
+    assert result["submitted"] == [rejected.id]
+    assert result["skipped"] == [draft.id]
+    db.refresh(draft)
+    db.refresh(rejected)
+    assert draft.status == KPIStatus.DRAFT
+    assert rejected.status == KPIStatus.PENDING_DEPT_APPROVAL
+
+
+def test_submit_after_grace_draft_only_raises_400(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant)
+    make_submission(db, tenant, employee, template, period="September", self_score=80.0)
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.submit_for_dept_approval(db, employee, 2026, "September", today=date(2026, 10, 15))
+    assert exc_info.value.status_code == 400
+    assert "closed" in exc_info.value.detail
+
+
+def test_save_rejects_future_month(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant)
+    submission = make_submission(db, tenant, employee, template, period="December", self_score=None)
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.save_self_scores(
+            db, employee, {submission.id: 80.0}, today=date(2026, 11, 3)
+        )
+    assert exc_info.value.status_code == 400
+
+
+def test_save_rejects_period_mismatch(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant)
+    submission = make_submission(db, tenant, employee, template, period="September", self_score=None)
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.save_self_scores(
+            db, employee, {submission.id: 80.0},
+            today=date(2026, 9, 20), expected_year=2026, expected_period="October",
+        )
+    assert exc_info.value.status_code == 400
+
+
+def test_submit_rejects_future_month(db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    template = make_template(db, tenant)
+    make_submission(db, tenant, employee, template, period="December", self_score=80.0)
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.submit_for_dept_approval(db, employee, 2026, "December", today=date(2026, 11, 3))
+    assert exc_info.value.status_code == 400

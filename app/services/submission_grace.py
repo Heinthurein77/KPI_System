@@ -85,6 +85,24 @@ def is_within_grace(year: int, period: str, today: date, grace_days: int) -> boo
     return today <= end
 
 
+def assert_not_future_month(year: int, period: str, today: date) -> None:
+    """Raise 400 when the period is strictly after the current month.
+
+    Employees may only ever enter the current month or a grace month;
+    future months are admin pre-creation territory, not employee entry.
+    Unparseable period labels are left alone.
+    """
+    if period not in MONTH_NAMES:
+        return
+    month = MONTH_NAMES.index(period) + 1
+    if (year, month) > (today.year, today.month):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"Score entry for {period} {year} is not open yet "
+            f"(current month is {MONTH_NAMES[today.month - 1]} {today.year}).",
+        )
+
+
 def assert_employee_window_open(
     year: int, period: str, today: date, grace_days: int
 ) -> None:

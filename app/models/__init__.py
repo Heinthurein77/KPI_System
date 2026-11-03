@@ -6,6 +6,7 @@ from app.models.user import User, UserRole
 from app.models.audit_log import AuditLog
 from app.models.notification import Notification
 from app.models.daily_task import DailyTaskEntry, DailyTaskMonthlyReview
+from app.models.revoked_token import RevokedToken
 
 __all__ = [
     "Tenant",
@@ -20,4 +21,5 @@ __all__ = [
     "Notification",
     "DailyTaskEntry",
     "DailyTaskMonthlyReview",
+    "RevokedToken",
 ]

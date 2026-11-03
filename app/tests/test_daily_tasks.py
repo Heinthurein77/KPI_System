@@ -132,12 +132,12 @@ def test_monthly_summary_counts(db, client):
     client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
     client.post(
         "/api/daily-tasks",
-        json=_entry_payload(task_date="2026-11-02", status="completed", work_done="Second task same day"),
+        json=_entry_payload(task_date="2026-11-03", status="completed", work_done="Next day task"),
         headers=auth_headers(emp, tenant),
     )
     client.post(
         "/api/daily-tasks",
-        json=_entry_payload(task_date="2026-11-03", status="completed", work_done="Next day task"),
+        json=_entry_payload(task_date="2026-11-04", status="completed", work_done="Third day task"),
         headers=auth_headers(emp, tenant),
     )
     resp = client.get(
@@ -146,7 +146,7 @@ def test_monthly_summary_counts(db, client):
     )
     assert resp.status_code == 200, resp.text
     row = [u for u in resp.json()["users"] if u["user_id"] == emp.id][0]
-    assert row["working_days"] == 2  # two distinct dates, not three rows
+    assert row["working_days"] == 3  # three distinct dates
     assert row["completed"] == 2
     assert row["in_progress_or_pending"] == 1
     assert row["total"] == 3
@@ -374,15 +374,18 @@ def _make_entry_with_evidence(client, tenant, emp, filename, content, mime):
 
 def test_evidence_rejects_html_svg_and_scripts(db, client):
     tenant, _, emp, _, _ = _setup(db)
-    entry_id, r = _make_entry_with_evidence(
-        client, tenant, emp, "evil.html", b"<script>alert(1)</script>", "text/html")
-    assert r.status_code == 400, r.text
-    _, r = _make_entry_with_evidence(
-        client, tenant, emp, "evil.svg", b'<svg onload="alert(1)"></svg>', "image/svg+xml")
-    assert r.status_code == 400, r.text
-    _, r = _make_entry_with_evidence(
-        client, tenant, emp, "evil.js", b"alert(1)", "application/javascript")
-    assert r.status_code == 400, r.text
+    r = client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    assert r.status_code == 201, r.text
+    entry_id = r.json()["id"]
+    for filename, content, mime in [
+        ("evil.html", b"<script>alert(1)</script>", "text/html"),
+        ("evil.svg", b'<svg onload="alert(1)"></svg>', "image/svg+xml"),
+        ("evil.js", b"alert(1)", "application/javascript"),
+    ]:
+        r = client.post(f"/api/daily-tasks/{entry_id}/evidence",
+                        files={"file": (filename, content, mime)},
+                        headers=auth_headers(emp, tenant))
+        assert r.status_code == 400, r.text
     client.delete(f"/api/daily-tasks/{entry_id}", headers=auth_headers(emp, tenant))
 
 
@@ -433,3 +436,36 @@ def test_delete_entry_removes_file_after_commit(db, client):
     r = client.delete(f"/api/daily-tasks/{entry_id}", headers=auth_headers(emp, tenant))
     assert r.status_code == 204, r.text
     assert not (UPLOAD_DIR / stored).exists()
+
+
+def test_duplicate_entry_same_day_conflicts(db, client):
+    tenant, _, emp, _, _ = _setup(db)
+    r = client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    assert r.status_code == 201, r.text
+    r = client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    assert r.status_code == 409, r.text
+    r = client.post("/api/daily-tasks", json=_entry_payload(task_date="2026-11-03"),
+                    headers=auth_headers(emp, tenant))
+    assert r.status_code == 201, r.text
+
+
+def test_dept_admin_cannot_give_self_feedback(db, client):
+    tenant, _, _, dept_admin, _ = _setup(db)
+    r = client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(dept_admin, tenant))
+    assert r.status_code == 201, r.text
+    entry_id = r.json()["id"]
+    r = client.post(f"/api/daily-tasks/{entry_id}/feedback",
+                    json={"supervisor_feedback": "Great work, me!"},
+                    headers=auth_headers(dept_admin, tenant))
+    assert r.status_code == 403, r.text
+
+
+def test_dept_admin_cannot_write_self_hod_evaluation(db, client):
+    tenant, _, _, dept_admin, _ = _setup(db)
+    r = client.put("/api/daily-tasks/review/month",
+                    params={"year": 2026, "month": 11, "user_id": dept_admin.id},
+                    json={"achievements": "Did things", "hod_evaluation": "Excellent, me!"},
+                    headers=auth_headers(dept_admin, tenant))
+    assert r.status_code == 200, r.text
+    assert r.json()["achievements"] == "Did things"
+    assert r.json()["hod_evaluation"] in (None, "")

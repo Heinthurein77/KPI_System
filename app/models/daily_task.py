@@ -36,6 +36,12 @@ TASK_STATUSES = ("not_started", "in_progress", "completed", "pending")
 
 class DailyTaskEntry(Base):
     __tablename__ = "daily_task_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id", "user_id", "task_date",
+            name="uq_daily_entry_tenant_user_day",
+        ),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
 

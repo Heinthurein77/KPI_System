@@ -24,6 +24,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.deps import get_current_user, get_current_user_no_tenant, require_diary_author, require_tenant_admin, require_tenant_member
@@ -137,6 +138,10 @@ def _visible_user_ids(db: Session, user: User) -> list[int]:
 
 
 def _can_give_feedback(user: User, entry: DailyTaskEntry) -> bool:
+    # Nobody supervises themselves: a dept admin (or tenant admin) must
+    # not write "supervisor feedback" on their own diary entry.
+    if entry.user_id == user.id:
+        return False
     if user.role == UserRole.TENANT_ADMIN:
         return True
     return (
@@ -222,6 +227,18 @@ def create_entry(
         validate_status(payload.status)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    # One diary row per user per day (also enforced by the DB unique
+    # constraint): a double-submit/retry must get a clear 409, not a
+    # second row that double-counts the monthly summary.
+    existing = db.scalar(
+        select(DailyTaskEntry).where(
+            DailyTaskEntry.tenant_id == user.tenant_id,
+            DailyTaskEntry.user_id == user.id,
+            DailyTaskEntry.task_date == payload.task_date,
+        )
+    )
+    if existing is not None:
+        raise HTTPException(409, f"A diary entry for {payload.task_date.isoformat()} already exists.")
     entry = DailyTaskEntry(
         tenant_id=user.tenant_id,
         user_id=user.id,
@@ -247,7 +264,13 @@ def create_entry(
         f"Created diary entry for {entry.task_date.isoformat()} (status: {entry.status}).",
         department_id=entry.department_id,
     )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Race between the existence check above and the commit: the
+        # unique constraint is the backstop — report it as a conflict.
+        db.rollback()
+        raise HTTPException(409, f"A diary entry for {payload.task_date.isoformat()} already exists.")
     db.refresh(entry)
     return _serialize(db, entry)
 
@@ -628,13 +651,16 @@ def put_monthly_review(
     is_owner = user_id == user.id
     changed: list[str] = []
     # HOD evaluation is supervisor-only: an owner's own hod_evaluation
-    # value is ignored, never stored from the author.
+    # value is ignored, never stored from the author — and a supervisor
+    # must not evaluate themselves either.
     if "hod_evaluation" in data:
-        allowed = user.role == UserRole.TENANT_ADMIN or (
-            user.role == UserRole.DEPT_ADMIN
-            and user.department_id is not None
-            and db.get(User, user_id) is not None
-            and db.get(User, user_id).department_id == user.department_id
+        allowed = user_id != user.id and (
+            user.role == UserRole.TENANT_ADMIN or (
+                user.role == UserRole.DEPT_ADMIN
+                and user.department_id is not None
+                and db.get(User, user_id) is not None
+                and db.get(User, user_id).department_id == user.department_id
+            )
         )
         if allowed:
             if review.hod_evaluation != data["hod_evaluation"]:

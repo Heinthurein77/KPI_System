@@ -36,11 +36,16 @@ def upgrade() -> None:
         "SELECT MIN(id) FROM daily_task_entries "
         "GROUP BY tenant_id, user_id, task_date)"
     )
-    op.create_unique_constraint(
-        "uq_daily_entry_tenant_user_day",
-        "daily_task_entries",
-        ["tenant_id", "user_id", "task_date"],
-    )
+    # Batch mode: SQLite cannot ALTER constraints in place, so the
+    # constraint is created via the copy-and-move strategy there (on
+    # Postgres batch mode is a plain ALTER). Without this, `upgrade
+    # head` on a scratch SQLite DB — and any fresh SQLite deploy —
+    # dies at this revision.
+    with op.batch_alter_table("daily_task_entries") as batch_op:
+        batch_op.create_unique_constraint(
+            "uq_daily_entry_tenant_user_day",
+            ["tenant_id", "user_id", "task_date"],
+        )
     op.create_table(
         "revoked_tokens",
         sa.Column("jti", sa.String(length=64), nullable=False),

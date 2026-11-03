@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.timezone import today as app_today
 from app.core.deps import get_current_user, require_tenant_admin
 from app.database import get_db
 from app.models.department import Department
@@ -43,7 +44,7 @@ def _bucket(score: float) -> str:
 
 
 def _validated_year_period(year: int | None, period: str | None) -> tuple[int, str]:
-    today = date.today()
+    today = app_today()
     year = year or today.year
     period = period or MONTH_NAMES[today.month - 1]
     if period not in MONTH_NAMES:
@@ -195,7 +196,7 @@ def analytics_trend(
 ):
     """Average submitted score per month for the last N calendar months."""
     periods = max(1, min(periods, 24))
-    today = date.today()
+    today = app_today()
     months: list[tuple[int, str]] = []
     y, m = today.year, today.month
     for _ in range(periods):

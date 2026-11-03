@@ -38,6 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.timezone import today as app_today
 from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.notification import Notification
 from app.models.tenant import Tenant, TenantStatus
@@ -88,10 +89,10 @@ def send_deadline_reminders(
 
     Args:
         db: database session (caller commits).
-        today: override for testing; defaults to date.today().
+        today: override for testing; defaults to the app timezone date (see app/core/timezone.py).
         tenant_id: scope to one tenant; None covers every tenant.
     """
-    today = today or date.today()
+    today = today or app_today()
     # Reminder target: the current month inside its pre-month-end window,
     # or the previous month while its submission grace window is still open
     # (so employees keep getting nudged while they can still act).

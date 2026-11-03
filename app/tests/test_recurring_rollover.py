@@ -165,8 +165,8 @@ def test_monthly_cycle_same_every_month_for_recurring(db):
 def test_recurring_run_endpoint_refuses_current_month_before_8th(db, client):
     tenant = make_tenant(db)
     admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Boss")
-    with patch("app.routers.admin.date") as mock_date:
-        mock_date.today.return_value = datetime.date(2026, 11, 3)
+    with patch("app.routers.admin.app_today") as mock_today:
+        mock_today.return_value = datetime.date(2026, 11, 3)
         r = client.post(
             "/api/admin/recurring/run",
             json={"year": 2026, "period": "November"},
@@ -179,8 +179,8 @@ def test_recurring_run_endpoint_refuses_current_month_before_8th(db, client):
 def test_recurring_run_endpoint_allows_from_8th(db, client):
     tenant = make_tenant(db)
     admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Boss")
-    with patch("app.routers.admin.date") as mock_date:
-        mock_date.today.return_value = datetime.date(2026, 11, 8)
+    with patch("app.routers.admin.app_today") as mock_today:
+        mock_today.return_value = datetime.date(2026, 11, 8)
         r = client.post(
             "/api/admin/recurring/run",
             json={"year": 2026, "period": "November"},

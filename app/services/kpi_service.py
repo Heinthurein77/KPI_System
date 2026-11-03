@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
+from app.core.timezone import today as app_today
 from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.kpi_template import KPITemplate
 from app.models.user import User, UserRole
@@ -187,7 +188,7 @@ def applicable_templates(
     apply_rollover_gate=False only to ask "what *would* apply once the
     rollover opens" (dashboard banner, gated-window handling).
     """
-    today = today or date.today()
+    today = today or app_today()
     custom_condition = (
         (KPITemplate.employee_id == employee.id)
         & (
@@ -373,7 +374,7 @@ def save_self_scores(
     today: date | None = None,
 ) -> None:
     comments = comments or {}
-    today = today or date.today()
+    today = today or app_today()
     submissions = db.scalars(
         select(KPISubmission)
         .options(joinedload(KPISubmission.kpi_template))
@@ -412,7 +413,7 @@ def save_self_scores(
 def submit_for_dept_approval(
     db: Session, employee: User, year: int, period: str, today: date | None = None
 ) -> None:
-    today = today or date.today()
+    today = today or app_today()
     submissions = db.scalars(
         select(KPISubmission).where(
             KPISubmission.employee_id == employee.id,

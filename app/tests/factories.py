@@ -33,9 +33,9 @@ def open_fillable_period(today=None) -> tuple[int, str]:
     drafts must use this instead of assuming the calendar month is open,
     or they fail every month on days 1-7.
     """
-    from datetime import date as _date
+    from app.core.timezone import today as _app_today
 
-    today = today or _date.today()
+    today = today or _app_today()
     if today.day >= 8:
         return today.year, MONTH_NAMES[today.month - 1]
     if today.month == 1:

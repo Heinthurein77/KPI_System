@@ -99,7 +99,9 @@ def test_trend_returns_monthly_points(client, db):
     emp1 = make_user(db, tenant, UserRole.EMPLOYEE, name="Eng One", department=dept)
     emp2 = make_user(db, tenant, UserRole.EMPLOYEE, name="Eng Two", department=dept)
     tpl = make_template(db, tenant)
-    today = _date.today()
+    from app.core.timezone import today as _app_today
+
+    today = _app_today()
     if today.month == 1:
         months = [(today.year - 1, "December"), (today.year, "January")]
     else:

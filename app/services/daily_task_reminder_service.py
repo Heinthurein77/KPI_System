@@ -21,11 +21,12 @@ from app.models.daily_task import DailyTaskEntry
 from app.models.notification import Notification
 from app.models.tenant import Tenant
 from app.models.user import User, UserRole
+from app.core.timezone import today as app_today
 from app.services import notification_service
 
 
 def send_daily_task_reminders(db: Session, today: date_type | None = None) -> dict:
-    today = today or datetime.now(timezone.utc).date()
+    today = today or app_today()
     if today.weekday() >= 5:
         # Saturday/Sunday: no diary reminders, even if cron runs daily.
         return {"date": today.isoformat(), "reminded": [], "skipped": ["weekend"]}

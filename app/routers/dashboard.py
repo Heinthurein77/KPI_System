@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.core.config import settings
+from app.core.timezone import today as app_today
 from app.core.deps import get_current_user
 from app.database import get_db
 from app.models.department import Department
@@ -23,7 +24,7 @@ MONTH_NAMES = [
 
 
 def current_month_period(today: date | None = None) -> tuple[int, str]:
-    today = today or date.today()
+    today = today or app_today()
     return today.year, MONTH_NAMES[today.month - 1]
 
 
@@ -57,7 +58,7 @@ def _rollover_on(db: Session, user, year: int, period: str, today: date | None =
     user actually has templates that will apply once it opens — otherwise
     the UI would promise KPIs to people who have none.
     """
-    today = today or date.today()
+    today = today or app_today()
     if not (year == today.year and period == MONTH_NAMES[today.month - 1]):
         return None
     if submission_grace.recurring_rollover_open(today, settings.SUBMISSION_GRACE_DAYS):
@@ -77,7 +78,7 @@ def _fillable_state(year: int, period: str, today: date | None = None):
     keeps meaning "fillable" so existing frontend edit gates keep working;
     ``is_grace_period``/``grace_ends_on`` let the UI explain the grace case.
     """
-    today = today or date.today()
+    today = today or app_today()
     grace_days = settings.SUBMISSION_GRACE_DAYS
     fillable = submission_grace.is_fillable_period(year, period, today, grace_days)
     grace_month = submission_grace.is_grace_month(year, period, today, grace_days)

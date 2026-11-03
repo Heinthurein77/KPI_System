@@ -46,6 +46,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.security import hash_password
+from app.core.timezone import today as app_today
 from app.models.tenant import Tenant
 from app.models.user import User, UserRole
 from app.services import audit_service, email_service, kpi_service
@@ -263,7 +264,7 @@ def execute_import(db: Session, dept_admin: User, parsed: ParsedImport) -> Impor
     if dept_admin.department_id is None:
         raise ValueError("Importing admin has no department.")
 
-    today = date.today()
+    today = app_today()
     year, period = today.year, MONTH_NAMES[today.month - 1]
 
     password_hash = hash_password(DEFAULT_PASSWORD)

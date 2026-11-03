@@ -16,6 +16,7 @@ from fpdf import FPDF
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.timezone import today as app_today
 from app.models.department import Department
 from app.models.kpi_submission import KPISubmission, KPIStatus
 from app.models.user import User
@@ -204,7 +205,7 @@ def render_pdf(report: AnnualReport) -> bytes:
     pdf.kv("Employee:", report.employee_name)
     pdf.kv("Department:", report.department_name)
     pdf.kv("Position:", report.position or "-")
-    pdf.kv("Generated:", date.today().isoformat())
+    pdf.kv("Generated:", app_today().isoformat())
     pdf.ln(4)
 
     # Summary

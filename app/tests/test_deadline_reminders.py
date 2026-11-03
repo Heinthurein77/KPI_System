@@ -151,8 +151,8 @@ def test_reminder_endpoint_tenant_admin_ok(client, db):
     import datetime
     from unittest.mock import patch
 
-    with patch("app.services.deadline_reminder_service.date") as mock_date:
-        mock_date.today.return_value = datetime.date(2026, 10, 15)
+    with patch("app.services.deadline_reminder_service.app_today") as mock_today:
+        mock_today.return_value = datetime.date(2026, 10, 15)
         r = client.post("/api/admin/reminders/deadline", headers=auth_headers(admin, tenant))
     assert r.status_code == 200
     assert r.json()["window_open"] is False

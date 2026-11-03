@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 from app.core.config import settings
 from app.core.deps import get_current_user, require_dept_admin, require_tenant_admin
+from app.core.timezone import today as app_today
 from app.core.security import hash_password
 from app.core.tenant import get_tenant_scoped_or_404
 from app.database import get_db
@@ -823,7 +824,7 @@ def run_recurring_kpis(
     # set only opens on day SUBMISSION_GRACE_DAYS + 1 (the 8th by default).
     # Backfills for past months and pre-creation for future months are fine.
     submission_grace.assert_recurring_rollover_open(
-        payload.year, payload.period, date.today(), settings.SUBMISSION_GRACE_DAYS
+        payload.year, payload.period, app_today(), settings.SUBMISSION_GRACE_DAYS
     )
 
     result = recurring_service.materialise_recurring_for_period(

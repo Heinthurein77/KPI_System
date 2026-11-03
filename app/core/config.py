@@ -19,6 +19,11 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "change-this-secret-key-in-production"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60 * 24  # 24h
 
+    # Business timezone for ALL "today" computations (period math, grace
+    # windows, rollover days, reminders). Never use date.today() or UTC
+    # dates for these — see app/core/timezone.py.
+    TIMEZONE: str = "Asia/Yangon"
+
     # Comma-separated list of origins allowed to call this API (the deployed React app's
     # URL(s)). Defaults to the local Vite dev server.
     CORS_ORIGINS: str = "http://localhost:5173"

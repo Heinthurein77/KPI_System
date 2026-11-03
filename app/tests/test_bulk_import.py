@@ -136,7 +136,9 @@ def test_execute_creates_users_templates_and_drafts(db, dept_admin):
     assert len(templates) == 3
     assert all(t.is_recurring for t in templates)
 
-    today = date.today()
+    from app.core.timezone import today as _app_today
+
+    today = _app_today()
     subs = db.query(KPISubmission).filter(
         KPISubmission.tenant_id == tenant.id,
         KPISubmission.year == today.year,

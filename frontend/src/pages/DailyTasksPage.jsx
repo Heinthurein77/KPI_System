@@ -281,6 +281,56 @@ export default function DailyTasksPage() {
     });
   };
 
+  const requestSaveReview = () => {
+    if (confirmBusy || !reviewUserId) return;
+    const monthLabel = `${year}-${String(month).padStart(2, "0")}`;
+    const ownerLabel = viewingName ? `${viewingName} ၏ review` : "ကိုယ့် review";
+    const fields = [
+      ["အောင်မြင်မှုများ", reviewDraft.achievements],
+      ["အခက်အခဲ & ဖြေရှင်းပုံ", reviewDraft.challenges_solutions],
+      ["ပိုကောင်းအောင် ပြင်ဆင်မည့်အချက်", reviewDraft.improvements_next_focus],
+      ["HOD အကဲဖြတ်ချက်", reviewDraft.hod_evaluation],
+    ].filter(([, v]) => v.trim());
+    setConfirm({
+      title: "Month-end review သိမ်းမလား?",
+      message: `${monthLabel} · ${ownerLabel}`,
+      details:
+        fields.length > 0 ? (
+          <div className="space-y-1">
+            {fields.map(([label, value]) => (
+              <p key={label} className="rounded-xl bg-slate-50 px-3 py-2 text-[13px] text-slate-600 whitespace-pre-wrap">
+                <span className="font-medium text-slate-700">{label}:</span>{" "}
+                {value.length > 100 ? value.slice(0, 97) + "…" : value}
+              </p>
+            ))}
+          </div>
+        ) : (
+          <p className="rounded-xl bg-slate-50 px-3 py-2 text-[13px] text-slate-600">
+            ဖြည့်ထားတာ ဘာမှမရှိပါ — အလွတ်အဖြစ် သိမ်းမည်။
+          </p>
+        ),
+      confirmLabel: "သေချာတယ်၊ သိမ်းမယ်",
+      tone: "success",
+      onConfirm: doSaveReview,
+    });
+  };
+
+  const doSaveReview = async () => {
+    setConfirmBusy(true);
+    try {
+      const saved = await saveMonthlyReview(year, month, reviewUserId, reviewDraft);
+      setReview(saved);
+      setNotice({ text: "✓ Month-end review သိမ်းပြီးပါပြီ။", ok: true });
+    } catch (err) {
+      // The old button had no error handling at all — a failed save died
+      // silently. Show the real reason instead.
+      setNotice({ text: getErrorMessage(err, "Review သိမ်းလို့မရပါ။ ထပ်စမ်းကြည့်ပါ။"), ok: false });
+    } finally {
+      setConfirmBusy(false);
+      setConfirm(null);
+    }
+  };
+
   const startEdit = (entry) => {
     setEditingId(entry.id);
     setMineView("fill");
@@ -653,10 +703,7 @@ export default function DailyTasksPage() {
             <p className="rounded-2xl bg-amber-50 px-3 py-2 text-sm text-amber-900">HOD Evaluation: {review.hod_evaluation}</p>
           )}
           <button className="w-fit rounded-full bg-indigo-600 px-5 py-2 text-sm text-white"
-            onClick={async () => {
-              await saveMonthlyReview(year, month, reviewUserId, reviewDraft);
-              setNotice({ text: "Month-end review သိမ်းပြီးပါပြီ။", ok: true });
-            }}>
+            onClick={requestSaveReview}>
             Review သိမ်းရန်
           </button>
         </div>
@@ -699,7 +746,7 @@ export default function DailyTasksPage() {
         )}
       </section>
       )}
-      {/* Confirmation dialog for submit and delete */}
+      {/* Confirmation dialog for submit, delete and review save */}
       <ConfirmDialog
         open={!!confirm}
         title={confirm?.title}

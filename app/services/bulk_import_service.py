@@ -144,26 +144,21 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
     ws = wb[SHEET_IMPORT] if SHEET_IMPORT in wb.sheetnames else wb.worksheets[0]
     sheet = ws.title
 
-    rows = list(ws.iter_rows(values_only=True))
-    if not rows:
+    # Stream rows instead of list()ing them: a small .xlsx can expand into
+    # millions of rows (zip bomb), and the row cap must trip before worker
+    # memory is exhausted, not after the whole sheet was materialised.
+    row_iter = iter(ws.iter_rows(values_only=True))
+    try:
+        header_row = next(row_iter)
+    except StopIteration:
         parsed.errors.append(ImportRowError(sheet=sheet, row=0, message="The sheet is empty."))
         return parsed
-    # Zip-bomb guard: a small .xlsx can expand into millions of rows. Reject
-    # before validating so a crafted file can't exhaust worker memory.
-    if len(rows) > MAX_IMPORT_ROWS:
-        parsed.errors.append(
-            ImportRowError(
-                sheet=sheet, row=0,
-                message=f"Too many rows (max {MAX_IMPORT_ROWS}). Split the file and import in parts.",
-            )
-        )
-        return parsed
-    header = [_norm_header(v) for v in rows[0]]
+    header = [_norm_header(v) for v in header_row]
     if header[:6] != list(IMPORT_HEADERS):
         parsed.errors.append(
             ImportRowError(
                 sheet=sheet, row=1,
-                message=f'Header must be "name | email | position | metric | target | weight", got {list(rows[0][:6])}.',
+                message=f'Header must be "name | email | position | metric | target | weight", got {list(header_row[:6])}.',
             )
         )
         return parsed
@@ -175,7 +170,18 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
 
     users_by_email: dict[str, ImportUser] = {}
     seen_metrics: set[tuple[str, str]] = set()
-    for idx, row in enumerate(rows[1:], start=2):
+    row_count = 1  # header row already consumed
+    for idx, row in enumerate(row_iter, start=2):
+        row_count += 1
+        if row_count > MAX_IMPORT_ROWS:
+            # Zip-bomb guard: reject before validating so a crafted file
+            # can't exhaust worker memory.
+            return ParsedImport(errors=[
+                ImportRowError(
+                    sheet=sheet, row=0,
+                    message=f"Too many rows (max {MAX_IMPORT_ROWS}). Split the file and import in parts.",
+                )
+            ])
         if _is_empty_row(row[:6]):
             continue
         name = str(row[0] or "").strip()

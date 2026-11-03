@@ -68,11 +68,17 @@ async def upload_import(
     filename = (file.filename or "").lower()
     if not filename.endswith(".xlsx"):
         raise HTTPException(400, "Please upload an Excel (.xlsx) file.")
-    contents = await file.read()
+    contents = bytearray()
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        contents += chunk
+        if len(contents) > MAX_FILE_BYTES:
+            raise HTTPException(400, "File too large (max 10 MB).")
+    contents = bytes(contents)
     if not contents:
         raise HTTPException(400, "The uploaded file is empty.")
-    if len(contents) > MAX_FILE_BYTES:
-        raise HTTPException(400, "File too large (max 10 MB).")
 
     parsed = bulk_import_service.parse_import_file(contents, db, user.tenant_id)
 

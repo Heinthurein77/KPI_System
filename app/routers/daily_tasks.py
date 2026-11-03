@@ -8,10 +8,15 @@ Visibility mirrors the KPI role model:
 
 Evidence upload: files are stored under uploads/daily_tasks/ (10 MB cap)
 and served back through an authenticated, scope-checked endpoint.
+Uploads are restricted to images, PDFs and Office documents — the
+extension AND the file's magic bytes must agree, so a script renamed to
+".png" (or an .html/.svg file) can never be stored and later served
+inline from the app's own origin (stored-XSS path).
 """
 
 from __future__ import annotations
 
+import logging
 import os
 from datetime import date as date_type, datetime, timezone
 from pathlib import Path
@@ -49,8 +54,63 @@ from app.services.daily_task_export import build_export
 
 router = APIRouter(prefix="/api/daily-tasks", tags=["daily-tasks"])
 
+logger = logging.getLogger("kpi_system")
+
 MAX_EVIDENCE_BYTES = 10 * 1024 * 1024
 UPLOAD_DIR = Path(os.getenv("DAILY_TASK_UPLOAD_DIR", "uploads/daily_tasks"))
+
+# Evidence allowlist: extension -> (media type, magic-byte prefix or None,
+# served inline?). Anything else — .html/.htm/.svg/.js/.exe/… — is
+# rejected at upload, and anything already on disk with an unknown
+# extension is only ever served as an opaque attachment (see
+# download_evidence). GIF/WebP need more than a prefix check (handled in
+# _sniff_evidence).
+_EVIDENCE_PREVIEW_TYPES: dict[str, tuple[str, bytes | None]] = {
+    ".png": ("image/png", b"\x89PNG\r\n\x1a\n"),
+    ".jpg": ("image/jpeg", b"\xff\xd8\xff"),
+    ".jpeg": ("image/jpeg", b"\xff\xd8\xff"),
+    ".gif": ("image/gif", None),
+    ".webp": ("image/webp", None),
+    ".pdf": ("application/pdf", b"%PDF"),
+}
+_EVIDENCE_ATTACHMENT_TYPES: dict[str, tuple[str, bytes | None]] = {
+    ".docx": ("application/vnd.openxmlformats-officedocument.wordprocessingml.document", b"PK\x03\x04"),
+    ".xlsx": ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", b"PK\x03\x04"),
+    ".pptx": ("application/vnd.openxmlformats-officedocument.presentationml.presentation", b"PK\x03\x04"),
+}
+
+
+def _sniff_evidence(filename: str, content: bytes) -> tuple[str, bool]:
+    """Validate an uploaded evidence file.
+
+    Returns (media_type, serve_inline). Raises 400 for a disallowed
+    extension or for content that does not match the claimed type — so a
+    script renamed to .png, or an .html/.svg file, never reaches disk.
+    """
+    ext = Path(filename or "evidence").suffix.lower()
+    spec = _EVIDENCE_PREVIEW_TYPES.get(ext)
+    if spec is not None:
+        media_type, magic = spec
+        if ext == ".gif":
+            ok = content[:6] in (b"GIF87a", b"GIF89a")
+        elif ext == ".webp":
+            ok = len(content) >= 12 and content[:4] == b"RIFF" and content[8:12] == b"WEBP"
+        else:
+            ok = magic is None or content.startswith(magic)
+        if not ok:
+            raise HTTPException(400, f"Evidence file content does not match its .{ext[1:]} extension.")
+        return media_type, True
+    spec = _EVIDENCE_ATTACHMENT_TYPES.get(ext)
+    if spec is not None:
+        media_type, magic = spec
+        if magic is not None and not content.startswith(magic):
+            raise HTTPException(400, f"Evidence file content does not match its .{ext[1:]} extension.")
+        return media_type, False
+    raise HTTPException(
+        400,
+        "Evidence files must be images (PNG/JPG/GIF/WebP), PDF, or Office "
+        "documents (.docx/.xlsx/.pptx). HTML, SVG and script files are not allowed.",
+    )
 
 
 def _short(value) -> str:
@@ -244,10 +304,11 @@ def delete_entry(
     entry = _get_scoped_entry(db, user, entry_id)
     if entry.user_id != user.id and user.role != UserRole.TENANT_ADMIN:
         raise HTTPException(403, "Only the author or a tenant admin can delete.")
-    if entry.evidence_file:
-        path = UPLOAD_DIR / entry.evidence_file
-        if path.exists():
-            path.unlink()
+    # Commit the row deletion FIRST, then remove the file: if the commit
+    # failed, the row would otherwise survive pointing at a deleted file
+    # (permanent 404 on download). A failed file cleanup after a good
+    # commit is only an orphaned file, so it is logged, never fatal.
+    evidence_file = entry.evidence_file
     audit_service.log(
         db, user, "daily_task_deleted", "daily_task", entry.id,
         f"{user.name} — {entry.task_date.isoformat()}",
@@ -256,6 +317,13 @@ def delete_entry(
     )
     db.delete(entry)
     db.commit()
+    if evidence_file:
+        try:
+            path = UPLOAD_DIR / evidence_file
+            if path.exists():
+                path.unlink()
+        except OSError:
+            logger.warning("Could not delete evidence file %s after entry %s was deleted", evidence_file, entry_id)
     return None
 
 
@@ -301,18 +369,27 @@ async def upload_evidence(
     entry = _get_scoped_entry(db, user, entry_id)
     if entry.user_id != user.id:
         raise HTTPException(403, "Only the author can attach evidence.")
-    content = await file.read()
-    if len(content) > MAX_EVIDENCE_BYTES:
-        raise HTTPException(400, "Evidence file must be 10 MB or smaller.")
+    # Stream the upload and abort past the cap instead of buffering an
+    # unbounded body into memory first (a multi-GB upload would otherwise
+    # spike worker memory before the size check ever ran).
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        chunk = await file.read(1024 * 1024)
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_EVIDENCE_BYTES:
+            raise HTTPException(400, "Evidence file must be 10 MB or smaller.")
+        chunks.append(chunk)
+    content = b"".join(chunks)
+    media_type, _inline = _sniff_evidence(file.filename or "evidence", content)
+    old_file = entry.evidence_file
     try:
         UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
         safe_name = Path(file.filename or "evidence").name
         stored = f"{entry.id}_{safe_name}"
         (UPLOAD_DIR / stored).write_bytes(content)
-        if entry.evidence_file and entry.evidence_file != stored:
-            old = UPLOAD_DIR / entry.evidence_file
-            if old.exists():
-                old.unlink()
     except OSError as exc:
         # E.g. the uploads volume is root-owned so the app user cannot write
         # into it. The diary entry itself is already saved; say exactly that
@@ -332,6 +409,16 @@ async def upload_evidence(
     )
     db.commit()
     db.refresh(entry)
+    # The old file is removed only after the new row committed, so a failed
+    # commit can never leave the row pointing at a deleted file. A failed
+    # cleanup here only orphans the old file — logged, never fatal.
+    if old_file and old_file != stored:
+        try:
+            old_path = UPLOAD_DIR / old_file
+            if old_path.exists():
+                old_path.unlink()
+        except OSError:
+            logger.warning("Could not delete replaced evidence file %s for entry %s", old_file, entry_id)
     return _serialize(db, entry)
 
 
@@ -352,12 +439,25 @@ def download_evidence(
     path = UPLOAD_DIR / entry.evidence_file
     if not path.exists():
         raise HTTPException(404, "Evidence file not found on server.")
+    # Never serve an unknown extension inline with a guessed media type:
+    # a pre-allowlist file (or a renamed script) must only ever download
+    # as an opaque attachment, never execute in the app's origin.
+    ext = Path(entry.evidence_file).suffix.lower()
+    preview = _EVIDENCE_PREVIEW_TYPES.get(ext)
+    attachment = _EVIDENCE_ATTACHMENT_TYPES.get(ext)
+    if preview is not None:
+        media_type, inline = preview[0], True
+    elif attachment is not None:
+        media_type, inline = attachment[0], False
+    else:
+        media_type, inline = "application/octet-stream", False
     return FileResponse(
         path,
+        media_type=media_type,
         filename=Path(entry.evidence_file).name,
-        # Inline (not attachment) so images and PDFs open in the browser
-        # for viewing instead of forcing a download.
-        content_disposition_type="inline",
+        # Inline only for previewable types (images, PDF) so they open in
+        # the browser; everything else forces a download.
+        content_disposition_type="inline" if inline else "attachment",
     )
 
 

@@ -360,3 +360,76 @@ def test_evidence_download_without_tenant_header_still_scoped(db, client):
     r = client.get(f"/api/daily-tasks/{entry_id}/evidence")
     assert r.status_code == 401
     client.delete(f"/api/daily-tasks/{entry_id}", headers=auth_headers(emp, tenant))
+
+
+def _make_entry_with_evidence(client, tenant, emp, filename, content, mime):
+    r = client.post("/api/daily-tasks", json=_entry_payload(), headers=auth_headers(emp, tenant))
+    assert r.status_code == 201, r.text
+    entry_id = r.json()["id"]
+    r = client.post(f"/api/daily-tasks/{entry_id}/evidence",
+                    files={"file": (filename, content, mime)},
+                    headers=auth_headers(emp, tenant))
+    return entry_id, r
+
+
+def test_evidence_rejects_html_svg_and_scripts(db, client):
+    tenant, _, emp, _, _ = _setup(db)
+    entry_id, r = _make_entry_with_evidence(
+        client, tenant, emp, "evil.html", b"<script>alert(1)</script>", "text/html")
+    assert r.status_code == 400, r.text
+    _, r = _make_entry_with_evidence(
+        client, tenant, emp, "evil.svg", b'<svg onload="alert(1)"></svg>', "image/svg+xml")
+    assert r.status_code == 400, r.text
+    _, r = _make_entry_with_evidence(
+        client, tenant, emp, "evil.js", b"alert(1)", "application/javascript")
+    assert r.status_code == 400, r.text
+    client.delete(f"/api/daily-tasks/{entry_id}", headers=auth_headers(emp, tenant))
+
+
+def test_evidence_rejects_content_mismatch(db, client):
+    tenant, _, emp, _, _ = _setup(db)
+    entry_id, r = _make_entry_with_evidence(
+        client, tenant, emp, "fake.png", b"this is not a png", "image/png")
+    assert r.status_code == 400, r.text
+    client.delete(f"/api/daily-tasks/{entry_id}", headers=auth_headers(emp, tenant))
+
+
+def test_evidence_office_doc_served_as_attachment(db, client):
+    tenant, _, emp, _, _ = _setup(db)
+    docx = b"PK\x03\x04" + b"\x00" * 32
+    entry_id, r = _make_entry_with_evidence(
+        client, tenant, emp, "report.docx", docx,
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    assert r.status_code == 200, r.text
+    r = client.get(f"/api/daily-tasks/{entry_id}/evidence", headers=auth_headers(emp, tenant))
+    assert r.status_code == 200, r.text
+    assert r.headers["content-disposition"].startswith("attachment")
+    assert "wordprocessingml" in r.headers["content-type"]
+    assert r.content == docx
+    client.delete(f"/api/daily-tasks/{entry_id}", headers=auth_headers(emp, tenant))
+
+
+def test_evidence_image_served_inline_with_explicit_type(db, client):
+    tenant, _, emp, _, _ = _setup(db)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    entry_id, r = _make_entry_with_evidence(client, tenant, emp, "shot.png", png, "image/png")
+    assert r.status_code == 200, r.text
+    r = client.get(f"/api/daily-tasks/{entry_id}/evidence", headers=auth_headers(emp, tenant))
+    assert r.status_code == 200, r.text
+    assert r.headers["content-disposition"].startswith("inline")
+    assert r.headers["content-type"].startswith("image/png")
+    client.delete(f"/api/daily-tasks/{entry_id}", headers=auth_headers(emp, tenant))
+
+
+def test_delete_entry_removes_file_after_commit(db, client):
+    from app.routers.daily_tasks import UPLOAD_DIR
+
+    tenant, _, emp, _, _ = _setup(db)
+    png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 16
+    entry_id, r = _make_entry_with_evidence(client, tenant, emp, "shot.png", png, "image/png")
+    assert r.status_code == 200, r.text
+    stored = r.json()["evidence_file"]
+    assert stored and (UPLOAD_DIR / stored).exists()
+    r = client.delete(f"/api/daily-tasks/{entry_id}", headers=auth_headers(emp, tenant))
+    assert r.status_code == 204, r.text
+    assert not (UPLOAD_DIR / stored).exists()

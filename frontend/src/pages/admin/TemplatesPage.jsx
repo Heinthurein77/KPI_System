@@ -7,6 +7,31 @@ import { useToast } from "../../context/ToastContext";
 import { createCustomTemplateWithRebalance, deleteTemplate, listTemplates } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
 
+const MONTH_NAMES_EN = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
+
+// The only period the M6 admin-creation gate allows right now: during the
+// grace week (days 1..SUBMISSION_GRACE_DAYS, default 7) the previous month;
+// from day 8 on, the current month. Mirrors BulkImportPage. The backend
+// stays the authority and rejects anything else with a clear message
+// (shown via getErrorMessage in the create toast error path).
+function allowedTemplatePeriod(now = new Date()) {
+  let year = now.getFullYear();
+  let month = now.getMonth() + 1;
+  const graceWeek = now.getDate() <= 7;
+  if (graceWeek) {
+    month -= 1;
+    if (month === 0) {
+      month = 12;
+      year -= 1;
+    }
+  }
+  const period = MONTH_NAMES_EN[month - 1];
+  return { year, period, label: `${period} ${year}`, graceWeek };
+}
+
 // Shown when the initial data load fails (instead of an endless spinner).
 // Lets the user retry the failed request.
 function LoadError({ message, onRetry }) {
@@ -39,6 +64,10 @@ export default function TemplatesPage() {
   const [customTarget, setCustomTarget] = useState("");
   const [customWeight, setCustomWeight] = useState("");
   const [customRecurring, setCustomRecurring] = useState(true);
+  // Target period for the new KPI — NOT the backend default (current month),
+  // which the M6 gate rejects during days 1–7. During grace week this is the
+  // previous month; from day 8 it is the current month.
+  const [customPeriod, setCustomPeriod] = useState(() => allowedTemplatePeriod());
   const [weightError, setWeightError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -127,8 +156,8 @@ export default function TemplatesPage() {
         metric_name: customMetricName.trim(),
         target: Number(customTarget),
         weight: Number(customWeight),
-        year: data.default_year,
-        period: data.default_period,
+        year: customPeriod.year,
+        period: customPeriod.period,
         is_recurring: customRecurring,
         weight_adjustments: changedTemplates.map((t) => ({
           template_id: t.id,
@@ -307,7 +336,7 @@ export default function TemplatesPage() {
             <p className="text-xs text-slate-500 mb-4">
               Assigns a KPI to a specific {isDeptAdmin ? "employee" : "person"} starting from{" "}
               <span className="font-medium text-slate-700">
-                {data.default_period} {data.default_year}
+                {customPeriod.label}
               </span>
               .
               {!isDeptAdmin && " A Dept Admin's own KPI skips department review and comes straight to you for final approval."}
@@ -335,6 +364,28 @@ export default function TemplatesPage() {
                   </option>
                 ))}
               </select>
+
+              {/* Target period — only the period the M6 gate allows is offered:
+                  previous month during days 1–7 (grace week), current month
+                  from day 8. Anything else the backend rejects with a clear
+                  message, shown in the error toast. */}
+              <div className="flex flex-wrap items-center gap-3">
+                <select
+                  value={`${customPeriod.year}-${customPeriod.period}`}
+                  onChange={(e) => {
+                    const [y, p] = e.target.value.split("|");
+                    setCustomPeriod({ year: Number(y), period: p, label: `${p} ${y}`, graceWeek: customPeriod.graceWeek });
+                  }}
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                >
+                  <option value={`${customPeriod.year}|${customPeriod.period}`}>{customPeriod.label}</option>
+                </select>
+                <span className="text-xs text-slate-500">
+                  {customPeriod.graceWeek
+                    ? "Days 1–7 (grace week): new KPIs target the previous month. The current month opens on day 8."
+                    : "New KPIs target the current month. The previous month's grace window has closed."}
+                </span>
+              </div>
 
               {/* New KPI name */}
               <input

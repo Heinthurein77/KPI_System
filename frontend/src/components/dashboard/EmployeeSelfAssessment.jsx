@@ -86,18 +86,40 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     return <PageLoading />;
   }
 
-  // Editable when: this is the exact current month AND submission is still a draft
-  // or was rejected (rejected KPIs can be corrected and resubmitted).
-  // is_month_end is now True for the entire current month (not just last 3 days).
-  const firstStatus = data.submissions[0]?.status;
-  const isEditable =
+  // Editability is PER ROW, not per period. An admin may add a new DRAFT row
+  // to a period where other rows are already submitted (e.g. a grace-week
+  // October KPI added after the employee submitted the rest). The old
+  // whole-form gate (first row's status) locked the entire form in that
+  // case — and the save payload still carried the submitted rows' scores,
+  // which the backend rejects — so the newly added row could never be
+  // filled at all. A row is editable when its period is fillable and the
+  // row itself is still a draft or was rejected.
+  const isRowEditable = (s) =>
     data.is_current_period &&
     data.is_month_end &&
-    (firstStatus === "draft" || firstStatus === "rejected");
-  const isResubmit = firstStatus === "rejected";
+    (s.status === "draft" || s.status === "rejected");
+  const isEditable = data.submissions.some(isRowEditable);
+  const isResubmit = data.submissions.some((s) => s.status === "rejected" && isRowEditable(s));
 
   // Future months are locked — employees cannot enter scores in advance.
   const isFutureLocked = !!data.is_future_period;
+
+  // Grace-week shortcut: when the current month's set has not opened yet
+  // (rollover banner above), the previous month is still fillable until
+  // day 7 — but nothing on this empty view says so. Offer a one-click jump
+  // to it instead of stranding the employee on the empty current month.
+  // data.months comes from the backend (full English month names).
+  const MONTH_FALLBACK = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+  ];
+  const monthList = data.months && data.months.length > 0 ? data.months : MONTH_FALLBACK;
+  const activeIdx = monthList.indexOf(data.active_period);
+  const prevIdx = activeIdx > 0 ? activeIdx - 1 : 11;
+  const gracePrevYear = activeIdx === 0 ? data.active_year - 1 : data.active_year;
+  const gracePrevPeriod = monthList[prevIdx];
+  const showGraceShortcut =
+    !!data.rollover_on && !isFutureLocked && activeIdx >= 0 && new Date().getDate() <= 7;
 
   function handleApply(nextParams) {
     setParams(nextParams);
@@ -106,6 +128,10 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
 
   function validateScores(nextScores) {
     const exceeded = data.submissions.find((submission) => {
+      // Only editable rows are validated: already-submitted rows carry
+      // stored scores (including legacy over-target ones) that the user
+      // cannot change, and they must not block saving the editable rows.
+      if (!isRowEditable(submission)) return false;
       const value = nextScores[submission.id];
       return value !== "" && value !== null && value !== undefined
         && Number(value) > Number(submission.target_snapshot ?? submission.kpi_template.target);
@@ -159,6 +185,11 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   function buildScoresPayload() {
     const payload = {};
     for (const [id, value] of Object.entries(scores)) {
+      // Only editable rows may be sent: the backend rejects the whole save
+      // if any submitted (PENDING/APPROVED) row's id is included, and their
+      // scores are already stored anyway.
+      const row = data.submissions.find((s) => String(s.id) === String(id));
+      if (row && !isRowEditable(row)) continue;
       if (value !== "" && value !== null && value !== undefined) {
         payload[id] = Number(value);
       }
@@ -168,10 +199,13 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
 
   // Only send comments the user actually changed (trimmed); an emptied field
   // clears the stored comment. Untouched comments are left alone server-side.
+  // Comments on non-editable rows are never sent (backend rejects them).
   function buildCommentsPayload() {
     const payload = {};
     const initial = initialCommentsRef.current;
     for (const [id, value] of Object.entries(comments)) {
+      const row = data.submissions.find((s) => String(s.id) === String(id));
+      if (row && !isRowEditable(row)) continue;
       const trimmed = (value ?? "").trim();
       if (trimmed !== (initial[id] ?? "").trim()) {
         payload[id] = trimmed;
@@ -229,13 +263,23 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   function requestSubmit() {
     if (!validateScores(scores)) return;
     if (!validateTotalWeight()) return;
+    // The backend refuses to submit while any submittable row is unscored —
+    // say so here instead of after the confirm dialog.
+    const unscored = data.submissions.find(
+      (s) => isRowEditable(s) && (scores[s.id] === "" || scores[s.id] === null || scores[s.id] === undefined)
+    );
+    if (unscored) {
+      setError("Please score every metric before submitting.");
+      return;
+    }
     setError(null);
     setConfirmSubmit(true);
   }
 
-  // Rows for the submit confirmation summary: metric name + entered score.
+  // Rows for the submit confirmation summary: only rows that will actually
+  // be (re)submitted — already-submitted rows stay untouched.
   function submitSummaryRows() {
-    return data.submissions.map((s) => {
+    return data.submissions.filter(isRowEditable).map((s) => {
       const value = scores[s.id];
       const filled = value !== "" && value !== null && value !== undefined;
       const target = s.target_snapshot ?? s.kpi_template.target;
@@ -277,15 +321,26 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
           <svg className="h-5 w-5 text-sky-500 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
           </svg>
-          <p className="text-sm text-sky-800">
-            KPIs for{" "}
-            <span className="font-semibold">{data.active_period} {data.active_year}</span>{" "}
-            start on{" "}
-            <span className="font-semibold">
-              {new Date(`${data.rollover_on}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}
-            </span>{" "}
-            — they will appear here automatically from that day.
-          </p>
+          <div className="space-y-2">
+            <p className="text-sm text-sky-800">
+              KPIs for{" "}
+              <span className="font-semibold">{data.active_period} {data.active_year}</span>{" "}
+              start on{" "}
+              <span className="font-semibold">
+                {new Date(`${data.rollover_on}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}
+              </span>{" "}
+              — they will appear here automatically from that day.
+            </p>
+            {showGraceShortcut && (
+              <button
+                type="button"
+                onClick={() => handleApply({ year: gracePrevYear, period: gracePrevPeriod })}
+                className="inline-flex items-center gap-1.5 rounded-full bg-sky-600 px-4 py-1.5 text-sm font-medium text-white hover:bg-sky-700 transition"
+              >
+                → {gracePrevPeriod} {gracePrevYear} KPIs ကို ဖြည့်ရန် (grace week အတွင်း ဖြည့်လို့ရသေးတယ်)
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -371,7 +426,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
               <KpiCard
                 key={s.id}
                 submission={s}
-                editableSelf={isEditable}
+                editableSelf={isRowEditable(s)}
                 selfScoreValue={scores[s.id]}
                 selfScoreInvalid={invalidScoreId === s.id}
                 onSelfScoreChange={handleSelfScoreChange}

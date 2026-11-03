@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const DEFAULT_MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -20,6 +20,13 @@ export default function PeriodSelector({
   const [period, setPeriod] = useState(activePeriod);
   const [status, setStatus] = useState(statusFilter || "");
   const [departmentId, setDepartmentId] = useState(activeDepartmentId ?? "");
+
+  // Follow the active period when the parent jumps to another month (e.g.
+  // the grace-week shortcut in EmployeeSelfAssessment) — otherwise the
+  // dropdowns keep showing the old month while the data is for the new one,
+  // and a bare Apply would silently jump back.
+  useEffect(() => { setYear(activeYear); }, [activeYear]);
+  useEffect(() => { setPeriod(activePeriod); }, [activePeriod]);
 
   function submit(e) {
     e.preventDefault();

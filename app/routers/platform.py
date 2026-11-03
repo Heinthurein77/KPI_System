@@ -35,7 +35,7 @@ def platform_login(request: Request, response: Response, payload: LoginRequest, 
 
     token = create_session_token(user.id, tenant_id=None, token_version=user.token_version or 0)
     set_session_cookie(response, token, secure=_request_is_secure(request))
-    return LoginResponse(access_token=token, user=user)
+    return LoginResponse(user=user)
 
 
 @router.get("/auth/me", response_model=UserOut)

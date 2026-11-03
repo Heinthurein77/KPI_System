@@ -198,9 +198,7 @@ def test_must_change_password_blocks_api_access(client, db):
         headers={"X-Tenant-Slug": tenant.slug},
     )
     assert login.status_code == 200
-    fresh_headers = {
-        "Authorization": f"Bearer {login.json()['access_token']}",
-        "X-Tenant-Slug": tenant.slug,
-    }
+    # TestClient persists the login cookie like a browser; no token in body.
+    fresh_headers = {"X-Tenant-Slug": tenant.slug}
     unblocked = client.get("/api/dashboard", headers=fresh_headers)
     assert unblocked.status_code == 200

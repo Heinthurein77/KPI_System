@@ -21,7 +21,7 @@ def test_tenant_login_success(db, client):
     body = resp.json()
     assert body["user"]["role"] == "employee"
     assert body["user"]["tenant_id"] == tenant.id
-    assert body["access_token"]
+    assert "access_token" not in body  # cookie-only sessions: no token in the body
 
 
 def test_tenant_login_wrong_password(db, client):
@@ -212,3 +212,49 @@ def test_login_rate_limit_returns_429_after_10_attempts(db, client):
     assert codes[:10] == [401] * 10
     assert codes[10] == 429
     assert "Too many attempts" in resp.json()["detail"]
+
+
+def test_logout_revokes_token_server_side(db, client):
+    """A replayed token must stop working after logout, not just lose its cookie."""
+    from app.tests.factories import DEFAULT_PASSWORD
+
+    tenant = make_tenant(db)
+    user = make_user(db, tenant, UserRole.EMPLOYEE)
+    r = client.post(
+        "/api/auth/login",
+        json={"email": user.email, "password": DEFAULT_PASSWORD},
+        headers={"X-Tenant-Slug": tenant.slug},
+    )
+    assert r.status_code == 200
+    assert "access_token" not in r.json()  # cookie-only sessions
+    first_token = client.cookies.get("access_token")
+    assert first_token
+    # A second session for the same user, created before the logout.
+    r = client.post(
+        "/api/auth/login",
+        json={"email": user.email, "password": DEFAULT_PASSWORD},
+        headers={"X-Tenant-Slug": tenant.slug},
+    )
+    assert r.status_code == 200
+    second_token = client.cookies.get("access_token")
+    assert second_token and second_token != first_token
+
+    # Log out the FIRST session explicitly (the jar currently holds the second).
+    client.cookies.clear()
+    r = client.post(
+        "/api/auth/logout",
+        headers={"X-Tenant-Slug": tenant.slug, "Cookie": f"access_token={first_token}"},
+    )
+    assert r.status_code == 204
+    # Replay the logged-out token: must be 401 (revoked server-side).
+    replay = client.get(
+        "/api/auth/me",
+        headers={"X-Tenant-Slug": tenant.slug, "Cookie": f"access_token={first_token}"},
+    )
+    assert replay.status_code == 401
+    # The second session still works.
+    alive = client.get(
+        "/api/auth/me",
+        headers={"X-Tenant-Slug": tenant.slug, "Cookie": f"access_token={second_token}"},
+    )
+    assert alive.status_code == 200

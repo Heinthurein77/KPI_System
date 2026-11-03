@@ -1,19 +1,24 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from app.core.deps import get_current_user
+from app.core.deps import _session_token, get_current_user
 from app.core.rate_limit import LOGIN_RATE_LIMIT, limiter
 from app.core.security import (
     DUMMY_PASSWORD_HASH,
     _request_is_secure,
     clear_session_cookie,
     create_session_token,
+    decode_session_token,
     hash_password,
     set_session_cookie,
     verify_password,
 )
 from app.core.tenant import get_current_tenant
 from app.database import get_db
+from app.models.revoked_token import RevokedToken
 from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.auth import ChangePasswordRequest, LoginRequest, LoginResponse
@@ -47,14 +52,37 @@ def login(
 
     token = create_session_token(user.id, tenant_id=tenant.id, token_version=user.token_version or 0)
     set_session_cookie(response, token, secure=_request_is_secure(request))
-    return LoginResponse(access_token=token, user=user)
+    return LoginResponse(user=user)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-def logout(response: Response):
-    """Clear the session cookie. The JWT itself is stateless, so logout is
-    cookie removal; server-side invalidation happens via token_version on
-    password change."""
+def logout(request: Request, response: Response, db: Session = Depends(get_db)):
+    """Clear the session cookie AND revoke the token server-side, so a
+    replayed cookie/token stops working immediately instead of staying
+    valid until its 24 h expiry.
+
+    Deliberately unauthenticated: it must work for platform admins (whose
+    sessions fail tenant-scoped auth) and for already-expired tokens —
+    in all cases the cookie is cleared and the response is 204.
+    """
+    token = _session_token(request)
+    claims = decode_session_token(token) if token else None
+    if claims is not None and claims.jti is not None:
+        try:
+            db.query(RevokedToken).filter(RevokedToken.expires_at < datetime.now(timezone.utc)).delete(
+                synchronize_session=False
+            )
+            db.add(
+                RevokedToken(
+                    jti=claims.jti,
+                    user_id=claims.user_id,
+                    expires_at=claims.exp or datetime.now(timezone.utc),
+                )
+            )
+            db.commit()
+        except IntegrityError:
+            # Double logout: the token is already revoked. Still 204.
+            db.rollback()
     clear_session_cookie(response)
 
 

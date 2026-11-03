@@ -9,8 +9,9 @@ class LoginRequest(BaseModel):
 
 
 class LoginResponse(BaseModel):
-    access_token: str
-    token_type: str = "bearer"
+    # Cookie-only sessions: the token is set as an httpOnly cookie and is
+    # deliberately NOT returned in the body — a token in the response body
+    # can leak through logs/proxies and stays usable after logout.
     user: UserOut
 
 

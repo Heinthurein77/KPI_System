@@ -35,6 +35,11 @@ class SessionClaims(NamedTuple):
     user_id: int
     tenant_id: int | None
     token_version: int
+    # Unique token id: logout records it in revoked_tokens so the token
+    # stops working immediately. Tokens issued before jti existed (up to
+    # 24 h before this change) carry None and skip the revocation check.
+    jti: str | None = None
+    exp: datetime | None = None
 
 
 #: Name of the httpOnly session cookie. The JWT is readable by JS nowhere —
@@ -81,9 +86,14 @@ def create_session_token(user_id: int, tenant_id: int | None, token_version: int
     token_version is bumped whenever the password changes; get_current_user
     rejects tokens whose version no longer matches the user row, so a
     password change immediately invalidates all existing sessions.
+
+    jti is a per-token id: logout records it in revoked_tokens, so logout
+    actually kills that token instead of only clearing the browser cookie.
     """
+    import uuid
+
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    payload = {"sub": str(user_id), "tenant_id": tenant_id, "ver": token_version, "exp": expire}
+    payload = {"sub": str(user_id), "tenant_id": tenant_id, "ver": token_version, "exp": expire, "jti": uuid.uuid4().hex}
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=JWT_ALGORITHM)
 
 
@@ -113,4 +123,12 @@ def decode_session_token(token: str) -> SessionClaims | None:
     except (TypeError, ValueError):
         return None
 
-    return SessionClaims(user_id=user_id, tenant_id=tenant_id, token_version=token_version)
+    exp = payload.get("exp")
+    exp_dt = None
+    if isinstance(exp, (int, float)):
+        exp_dt = datetime.fromtimestamp(exp, tz=timezone.utc)
+    jti = payload.get("jti")
+    if jti is not None and not isinstance(jti, str):
+        return None
+
+    return SessionClaims(user_id=user_id, tenant_id=tenant_id, token_version=token_version, jti=jti, exp=exp_dt)

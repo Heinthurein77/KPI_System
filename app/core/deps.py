@@ -2,6 +2,7 @@ from fastapi import Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 from app.core.security import SESSION_COOKIE_NAME, decode_session_token
 from app.database import get_db
+from app.models.revoked_token import RevokedToken
 from app.models.tenant import TenantStatus
 from app.models.user import User, UserRole
 class NotAuthenticated(HTTPException):
@@ -28,6 +29,14 @@ def _bearer_token(request: Request) -> str | None:
     return auth_header[len("bearer "):].strip()
 
 
+def _assert_not_revoked(db: Session, claims) -> None:
+    """A logged-out token stays dead even if its cookie/token is replayed."""
+    if claims.jti is None:
+        return  # pre-jti token: expires on its own within 24 h
+    if db.get(RevokedToken, claims.jti) is not None:
+        raise NotAuthenticated()
+
+
 def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     token = _session_token(request)
     if not token:
@@ -45,6 +54,8 @@ def get_current_user(request: Request, db: Session = Depends(get_db)) -> User:
     # the bump carry the old version and are rejected here.
     if claims.token_version != (user.token_version or 0):
         raise NotAuthenticated()
+
+    _assert_not_revoked(db, claims)
 
     resolved_tenant = getattr(request.state, "tenant", None)
     tenant_exempt = getattr(request.state, "tenant_exempt", False)
@@ -115,6 +126,8 @@ def get_current_user_no_tenant(request: Request, db: Session = Depends(get_db)) 
 
     if claims.token_version != (user.token_version or 0):
         raise NotAuthenticated()
+
+    _assert_not_revoked(db, claims)
 
     if user.must_change_password:
         path = request.url.path.rstrip("/")

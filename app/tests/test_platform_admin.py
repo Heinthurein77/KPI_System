@@ -19,7 +19,7 @@ def test_platform_login_success(db, client):
     body = resp.json()
     assert body["user"]["role"] == "super_admin"
     assert body["user"]["tenant_id"] is None
-    assert body["access_token"]
+    assert "access_token" not in body  # cookie-only sessions: no token in the body
 
 
 def test_platform_login_wrong_password(db, client):

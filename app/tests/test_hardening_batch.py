@@ -48,7 +48,7 @@ def test_login_sets_httponly_session_cookie(client, db):
     )
     assert r.status_code == 200
     cookie = r.headers.get("set-cookie", "")
-    assert "access_token=" in cookie
+    assert "access_token=" in cookie  # the session cookie, not a body token
     assert "HttpOnly" in cookie
 
 

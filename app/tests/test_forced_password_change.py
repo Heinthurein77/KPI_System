@@ -106,7 +106,16 @@ def test_bulk_import_sets_must_change_password(db):
     wb.save(buf)
     parsed = bulk_import_service.parse_import_file(buf.getvalue(), db, tenant.id)
     assert parsed.ok
-    bulk_import_service.execute_import(db, admin, parsed)
+    # M6 gate: bulk import targets the current month, blocked during days
+    # 1..grace_days — pin the import clock to day 10 of the current month.
+    from unittest.mock import patch
+
+    from app.core.timezone import today as _app_today
+
+    with patch.object(
+        bulk_import_service, "app_today", return_value=_app_today().replace(day=10)
+    ):
+        bulk_import_service.execute_import(db, admin, parsed)
 
     from sqlalchemy import select
 

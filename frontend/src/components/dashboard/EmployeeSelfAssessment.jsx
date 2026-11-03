@@ -32,7 +32,7 @@ function LoadError({ message, onRetry }) {
 const TARGET_EXCEEDED_MESSAGE = "Target ထက်ကျော်နေပါ၍ပြန်ထည့်ရန်";
 const WEIGHT_TOTAL_MESSAGE = "Weight စုစုပေါင်းသည် 100% ဖြစ်ရပါမည်။ (100 ထက် ကျော်လွန်နေပါသည် သို့မဟုတ် 100 မပြည့်သေးပါ)";
 
-export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI records" }) {
+export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI records", initialParams = {}, navKey = "" }) {
   const toast = useToast();
   const { user } = useAuth();
   const isDeptAdmin = user?.role === "dept_admin";
@@ -46,6 +46,8 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   const [saving, setSaving] = useState(false);
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [params, setParams] = useState({});
+  const paramsRef = useRef(params);
+  const firstNavRef = useRef(true);
   const loadIdRef = useRef(0);
 
   function load(nextParams) {
@@ -80,6 +82,22 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     load(params);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Same notification-link problem as the admin dashboards: an approval or
+  // rejection notice links to /dashboard?year&period, but this component
+  // used to ignore the URL entirely, so clicking it while already on the
+  // dashboard left the old month on screen. Follow the query string.
+  useEffect(() => {
+    if (firstNavRef.current) {
+      firstNavRef.current = false;
+      return;
+    }
+    const next = { ...paramsRef.current, ...initialParams };
+    paramsRef.current = next;
+    setParams(next);
+    load(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navKey]);
 
   if (!data) {
     if (loadError) return <LoadError message={loadError} onRetry={() => load(params)} />;
@@ -122,6 +140,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     !!data.rollover_on && !isFutureLocked && activeIdx >= 0 && new Date().getDate() <= 7;
 
   function handleApply(nextParams) {
+    paramsRef.current = nextParams;
     setParams(nextParams);
     load(nextParams);
   }

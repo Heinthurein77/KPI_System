@@ -29,11 +29,13 @@ function LoadError({ message, onRetry }) {
   );
 }
 
-function DeptAdminDashboard({ initialParams }) {
+function DeptAdminDashboard({ initialParams, navKey }) {
   const toast = useToast();
   const [data, setData] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [params, setParams] = useState(initialParams);
+  const paramsRef = useRef(params);
+  const firstNavRef = useRef(true);
   const loadIdRef = useRef(0);
 
   function load(nextParams) {
@@ -59,6 +61,24 @@ function DeptAdminDashboard({ initialParams }) {
     load(params);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A notification link (e.g. /dashboard?year=2026&period=October) navigates
+  // inside the SPA, so this component does NOT remount — its mount-only load
+  // above would keep showing the old period while the URL says October, and
+  // the newly submitted approval forms never appear. Follow the URL instead:
+  // whenever the query string changes, merge its year/period over the current
+  // params (filters preserved) and reload. The first run is the mount load.
+  useEffect(() => {
+    if (firstNavRef.current) {
+      firstNavRef.current = false;
+      return;
+    }
+    const next = { ...paramsRef.current, ...initialParams };
+    paramsRef.current = next;
+    setParams(next);
+    load(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navKey]);
 
   function reload() {
     load(params);
@@ -101,6 +121,7 @@ function DeptAdminDashboard({ initialParams }) {
     <TeamReviewBoard
       data={data}
       onApply={(next) => {
+        paramsRef.current = next;
         setParams(next);
         load(next);
       }}
@@ -116,11 +137,13 @@ function DeptAdminDashboard({ initialParams }) {
   );
 }
 
-function TenantAdminDashboard({ user, initialParams }) {
+function TenantAdminDashboard({ user, initialParams, navKey }) {
   const toast = useToast();
   const [data, setData] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [params, setParams] = useState(initialParams);
+  const paramsRef = useRef(params);
+  const firstNavRef = useRef(true);
   const loadIdRef = useRef(0);
 
   function load(nextParams) {
@@ -144,6 +167,21 @@ function TenantAdminDashboard({ user, initialParams }) {
     load(params);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Same notification-link problem as DeptAdminDashboard: follow the URL's
+  // year/period when the query string changes instead of staying on the
+  // mount-time period. First run is the mount load.
+  useEffect(() => {
+    if (firstNavRef.current) {
+      firstNavRef.current = false;
+      return;
+    }
+    const next = { ...paramsRef.current, ...initialParams };
+    paramsRef.current = next;
+    setParams(next);
+    load(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navKey]);
 
   function reload() {
     load(params);
@@ -190,6 +228,7 @@ function TenantAdminDashboard({ user, initialParams }) {
     <TeamReviewBoard
       data={data}
       onApply={(next) => {
+        paramsRef.current = next;
         setParams(next);
         load(next);
       }}
@@ -219,6 +258,9 @@ export default function DashboardPage() {
     ...(urlYear ? { year: Number(urlYear) } : {}),
     ...(urlPeriod ? { period: urlPeriod } : {}),
   };
+  // The query string itself: dashboards watch it so a notification link
+  // navigates the already-mounted dashboard to the linked month.
+  const navKey = searchParams.toString();
 
   const title =
     user.role === "employee"
@@ -229,9 +271,9 @@ export default function DashboardPage() {
 
   return (
     <AppShell title={title}>
-      {user.role === "employee" && <EmployeeSelfAssessment fetcher={getDashboard} />}
-      {user.role === "dept_admin" && <DeptAdminDashboard initialParams={initialParams} />}
-      {user.role === "tenant_admin" && <TenantAdminDashboard user={user} initialParams={initialParams} />}
+      {user.role === "employee" && <EmployeeSelfAssessment fetcher={getDashboard} initialParams={initialParams} navKey={navKey} />}
+      {user.role === "dept_admin" && <DeptAdminDashboard initialParams={initialParams} navKey={navKey} />}
+      {user.role === "tenant_admin" && <TenantAdminDashboard user={user} initialParams={initialParams} navKey={navKey} />}
       {user.role === "super_admin" && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center">
           <p className="text-sm text-slate-500">

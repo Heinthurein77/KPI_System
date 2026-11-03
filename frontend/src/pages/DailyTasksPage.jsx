@@ -675,11 +675,34 @@ export default function DailyTasksPage() {
       </section>
       )}
 
-      {/* Month-end review — mine history tab: own review; team tab: selected member only */}
+      {/* Month-end review — mine history tab: own review; team tab: selected member only.
+          The saved review is shown separately, read-only, like the Excel
+          Monthly Dashboard — the form below is only for editing it. */}
       {((tab === "mine" && mineView === "history" && user.role !== "tenant_admin") ||
         (tab === "team" && viewUserId !== "")) && (
+      <>
+      {review && (review.achievements || review.challenges_solutions || review.improvements_next_focus || review.hod_evaluation) && (
+      <section className="rounded-3xl bg-indigo-50/60 p-5 shadow-sm ring-1 ring-indigo-100">
+        <h2 className="font-semibold text-slate-800">
+          သိမ်းပြီးသော သုံးသပ်ချက် · Saved Review — {year}-{String(month).padStart(2, "0")}{viewingName ? ` · ${viewingName}` : ""}
+        </h2>
+        <div className="mt-3 grid gap-3">
+          {[
+            ["ဒီလ၏ အဓိက အောင်မြင်ပြီးစီးမှုများ", "Major Achievements", review.achievements],
+            ["ကြုံတွေ့ခဲ့သော အခက်အခဲများနှင့် ဖြေရှင်းပုံ", "Key Challenges & Solutions", review.challenges_solutions],
+            ["နောက်လတွင် ပိုမိုကောင်းမွန်အောင် ပြင်ဆင်မည့်အချက်များ", "Improvement / Next Month Focus", review.improvements_next_focus],
+            ["HOD ၏ အကဲဖြတ်ချက်နှင့် လမ်းညွှန်ချက်", "HOD Evaluation", review.hod_evaluation],
+          ].map(([label, sub, value]) => (
+            <div key={sub}>
+              <p className="text-xs font-medium text-slate-500">{label} · {sub}</p>
+              <p className="mt-1 whitespace-pre-wrap rounded-2xl bg-white px-3 py-2 text-sm text-slate-800">{value?.trim() ? value : "—"}</p>
+            </div>
+          ))}
+        </div>
+      </section>
+      )}
       <section className="rounded-3xl bg-white p-5 shadow-sm">
-        <h2 className="font-semibold text-slate-800">လဆုံး သုံးသပ်ချက် · Month-End Review</h2>
+        <h2 className="font-semibold text-slate-800">သုံးသပ်ချက် ပြင်ဆင်ရန် · Edit Review</h2>
         <div className="mt-3 grid gap-3">
           <Field label="ဒီလ၏ အဓိက အောင်မြင်ပြီးစီးမှုများ" sub="Major Achievements">
             <textarea rows={2} className={inputCls} value={reviewDraft.achievements}
@@ -699,15 +722,13 @@ export default function DailyTasksPage() {
                 onChange={(e) => setReviewDraft({ ...reviewDraft, hod_evaluation: e.target.value })} />
             </Field>
           )}
-          {review?.hod_evaluation && (!isSupervisor || reviewUserId === user.id) && (
-            <p className="rounded-2xl bg-amber-50 px-3 py-2 text-sm text-amber-900">HOD Evaluation: {review.hod_evaluation}</p>
-          )}
           <button className="w-fit rounded-full bg-indigo-600 px-5 py-2 text-sm text-white"
             onClick={requestSaveReview}>
             Review သိမ်းရန်
           </button>
         </div>
       </section>
+      </>
       )}
 
       {/* Audit log — TENANT ADMIN ONLY. Dept admins and employees never see

@@ -365,7 +365,7 @@ export default function KpiCard({
               type="button"
               disabled={!isValidScore(deptScore, snapTarget)}
               onClick={() => setConfirm({ kind: "deptApprove" })}
-              className="flex-1 inline-flex items-center justify-center gap-1 rounded-xl bg-gradient-to-r from-brand-600 to-brand-500 px-3 py-2 text-xs font-bold text-white shadow-md shadow-brand-500/25 hover:shadow-lg hover:-translate-y-px active:translate-y-0 transition disabled:opacity-60 disabled:hover:translate-y-0"
+              className="flex-1 inline-flex items-center justify-center gap-1 rounded-xl bg-brand-600 hover:bg-brand-700 px-3 py-2 text-xs font-bold text-white shadow-sm transition disabled:opacity-60"
             >
               <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.4">
                 <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
@@ -417,7 +417,7 @@ export default function KpiCard({
                 type="button"
                 disabled={!isValidScore(finalScore, snapTarget)}
                 onClick={() => setConfirm({ kind: "finalApprove" })}
-                className="w-full inline-flex items-center justify-center gap-1 rounded-xl bg-gradient-to-r from-emerald-600 to-green-500 px-3 py-2 text-xs font-bold text-white shadow-md shadow-emerald-500/25 hover:shadow-lg hover:-translate-y-px active:translate-y-0 transition whitespace-nowrap disabled:opacity-60 disabled:hover:translate-y-0"
+                className="w-full inline-flex items-center justify-center gap-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-3 py-2 text-xs font-bold text-white shadow-sm transition whitespace-nowrap disabled:opacity-60"
               >
                 <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.4">
                   <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />
@@ -468,7 +468,7 @@ export default function KpiCard({
                     type="button"
                     disabled={!isValidScore(overrideScore, snapTarget)}
                     onClick={() => setConfirm({ kind: "override" })}
-                    className="w-full rounded-xl bg-gradient-to-r from-indigo-600 to-violet-500 px-3 py-2 text-xs font-bold text-white shadow-md shadow-indigo-500/25 hover:shadow-lg hover:-translate-y-px active:translate-y-0 transition disabled:opacity-60 disabled:hover:translate-y-0"
+                    className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-700 px-3 py-2 text-xs font-bold text-white shadow-sm transition disabled:opacity-60"
                   >
                     Override &amp; Approve
                   </button>

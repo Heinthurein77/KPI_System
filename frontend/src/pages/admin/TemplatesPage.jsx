@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import AppShell from "../../components/layout/AppShell";
 import PageLoading from "../../components/ui/PageLoading";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
@@ -48,6 +48,89 @@ function LoadError({ message, onRetry }) {
         Try again
       </button>
     </div>
+  );
+}
+
+// Metric name that clamps to 2 lines with an expand affordance, but only
+// when the name actually overflows (measured, not guessed from length, so
+// it behaves the same at desktop and mobile widths). The full name is
+// always one click away — never silently truncated.
+function ExpandableMetricName({ name }) {
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+  const ref = useRef(null);
+  const expandedRef = useRef(expanded);
+  expandedRef.current = expanded;
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // NOTE: scrollHeight does NOT reveal overflow on a line-clamped
+    // element in Chromium — it reports the clamped height. So measure a
+    // hidden unclamped clone at the same width instead.
+    const check = () => {
+      if (expandedRef.current) return;
+      const clone = el.cloneNode(true);
+      clone.style.position = "absolute";
+      clone.style.visibility = "hidden";
+      clone.style.display = "block";
+      clone.style.overflow = "visible";
+      clone.style.width = `${el.clientWidth}px`;
+      clone.style.webkitLineClamp = "unset";
+      el.parentNode.appendChild(clone);
+      const overflows = clone.scrollHeight > el.clientHeight + 1;
+      clone.remove();
+      setOverflows(overflows);
+    };
+    check();
+    window.addEventListener("resize", check);
+    if (document.fonts?.ready) document.fonts.ready.then(check).catch(() => {});
+    return () => window.removeEventListener("resize", check);
+  }, [name]);
+  const toggleable = overflows || expanded;
+  return (
+    <div>
+      <span
+        ref={ref}
+        title={name}
+        onClick={() => toggleable && setExpanded((v) => !v)}
+        className={`text-sm font-medium text-slate-800 ${expanded ? "block" : "line-clamp-2"} ${toggleable ? "cursor-pointer" : ""}`}
+      >
+        {name}
+      </span>
+      {overflows && !expanded && (
+        <button type="button" onClick={() => setExpanded(true)} className="mt-0.5 text-xs font-medium text-brand-600 hover:text-brand-700">
+          အပြည့်ကြည့်ရန်
+        </button>
+      )}
+      {expanded && (
+        <button type="button" onClick={() => setExpanded(false)} className="mt-0.5 text-xs font-medium text-brand-600 hover:text-brand-700">
+          ချုံ့ရန်
+        </button>
+      )}
+    </div>
+  );
+}
+
+// Scope badge, stacked so long person names wrap at word boundaries
+// instead of splitting awkwardly mid-pill, with "recurring" on its own line.
+function ScopePill({ t }) {
+  if (!t.is_custom) {
+    return <span className="text-slate-600">{t.department ? t.department.name : "All Departments"}</span>;
+  }
+  return (
+    <span className="inline-flex flex-col items-start gap-0.5 rounded-xl bg-violet-50 px-2.5 py-1.5 ring-1 ring-inset ring-violet-200">
+      <span className="flex items-center gap-1.5 text-xs font-semibold text-violet-700 leading-snug">
+        <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z"
+          />
+        </svg>
+        <span className="break-words">{t.employee?.name}</span>
+      </span>
+      {t.is_recurring && <span className="text-[11px] text-violet-400 font-normal">recurring</span>}
+    </span>
   );
 }
 
@@ -305,7 +388,7 @@ export default function TemplatesPage() {
         <button
           type="button"
           onClick={() => setShowAddCustom(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 transition"
+          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
         >
           <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
             <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
@@ -351,14 +434,14 @@ export default function TemplatesPage() {
               </button>
             )}
           </div>
-          <div className="overflow-x-auto">
+          <div className="hidden lg:block overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-100">
               <thead>
                 <tr>
-                  <th className="px-6 py-3 text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Metric</th>
-                  <th className="px-6 py-3 text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Target</th>
-                  <th className="px-6 py-3 text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Weight</th>
-                  <th className="px-6 py-3 text-left text-[11px] font-semibold text-slate-400 uppercase tracking-wider">Scope</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">Metric</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">Target</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">Weight</th>
+                  <th className="px-6 py-3 text-left text-xs font-semibold text-slate-400 uppercase tracking-wider">Scope</th>
                   <th className="px-6 py-3"></th>
                 </tr>
               </thead>
@@ -395,29 +478,13 @@ export default function TemplatesPage() {
                             className="w-full rounded-lg border border-indigo-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-800 outline-none focus:ring-2 focus:ring-indigo-200"
                           />
                         ) : (
-                          t.metric_name
+                          <ExpandableMetricName name={t.metric_name} />
                         )}
                       </td>
                       <td className="px-6 py-4 text-sm text-slate-500 tabular-nums">{t.target}</td>
                       <td className="px-6 py-4 text-sm text-slate-500 tabular-nums">{t.weight}</td>
                       <td className="px-6 py-4 text-sm">
-                        {t.is_custom ? (
-                          <span className="inline-flex items-center gap-1.5 rounded-full bg-violet-50 px-2.5 py-1 text-xs font-semibold text-violet-700 ring-1 ring-inset ring-violet-200">
-                            <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M15.75 6a3.75 3.75 0 1 1-7.5 0 3.75 3.75 0 0 1 7.5 0ZM4.501 20.118a7.5 7.5 0 0 1 14.998 0A17.933 17.933 0 0 1 12 21.75c-2.676 0-5.216-.584-7.499-1.632Z"
-                              />
-                            </svg>
-                            {t.employee?.name}
-                            {t.is_recurring && (
-                              <span className="ml-1 text-violet-400 font-normal">· recurring</span>
-                            )}
-                          </span>
-                        ) : (
-                          <span className="text-slate-600">{t.department ? t.department.name : "All Departments"}</span>
-                        )}
+                        <ScopePill t={t} />
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
@@ -427,7 +494,7 @@ export default function TemplatesPage() {
                                 type="button"
                                 disabled={renamingBusy}
                                 onClick={saveRename}
-                                className="inline-flex items-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 transition disabled:opacity-60"
+                                className="inline-flex items-center rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 transition disabled:opacity-60"
                               >
                                 Save
                               </button>
@@ -492,6 +559,82 @@ export default function TemplatesPage() {
               </tbody>
             </table>
           </div>
+          <div className="lg:hidden divide-y divide-slate-100">
+            {filteredTemplates.length === 0 ? (
+              <p className="px-6 py-10 text-center text-sm text-slate-400">
+                {data.kpi_templates.length === 0 ? (
+                  "No KPI metrics configured yet."
+                ) : (
+                  <>
+                    No metrics match your filters.{" "}
+                    <button type="button" onClick={clearFilters} className="font-medium text-brand-600 hover:text-brand-700">
+                      Clear filters
+                    </button>
+                  </>
+                )}
+              </p>
+            ) : (
+              filteredTemplates.map((t) => (
+                <div key={t.id} className="px-6 py-4 space-y-2">
+                  {renamingId === t.id ? (
+                    <input
+                      autoFocus
+                      value={renamingName}
+                      disabled={renamingBusy}
+                      onChange={(e) => setRenamingName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveRename();
+                        if (e.key === "Escape") setRenamingId(null);
+                      }}
+                      className="w-full rounded-lg border border-indigo-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-800 outline-none focus:ring-2 focus:ring-indigo-200"
+                    />
+                  ) : (
+                    <ExpandableMetricName name={t.metric_name} />
+                  )}
+                  <p className="text-sm text-slate-500 tabular-nums">
+                    Target {t.target} · Weight {t.weight}
+                  </p>
+                  <ScopePill t={t} />
+                  <div className="flex items-center gap-2 pt-1">
+                    {renamingId === t.id ? (
+                      <>
+                        <button
+                          type="button"
+                          disabled={renamingBusy}
+                          onClick={saveRename}
+                          className="inline-flex items-center rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-brand-700 transition disabled:opacity-60"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setRenamingId(null)}
+                          className="inline-flex items-center rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-50 transition"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => startRename(t)}
+                        className="inline-flex items-center rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-500 hover:bg-slate-50 transition"
+                      >
+                        Rename
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setPendingDelete(t)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100 hover:border-red-300 transition"
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
         </div>
 
       <Modal
@@ -499,7 +642,7 @@ export default function TemplatesPage() {
         title="Add Custom KPI"
         onClose={() => setShowAddCustom(false)}
       >
-            <p className="text-xs text-slate-500 mb-4">
+            <p className="text-sm text-slate-500 mb-4">
               Assigns a KPI to a specific {isDeptAdmin ? "employee" : "person"} starting from{" "}
               <span className="font-medium text-slate-700">
                 {customPeriod.label}
@@ -637,7 +780,7 @@ export default function TemplatesPage() {
                       </svg>
                       <span className="text-xs font-semibold text-slate-600">Rebalance Existing KPIs</span>
                     </div>
-                    <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                    <span className="text-xs text-slate-400 flex items-center gap-1">
                       <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
                       </svg>
@@ -705,7 +848,7 @@ export default function TemplatesPage() {
                   </div>
 
                   {/* Running total bar inside the rebalancer */}
-                  <div className={`px-3 py-1.5 border-t flex items-center justify-between text-[10px] font-medium ${
+                  <div className={`px-3 py-1.5 border-t flex items-center justify-between text-xs font-medium ${
                     Math.round(effectiveExistingSum * 10) + Math.round((Number(customWeight) || 0) * 10) === 1000
                       ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                       : "bg-slate-50 text-slate-500 border-slate-200"
@@ -746,7 +889,7 @@ export default function TemplatesPage() {
                 />
                 <span className="text-xs text-slate-600">
                   <span className="font-semibold text-slate-700">Repeat every month</span>
-                  <span className="block text-[11px] text-slate-400">
+                  <span className="block text-xs text-slate-400">
                     {customRecurring
                       ? "Auto-carries forward each month."
                       : "One-off — only for the selected month."}
@@ -756,7 +899,7 @@ export default function TemplatesPage() {
               <button
                 type="submit"
                 disabled={submitting || !!weightError}
-                className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 transition disabled:opacity-60"
+                className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition disabled:opacity-60"
               >
                 {submitting ? (
                   <>
@@ -780,7 +923,7 @@ export default function TemplatesPage() {
 
               {/* Contextual hint when rebalance changes are pending */}
               {changedTemplates.length > 0 && (
-                <p className="text-[10px] text-slate-400 text-center leading-relaxed">
+                <p className="text-xs text-slate-400 text-center leading-relaxed">
                   Weight changes apply to <strong>future months only</strong>.<br />
                   Current &amp; past approved records remain immutable.
                 </p>

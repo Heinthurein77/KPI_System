@@ -3,26 +3,28 @@ import { createPortal } from "react-dom";
 
 // tone: "danger" | "success" | "brand" | "info"
 // Kept backward compatible: the old `danger` boolean still works.
+// Buttons are flat solid colors (no gradients), matching the page
+// buttons: same shape, same shadow, color only by meaning.
 const TONES = {
   danger: {
-    gradient: "from-red-500 to-rose-600",
+    solid: "bg-red-600",
     icon: "M6 18 18 6M6 6l12 12",
-    button: "from-red-600 to-rose-500 hover:from-red-500 hover:to-rose-400 shadow-red-500/30",
+    button: "bg-red-600 hover:bg-red-700",
   },
   success: {
-    gradient: "from-emerald-500 to-green-600",
+    solid: "bg-emerald-600",
     icon: "m5 13 4 4L19 7",
-    button: "from-emerald-600 to-green-500 hover:from-emerald-500 hover:to-green-400 shadow-emerald-500/30",
+    button: "bg-emerald-600 hover:bg-emerald-700",
   },
   brand: {
-    gradient: "from-brand-500 to-brand-700",
+    solid: "bg-brand-600",
     icon: "m5 13 4 4L19 7",
-    button: "from-brand-600 to-brand-500 hover:from-brand-500 hover:to-brand-400 shadow-brand-500/30",
+    button: "bg-brand-600 hover:bg-brand-700",
   },
   info: {
-    gradient: "from-indigo-500 to-violet-600",
+    solid: "bg-indigo-600",
     icon: "M13 10V3L4 14h7v7l9-11h-7z",
-    button: "from-indigo-600 to-violet-500 hover:from-indigo-500 hover:to-violet-400 shadow-indigo-500/30",
+    button: "bg-indigo-600 hover:bg-indigo-700",
   },
 };
 
@@ -66,10 +68,10 @@ export default function ConfirmDialog({
         className="w-full max-w-sm overflow-hidden rounded-xl bg-white shadow-2xl animate-dialog-in"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className={`h-1 bg-gradient-to-r ${t.gradient}`} />
+        <div className={`h-1 ${t.solid}`} />
         <div className="p-5">
           <div className="flex items-center gap-3">
-            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br ${t.gradient} shadow-md`}>
+            <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${t.solid} shadow-sm`}>
               <svg
                 className="h-5 w-5 text-white"
                 fill="none"
@@ -96,7 +98,7 @@ export default function ConfirmDialog({
               type="button"
               onClick={onConfirm}
               disabled={submitting}
-              className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg bg-gradient-to-r ${t.button} px-3 py-2 text-[13px] font-bold text-white shadow-md transition hover:shadow-lg active:scale-[0.98] disabled:opacity-60`}
+              className={`flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg ${t.button} px-3 py-2 text-[13px] font-bold text-white shadow-sm transition active:scale-[0.98] disabled:opacity-60`}
             >
               {submitting ? (
                 <>

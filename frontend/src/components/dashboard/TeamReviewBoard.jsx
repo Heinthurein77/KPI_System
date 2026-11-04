@@ -367,7 +367,7 @@ export default function TeamReviewBoard({
                       <button
                         type="button"
                         onClick={openBulkDialog}
-                        className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-gradient-to-r from-emerald-600 to-green-500 px-3 py-2 text-xs font-bold text-white shadow-md shadow-emerald-500/25 hover:shadow-lg hover:-translate-y-px active:translate-y-0 transition whitespace-nowrap"
+                        className="inline-flex shrink-0 items-center gap-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 px-3 py-2 text-xs font-bold text-white shadow-sm transition whitespace-nowrap"
                       >
                         <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.4">
                           <path strokeLinecap="round" strokeLinejoin="round" d="m5 13 4 4L19 7" />

@@ -11,6 +11,12 @@ import { getDashboard } from "../api/dashboard";
 import { deptApprove, deptSave, finalApprove, overrideScore, rejectSubmission } from "../api/kpi";
 import { getErrorMessage } from "../api/errors";
 
+// How often the admin review boards silently re-check for new submissions,
+// so a KPI filled on the employee side shows on the admin side without a
+// manual refresh. Silent: a failed tick never toasts or wipes the board —
+// the next tick retries. Skipped while the tab is hidden.
+const BOARD_POLL_INTERVAL_MS = 15000;
+
 // Shown when the initial data load fails (instead of an endless spinner).
 // Lets the user retry the failed request.
 function LoadError({ message, onRetry }) {
@@ -38,7 +44,7 @@ function DeptAdminDashboard({ initialParams, navKey }) {
   const firstNavRef = useRef(true);
   const loadIdRef = useRef(0);
 
-  function load(nextParams) {
+  function load(nextParams, { silent = false } = {}) {
     // Guard against out-of-order responses: if the period/filter is changed
     // again before this request lands, a stale response must not overwrite
     // the newer one.
@@ -51,6 +57,7 @@ function DeptAdminDashboard({ initialParams, navKey }) {
       })
       .catch((err) => {
         if (loadIdRef.current !== requestId) return;
+        if (silent) return; // background tick: keep the old board, retry next tick
         const message = getErrorMessage(err);
         setLoadError(message);
         toast.error(message);
@@ -59,6 +66,20 @@ function DeptAdminDashboard({ initialParams, navKey }) {
 
   useEffect(() => {
     load(params);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Live board: re-check the current period in the background so submissions
+  // filled on the employee side appear here without a manual refresh. Same
+  // period only (paramsRef), so an admin mid-edit is never disturbed: cards
+  // are keyed by submission id and the board's reset effect only runs when
+  // the period/filter/department itself changes.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.hidden) return;
+      load(paramsRef.current, { silent: true });
+    }, BOARD_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -146,7 +167,7 @@ function TenantAdminDashboard({ user, initialParams, navKey }) {
   const firstNavRef = useRef(true);
   const loadIdRef = useRef(0);
 
-  function load(nextParams) {
+  function load(nextParams, { silent = false } = {}) {
     // Same stale-response guard as DeptAdminDashboard.load — see comment there.
     const requestId = ++loadIdRef.current;
     getDashboard(nextParams)
@@ -157,6 +178,7 @@ function TenantAdminDashboard({ user, initialParams, navKey }) {
       })
       .catch((err) => {
         if (loadIdRef.current !== requestId) return;
+        if (silent) return; // background tick: keep the old board, retry next tick
         const message = getErrorMessage(err);
         setLoadError(message);
         toast.error(message);
@@ -165,6 +187,16 @@ function TenantAdminDashboard({ user, initialParams, navKey }) {
 
   useEffect(() => {
     load(params);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Live board — same polling as DeptAdminDashboard, see comment there.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.hidden) return;
+      load(paramsRef.current, { silent: true });
+    }, BOARD_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

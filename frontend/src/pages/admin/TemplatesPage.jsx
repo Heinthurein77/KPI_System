@@ -80,6 +80,14 @@ export default function TemplatesPage() {
   const [deleting, setDeleting] = useState(false);
   const [showAddCustom, setShowAddCustom] = useState(false);
 
+  // ── List filters: by person (custom KPIs of that person) and by
+  // department (department templates of that department + custom KPIs
+  // whose owner belongs to it — custom templates carry the owner's
+  // department_id). Both set = intersection. Dept admins see only their
+  // own department's data, so they get the person filter only.
+  const [filterPerson, setFilterPerson] = useState("");
+  const [filterDept, setFilterDept] = useState("");
+
   // ── Inline rename: one row at a time, in the Metric cell ──
   const [renamingId, setRenamingId] = useState(null);
   const [renamingName, setRenamingName] = useState("");
@@ -138,6 +146,22 @@ export default function TemplatesPage() {
       (t) => t.is_custom && t.employee_id === Number(customEmployeeId)
     );
   }, [data, customEmployeeId]);
+
+  const filteredTemplates = useMemo(() => {
+    if (!data) return [];
+    return data.kpi_templates.filter((t) => {
+      if (filterPerson && !(t.is_custom && t.employee_id === Number(filterPerson))) return false;
+      if (filterDept && t.department_id !== Number(filterDept)) return false;
+      return true;
+    });
+  }, [data, filterPerson, filterDept]);
+
+  const hasActiveFilters = filterPerson !== "" || filterDept !== "";
+
+  function clearFilters() {
+    setFilterPerson("");
+    setFilterDept("");
+  }
 
   // Sum of weights using admin's in-form adjustments (falls back to template.weight).
   const effectiveExistingSum = useMemo(() => {
@@ -290,6 +314,43 @@ export default function TemplatesPage() {
         </button>
       </div>
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-slate-100 flex flex-col sm:flex-row gap-3">
+            <select
+              value={filterPerson}
+              onChange={(e) => setFilterPerson(e.target.value)}
+              className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+            >
+              <option value="">All people</option>
+              {data.team.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+            {!isDeptAdmin && (
+              <select
+                value={filterDept}
+                onChange={(e) => setFilterDept(e.target.value)}
+                className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-600 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+              >
+                <option value="">All departments</option>
+                {data.departments.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {hasActiveFilters && (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition shrink-0"
+              >
+                Clear
+              </button>
+            )}
+          </div>
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-100">
               <thead>
@@ -308,8 +369,17 @@ export default function TemplatesPage() {
                       No KPI metrics configured yet.
                     </td>
                   </tr>
+                ) : filteredTemplates.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="px-6 py-10 text-center text-sm text-slate-400">
+                      No metrics match your filters.{" "}
+                      <button type="button" onClick={clearFilters} className="font-medium text-brand-600 hover:text-brand-700">
+                        Clear filters
+                      </button>
+                    </td>
+                  </tr>
                 ) : (
-                  data.kpi_templates.map((t) => (
+                  filteredTemplates.map((t) => (
                     <tr key={t.id} className="hover:bg-slate-50/80 transition-colors">
                       <td className="px-6 py-4 text-sm font-medium text-slate-800">
                         {renamingId === t.id ? (

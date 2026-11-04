@@ -4,7 +4,7 @@ import PageLoading from "../../components/ui/PageLoading";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { createCustomTemplateWithRebalance, deleteTemplate, listTemplates } from "../../api/admin";
+import { createCustomTemplateWithRebalance, deleteTemplate, listTemplates, renameTemplate } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
 
 const MONTH_NAMES_EN = [
@@ -77,6 +77,39 @@ export default function TemplatesPage() {
 
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
+
+  // ── Inline rename: one row at a time, in the Metric cell ──
+  const [renamingId, setRenamingId] = useState(null);
+  const [renamingName, setRenamingName] = useState("");
+  const [renamingBusy, setRenamingBusy] = useState(false);
+
+  function startRename(t) {
+    setRenamingId(t.id);
+    setRenamingName(t.metric_name);
+  }
+
+  async function saveRename() {
+    const name = renamingName.trim();
+    if (!name) {
+      toast.error("Metric name cannot be empty.");
+      return;
+    }
+    setRenamingBusy(true);
+    try {
+      const updated = await renameTemplate(renamingId, name);
+      setData((d) =>
+        d
+          ? { ...d, kpi_templates: d.kpi_templates.map((t) => (t.id === updated.id ? updated : t)) }
+          : d
+      );
+      setRenamingId(null);
+      toast.success("Metric renamed.");
+    } catch (err) {
+      toast.error(getErrorMessage(err));
+    } finally {
+      setRenamingBusy(false);
+    }
+  }
 
   function load() {
     listTemplates()
@@ -265,7 +298,23 @@ export default function TemplatesPage() {
                 ) : (
                   data.kpi_templates.map((t) => (
                     <tr key={t.id} className="hover:bg-slate-50/80 transition-colors">
-                      <td className="px-6 py-4 text-sm font-medium text-slate-800">{t.metric_name}</td>
+                      <td className="px-6 py-4 text-sm font-medium text-slate-800">
+                        {renamingId === t.id ? (
+                          <input
+                            autoFocus
+                            value={renamingName}
+                            disabled={renamingBusy}
+                            onChange={(e) => setRenamingName(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") saveRename();
+                              if (e.key === "Escape") setRenamingId(null);
+                            }}
+                            className="w-full rounded-lg border border-indigo-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-800 outline-none focus:ring-2 focus:ring-indigo-200"
+                          />
+                        ) : (
+                          t.metric_name
+                        )}
+                      </td>
                       <td className="px-6 py-4 text-sm text-slate-500 tabular-nums">{t.target}</td>
                       <td className="px-6 py-4 text-sm text-slate-500 tabular-nums">{t.weight}</td>
                       <td className="px-6 py-4 text-sm">
@@ -289,8 +338,40 @@ export default function TemplatesPage() {
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end gap-2">
-                          {(!isDeptAdmin || t.department_id === user.department_id) &&
-                          !(isDeptAdmin && t.employee_id === user.id) ? (
+                          {renamingId === t.id ? (
+                            <>
+                              <button
+                                type="button"
+                                disabled={renamingBusy}
+                                onClick={saveRename}
+                                className="inline-flex items-center rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-indigo-700 transition disabled:opacity-60"
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                disabled={renamingBusy}
+                                onClick={() => setRenamingId(null)}
+                                className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition disabled:opacity-60"
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              {(!isDeptAdmin || t.department_id === user.department_id) &&
+                              !(isDeptAdmin && t.employee_id === user.id) && (
+                                <button
+                                  type="button"
+                                  onClick={() => startRename(t)}
+                                  title="Rename this metric (scores and history are unchanged)"
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 transition"
+                                >
+                                  Rename
+                                </button>
+                              )}
+                              {(!isDeptAdmin || t.department_id === user.department_id) &&
+                              !(isDeptAdmin && t.employee_id === user.id) ? (
                             <button
                               type="button"
                               onClick={() => setPendingDelete(t)}
@@ -317,6 +398,8 @@ export default function TemplatesPage() {
                               </svg>
                               Company-wide
                             </span>
+                          )}
+                            </>
                           )}
                         </div>
                       </td>

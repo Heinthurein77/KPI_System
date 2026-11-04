@@ -19,6 +19,7 @@ const ACTION_META = {
   kpi_overridden: { label: "Overridden", style: "bg-purple-100 text-purple-700" },
   kpi_rejected: { label: "Rejected", style: "bg-red-100 text-red-700" },
   kpi_template_created: { label: "Metric Created", style: "bg-blue-100 text-blue-700" },
+  kpi_template_renamed: { label: "Metric Renamed", style: "bg-indigo-100 text-indigo-700" },
   kpi_template_deleted: { label: "Metric Deleted", style: "bg-red-100 text-red-700" },
   daily_task_created: { label: "Diary Created", style: "bg-emerald-100 text-emerald-700" },
   daily_task_updated: { label: "Diary Edited", style: "bg-blue-100 text-blue-700" },

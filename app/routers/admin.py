@@ -26,6 +26,7 @@ from app.schemas.kpi_template import (
     CreateTemplateRequest,
     KPITemplateOut,
     RunRecurringKpisRequest,
+    UpdateTemplateNameRequest,
     UpdateTemplateWeightRequest,
 )
 from app.schemas.user import (
@@ -806,6 +807,81 @@ def update_template_weight(
         f"Template weight updated for future periods: "
         f"{fmt_score(old_weight)} → {fmt_score(payload.weight)}. "
         "Approved/historical submission records are unchanged.",
+        department_id=template.department_id,
+    )
+    db.commit()
+    db.refresh(template)
+    return template
+
+
+@router.patch("/templates/{template_id}/name", response_model=KPITemplateOut)
+def rename_template(
+    template_id: int,
+    payload: UpdateTemplateNameRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_dept_admin),
+):
+    """Rename an existing KPI metric (template).
+
+    Only KPITemplate.metric_name is written. Target, weight, and every
+    KPISubmission row are untouched, so scores and approval history are
+    unchanged — and because dashboards read the name live from the
+    template, the new name shows on past and future periods alike.
+
+    Access rules mirror delete_template:
+      - Tenant Admin: any template in their tenant.
+      - Dept Admin: only templates in their own department (tenant-wide
+        metrics are visible but not editable), and never a metric
+        assigned to themselves.
+    For employee-scoped (custom) templates the same duplicate guard as
+    creation applies: no two templates for the same employee and period
+    may share a name.
+    """
+    template = get_tenant_scoped_or_404(
+        db, KPITemplate, template_id, user.tenant_id, "Template not found."
+    )
+
+    if user.role == UserRole.DEPT_ADMIN:
+        # Mirror delete: a Dept Admin may never touch a KPI metric
+        # assigned to them personally.
+        if template.employee_id == user.id:
+            raise HTTPException(403, "You cannot rename a KPI metric assigned to you.")
+        if template.department_id != user.department_id:
+            raise HTTPException(
+                403, "Cannot manage metrics outside your department."
+            )
+
+    new_name = payload.metric_name.strip()
+    if not new_name:
+        raise HTTPException(400, "Metric name cannot be empty.")
+
+    if template.is_custom:
+        clash = db.scalar(
+            select(KPITemplate).where(
+                KPITemplate.tenant_id == template.tenant_id,
+                KPITemplate.employee_id == template.employee_id,
+                KPITemplate.metric_name == new_name,
+                KPITemplate.locked_year == template.locked_year,
+                KPITemplate.locked_period == template.locked_period,
+                KPITemplate.id != template.id,
+            )
+        )
+        if clash is not None:
+            raise HTTPException(
+                400,
+                f'A KPI named "{new_name}" already exists for this employee in '
+                f"{template.locked_period} {template.locked_year}.",
+            )
+
+    old_name = template.metric_name
+    template.metric_name = new_name
+
+    audit_service.log(
+        db, user,
+        "kpi_template_renamed", "kpi_template",
+        template.id, new_name,
+        f'KPI metric renamed: "{old_name}" → "{new_name}". '
+        "Scores and submission history are unchanged.",
         department_id=template.department_id,
     )
     db.commit()

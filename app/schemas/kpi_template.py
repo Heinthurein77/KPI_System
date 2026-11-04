@@ -115,3 +115,15 @@ class UpdateTemplateWeightRequest(BaseModel):
 
     weight: float = Field(gt=0, le=100,
                           description="New weight percentage (0 < weight ≤ 100).")
+
+
+class UpdateTemplateNameRequest(BaseModel):
+    """Rename-only update for an existing KPI template.
+
+    Only KPITemplate.metric_name changes — target, weight, and every
+    KPISubmission row are untouched, so scores and approval history are
+    unchanged. Dashboards read the name live from the template, so the
+    new name shows on past and future periods alike.
+    """
+
+    metric_name: str

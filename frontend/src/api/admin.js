@@ -101,6 +101,10 @@ export function updateTemplateWeight(id, payload) {
   return client.patch(`/api/admin/templates/${id}/weight`, payload).then((r) => r.data);
 }
 
+export function renameTemplate(id, metric_name) {
+  return client.patch(`/api/admin/templates/${id}/name`, { metric_name }).then((r) => r.data);
+}
+
 export function getAuditLog(limit) {
   return client.get("/api/admin/audit-log", { params: limit ? { limit } : {} }).then((r) => r.data);
 }

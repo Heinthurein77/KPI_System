@@ -542,3 +542,115 @@ def test_custom_with_rebalance_rejects_invalid_period(db, client):
     assert resp.status_code == 422
     db.refresh(existing)
     assert existing.weight == 30.0
+
+
+# ---------- Rename template ----------
+
+
+def _rename(client, tpl_id, name, user, tenant):
+    return client.patch(
+        f"/api/admin/templates/{tpl_id}/name",
+        json={"metric_name": name},
+        headers=auth_headers(user, tenant),
+    )
+
+
+def test_rename_template_success_tenant_admin(client, db):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    tpl = make_template(db, tenant, metric_name="Old Name", target=100, weight=50)
+    resp = _rename(client, tpl.id, "  New Name  ", admin, tenant)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["metric_name"] == "New Name"  # stripped
+    assert body["target"] == 100
+    assert body["weight"] == 50
+
+
+def test_rename_template_dept_admin_own_department(client, db):
+    tenant, dept_admin, employee = _dept_admin_with_employee(db)
+    dept = dept_admin.department
+    tpl = make_template(db, tenant, metric_name="Old", department=dept)
+    resp = _rename(client, tpl.id, "Renamed", dept_admin, tenant)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["metric_name"] == "Renamed"
+
+
+def test_rename_template_dept_admin_forbidden_company_wide(client, db):
+    tenant, dept_admin, _ = _dept_admin_with_employee(db)
+    tpl = make_template(db, tenant, metric_name="Company Metric")  # department None
+    resp = _rename(client, tpl.id, "Renamed", dept_admin, tenant)
+    assert resp.status_code == 403, resp.text
+
+
+def test_rename_template_dept_admin_cannot_rename_own_assigned(client, db):
+    tenant, dept_admin, _ = _dept_admin_with_employee(db)
+    tpl = make_template(
+        db, tenant, metric_name="Mine", department=dept_admin.department,
+        employee=dept_admin,
+    )
+    resp = _rename(client, tpl.id, "Renamed", dept_admin, tenant)
+    assert resp.status_code == 403, resp.text
+
+
+def test_rename_template_dept_admin_other_department_forbidden(client, db):
+    tenant = make_tenant(db)
+    dept_a = make_department(db, tenant, name="Dept A")
+    dept_b = make_department(db, tenant, name="Dept B")
+    dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept_a)
+    tpl = make_template(db, tenant, metric_name="Other Dept", department=dept_b)
+    resp = _rename(client, tpl.id, "Renamed", dept_admin, tenant)
+    assert resp.status_code == 403, resp.text
+
+
+def test_rename_template_rejects_empty_name(client, db):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    tpl = make_template(db, tenant, metric_name="Old")
+    resp = _rename(client, tpl.id, "   ", admin, tenant)
+    assert resp.status_code == 400, resp.text
+    db.refresh(tpl)
+    assert tpl.metric_name == "Old"
+
+
+def test_rename_template_custom_duplicate_rejected(client, db):
+    tenant, dept_admin, employee = _dept_admin_with_employee(db)
+    dept = dept_admin.department
+    make_template(db, tenant, metric_name="Alpha", department=dept,
+                  employee=employee, locked_year=2026, locked_period="March")
+    other = make_template(db, tenant, metric_name="Beta", department=dept,
+                          employee=employee, locked_year=2026, locked_period="March")
+    resp = _rename(client, other.id, "Alpha", dept_admin, tenant)
+    assert resp.status_code == 400, resp.text
+    db.refresh(other)
+    assert other.metric_name == "Beta"
+
+
+def test_rename_template_keeps_submission_scores(client, db):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Boss")
+    emp = make_user(db, tenant, UserRole.EMPLOYEE, name="Emp", department=dept)
+    tpl = make_template(db, tenant, metric_name="Old", target=100, weight=50,
+                        department=dept, employee=emp)
+    sub = make_submission(db, tenant, emp, tpl, status=KPIStatus.APPROVED, final_score=80)
+    # Factory bypasses the service layer: set the snapshot like creation does.
+    sub.weight_snapshot = tpl.weight
+    sub.target_snapshot = tpl.target
+    db.commit()
+    resp = _rename(client, tpl.id, "New", admin, tenant)
+    assert resp.status_code == 200, resp.text
+    db.refresh(sub)
+    db.refresh(tpl)
+    assert sub.final_score == 80
+    assert sub.weight_snapshot == tpl.weight
+    assert sub.kpi_template.metric_name == "New"
+
+
+def test_rename_template_cross_tenant_returns_404(client, db):
+    tenant = make_tenant(db)
+    other_tenant = make_tenant(db, name="Other", slug="other")
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    tpl = make_template(db, other_tenant, metric_name="Elsewhere")
+    resp = _rename(client, tpl.id, "Renamed", admin, tenant)
+    assert resp.status_code == 404, resp.text

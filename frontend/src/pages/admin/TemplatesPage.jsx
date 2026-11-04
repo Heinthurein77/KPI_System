@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import AppShell from "../../components/layout/AppShell";
 import PageLoading from "../../components/ui/PageLoading";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
+import Modal from "../../components/ui/Modal";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { createCustomTemplateWithRebalance, deleteTemplate, listTemplates, renameTemplate } from "../../api/admin";
@@ -77,6 +78,7 @@ export default function TemplatesPage() {
 
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
+  const [showAddCustom, setShowAddCustom] = useState(false);
 
   // ── Inline rename: one row at a time, in the Metric cell ──
   const [renamingId, setRenamingId] = useState(null);
@@ -208,6 +210,7 @@ export default function TemplatesPage() {
         }${rebalanceNote}`
       );
       resetForm();
+      setShowAddCustom(false);
       load();
     } catch (err) {
       toast.error(getErrorMessage(err));
@@ -274,9 +277,19 @@ export default function TemplatesPage() {
 
   return (
     <AppShell title={isDeptAdmin ? "My Department Metrics" : "KPI Metric Templates"}>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* ── Template list ── */}
-        <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="flex justify-end mb-4">
+        <button
+          type="button"
+          onClick={() => setShowAddCustom(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-violet-700 transition"
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+          </svg>
+          Add Custom KPI
+        </button>
+      </div>
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-slate-100">
               <thead>
@@ -411,19 +424,11 @@ export default function TemplatesPage() {
           </div>
         </div>
 
-        {/* ── Add Custom KPI panel ── */}
-        <div className="space-y-6">
-          <div className="bg-white rounded-2xl border border-violet-200 shadow-sm p-6">
-            <div className="flex items-center gap-2 mb-1">
-              <svg className="h-4 w-4 text-violet-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z"
-                />
-              </svg>
-              <h2 className="text-sm font-semibold text-slate-900">Add Custom KPI</h2>
-            </div>
+      <Modal
+        open={showAddCustom}
+        title="Add Custom KPI"
+        onClose={() => setShowAddCustom(false)}
+      >
             <p className="text-xs text-slate-500 mb-4">
               Assigns a KPI to a specific {isDeptAdmin ? "employee" : "person"} starting from{" "}
               <span className="font-medium text-slate-700">
@@ -711,10 +716,7 @@ export default function TemplatesPage() {
                 </p>
               )}
             </form>
-          </div>
-        </div>
-      </div>
-
+      </Modal>
       <ConfirmDialog
         open={pendingDelete !== null}
         title={isDeptAdmin ? "Delete this metric?" : `Delete "${pendingDelete?.metric_name}"?`}

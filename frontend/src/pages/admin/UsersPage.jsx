@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import AppShell from "../../components/layout/AppShell";
 import PageLoading from "../../components/ui/PageLoading";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
+import Modal from "../../components/ui/Modal";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { createUser, deleteUser, listUsers, resetUserPassword, toggleUserActive } from "../../api/admin";
@@ -44,6 +45,7 @@ export default function UsersPage() {
   const [departmentId, setDepartmentId] = useState("");
   const [position, setPosition] = useState("");
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
   const [pendingToggle, setPendingToggle] = useState(null);
   const [toggling, setToggling] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -89,6 +91,7 @@ export default function UsersPage() {
       setPassword("");
       setPosition("");
       toast.success(isDeptAdmin ? "Employee added." : "User created.");
+      setShowAdd(false);
       load();
     } catch (err) {
       toast.error(getErrorMessage(err));
@@ -194,8 +197,19 @@ export default function UsersPage() {
 
   return (
     <AppShell title={isDeptAdmin ? "My Team" : "Users"}>
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+      <div className="flex justify-end mb-4">
+        <button
+          type="button"
+          onClick={() => setShowAdd(true)}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
+        >
+          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+          </svg>
+          {isDeptAdmin ? "Add Employee" : "Add User"}
+        </button>
+      </div>
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
           <div className="px-6 py-4 border-b border-slate-100 flex flex-col sm:flex-row gap-3">
             <div className="relative flex-1">
               <svg className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
@@ -396,8 +410,11 @@ export default function UsersPage() {
           </div>
         </div>
 
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 h-fit">
-          <h2 className="text-sm font-semibold text-slate-900 mb-4">{isDeptAdmin ? "Add Employee" : "Add User"}</h2>
+      <Modal
+        open={showAdd}
+        title={isDeptAdmin ? "Add Employee" : "Add User"}
+        onClose={() => setShowAdd(false)}
+      >
           <form onSubmit={handleCreate} className="space-y-3">
             <input
               type="text"
@@ -476,9 +493,7 @@ export default function UsersPage() {
               {isDeptAdmin ? "Add Employee" : "Create User"}
             </button>
           </form>
-        </div>
-      </div>
-
+      </Modal>
       <ConfirmDialog
         open={pendingDelete !== null}
         title={`Delete ${pendingDelete?.name}?`}

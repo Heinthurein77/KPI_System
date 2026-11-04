@@ -1,5 +1,5 @@
 from __future__ import annotations
-from sqlalchemy import Boolean, Float, ForeignKey, Integer, String
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -21,7 +21,7 @@ class KPITemplate(Base):
     __tablename__ = "kpi_templates"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    metric_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    metric_name: Mapped[str] = mapped_column(Text, nullable=False)
     target: Mapped[float] = mapped_column(Float, nullable=False, default=100.0)
     weight: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
 

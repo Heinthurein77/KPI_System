@@ -68,6 +68,17 @@ SHEET_IMPORT = "Import"
 
 IMPORT_HEADERS = ("name", "email", "position", "metric", "target", "weight")
 
+# DB column limits (users.name/position String(120), users.email
+# String(255)). Postgres rejects longer values with
+# StringDataRightTruncation at INSERT time — i.e. a generic 500 at
+# Confirm Import, after Validate already passed. So length is checked
+# here, per row, where the user can see and fix it. Metric names have
+# no cap: kpi_templates.metric_name is TEXT since migration 0018, so
+# long names (title plus description in one cell) import as written.
+MAX_NAME_CHARS = 120
+MAX_POSITION_CHARS = 120
+MAX_EMAIL_CHARS = 255
+
 #: Per-user random initial passwords (see execute_import). There is no
 #: shared default anymore: anyone who knew an imported employee's email
 #: could previously log in with the documented "password" and take the
@@ -214,8 +225,23 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
         if not name:
             parsed.errors.append(ImportRowError(sheet, idx, "Name is required."))
             continue
+        if len(name) > MAX_NAME_CHARS:
+            parsed.errors.append(ImportRowError(
+                sheet, idx,
+                f"Name is too long ({len(name)} characters, max {MAX_NAME_CHARS})."))
+            continue
         if not email or not EMAIL_RE.match(email):
             parsed.errors.append(ImportRowError(sheet, idx, f'Invalid email "{row[1]}".'))
+            continue
+        if len(email) > MAX_EMAIL_CHARS:
+            parsed.errors.append(ImportRowError(
+                sheet, idx,
+                f"Email is too long ({len(email)} characters, max {MAX_EMAIL_CHARS})."))
+            continue
+        if position and len(position) > MAX_POSITION_CHARS:
+            parsed.errors.append(ImportRowError(
+                sheet, idx,
+                f"Position is too long ({len(position)} characters, max {MAX_POSITION_CHARS})."))
             continue
         if email in existing_emails:
             parsed.errors.append(

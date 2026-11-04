@@ -8,7 +8,7 @@ runs in a subprocess against a throwaway SQLite file — never against
 the test suite's own database — with DATABASE_URL pointed at the
 scratch file.
 
-Covers: upgrade head from empty, the 0017 downgrade (batch mode) and
+Covers: upgrade head from empty, the head downgrade (batch mode) and
 re-upgrade, and the artifacts the Major fixes depend on (the diary
 unique constraint and the revoked_tokens table).
 """
@@ -49,7 +49,7 @@ def test_migration_chain_upgrades_to_head_on_scratch_db(tmp_path):
     try:
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()
         assert version is not None
-        assert version[0] == "0017_diary_unique_day_revoked_tokens"
+        assert version[0] == "0018_metric_name_text"
 
         tables = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -73,7 +73,7 @@ def test_migration_chain_upgrades_to_head_on_scratch_db(tmp_path):
     finally:
         conn.close()
 
-    # The 0017 downgrade (batch mode) and re-upgrade must work too.
+    # The head downgrade (batch mode) and re-upgrade must work too.
     result = _run_alembic(db_path, "downgrade", "-1")
     assert result.returncode == 0, result.stdout + result.stderr
     result = _run_alembic(db_path, "upgrade", "head")
@@ -81,6 +81,6 @@ def test_migration_chain_upgrades_to_head_on_scratch_db(tmp_path):
     conn = sqlite3.connect(db_path)
     try:
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-        assert version[0] == "0017_diary_unique_day_revoked_tokens"
+        assert version[0] == "0018_metric_name_text"
     finally:
         conn.close()

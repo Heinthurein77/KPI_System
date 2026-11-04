@@ -138,6 +138,73 @@ def test_parse_weights_must_total_100(db, dept_admin):
     assert any("must total 100" in e.message for e in parsed.errors)
 
 
+def test_parse_long_metric_name_is_accepted(db, dept_admin):
+    # Regression: a metric name over the old kpi_templates.metric_name
+    # VARCHAR(200) limit used to pass Validate and then crash Confirm
+    # Import with a generic 500 (Postgres StringDataRightTruncation on
+    # INSERT). Migration 0018 widened the column to TEXT, so long names
+    # — title plus description in one cell — import as written.
+    tenant, _, _ = dept_admin
+    long_metric = (
+        "Audit Cycle Excellence & Quality Assurance\n"
+        "Internal Audit Standards and completion of the full audit cycle — "
+        "from risk-based planning and fieldwork to reporting and follow-up — "
+        "while ensuring zero material omissions and high stakeholder satisfaction"
+    )
+    assert len(long_metric) > 200
+    contents = _workbook([
+        ["Aung", "aung@example.com", "", long_metric, 50, 100],
+    ])
+    parsed = bulk_import_service.parse_import_file(contents, db, tenant.id)
+    assert parsed.ok, parsed.errors
+    assert parsed.kpis[0].metric_name == long_metric
+
+
+def test_parse_overlong_name_position_email_are_row_errors(db, dept_admin):
+    # The users columns are still capped (name/position 120, email 255),
+    # so overlong values must surface as per-row errors at Validate,
+    # not as a 500 at Confirm Import.
+    tenant, _, _ = dept_admin
+    contents = _workbook([
+        ["B" * 121, "bee@example.com", "", "Sales", 100, 100],
+        ["Cee", "cee@example.com", "P" * 121, "Sales", 100, 100],
+        ["Dee", "d" * 250 + "@example.com", "", "Sales", 100, 100],
+    ])
+    parsed = bulk_import_service.parse_import_file(contents, db, tenant.id)
+    assert not parsed.ok
+    messages = [e.message for e in parsed.errors]
+    assert any("Name is too long" in m and "120" in m for m in messages)
+    assert any("Position is too long" in m and "120" in m for m in messages)
+    assert any("Email is too long" in m and "255" in m for m in messages)
+
+
+def test_upload_long_metric_name_imports_in_full(client, db, dept_admin):
+    tenant, _, admin = dept_admin
+    long_metric = "M" * 500
+    contents = _workbook([
+        ["Aung", "aung@example.com", "", long_metric, 50, 100],
+    ])
+    r = client.post(
+        "/api/admin/import/upload",
+        params={"dry_run": True},
+        files={"file": ("import.xlsx", contents, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=auth_headers(admin, tenant),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is True
+    r = client.post(
+        "/api/admin/import/upload",
+        params={"dry_run": False},
+        files={"file": ("import.xlsx", contents, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        headers=auth_headers(admin, tenant),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["kpis_created"] == 1
+    stored = db.query(KPITemplate).all()
+    assert len(stored) == 1
+    assert stored[0].metric_name == long_metric
+
+
 def test_execute_creates_users_templates_and_drafts(db, dept_admin):
     tenant, dept, admin = dept_admin
     parsed = bulk_import_service.parse_import_file(_valid_contents(), db, tenant.id)

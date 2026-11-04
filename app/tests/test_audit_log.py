@@ -139,3 +139,54 @@ def test_audit_log_cross_tenant_isolation(db, client):
 
     resp_b = client.get("/api/admin/audit-log", headers=auth_headers(admin_b, tenant_b))
     assert resp_b.json() == []
+
+
+# ---------- Long metric names must not break the audit trail (0019) ----------
+
+
+def test_audit_label_column_is_text():
+    """Regression for the live 500: audit entity_label was VARCHAR(255),
+    so a long metric name + employee name blew up the INSERT and rolled
+    back the whole template creation. The column must be TEXT."""
+    from sqlalchemy import Text
+
+    from app.models.audit_log import AuditLog
+
+    assert isinstance(AuditLog.__table__.c.entity_label.type, Text)
+
+
+def test_long_metric_custom_create_keeps_full_audit_label(db, client):
+    """The exact live case: the Audit Cycle metric (≈245 chars) plus
+    ' — <employee>' exceeds 255 chars. Creation must succeed and the
+    audit row must carry the label in full, not truncated, not 500."""
+    from app.tests.factories import open_fillable_period
+
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
+    tenant_admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept, name="Zin Min Thein")
+    year, period = open_fillable_period()
+    metric = (
+        "Audit Cycle Excellence & Quality Assurance\n"
+        "Internal Audit Standards and completion of the full audit cycle—from risk-based "
+        "planning and fieldwork to reporting and follow-up—while ensuring zero material "
+        "omissions and high stakeholder satisfaction"
+    )
+    assert len(f"{metric} — {employee.name}") > 255
+
+    resp = client.post(
+        "/api/admin/templates/custom",
+        json={
+            "employee_id": employee.id, "metric_name": metric,
+            "target": 50.0, "weight": 40.0, "year": year, "period": period,
+        },
+        headers=auth_headers(dept_admin, tenant),
+    )
+    assert resp.status_code == 200, resp.text
+
+    log_resp = client.get("/api/admin/audit-log", headers=auth_headers(tenant_admin, tenant))
+    assert log_resp.status_code == 200
+    created = [e for e in log_resp.json() if e["action"] == "kpi_template_created"]
+    assert len(created) == 1
+    assert created[0]["entity_label"] == f"{metric} — {employee.name}"

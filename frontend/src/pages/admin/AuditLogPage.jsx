@@ -26,6 +26,7 @@ const ACTION_META = {
   daily_task_feedback: { label: "Feedback Given", style: "bg-amber-100 text-amber-700" },
   daily_task_evidence_uploaded: { label: "Evidence Attached", style: "bg-violet-100 text-violet-700" },
   daily_task_review_updated: { label: "Review Updated", style: "bg-teal-100 text-teal-700" },
+  daily_task_review_deleted: { label: "Review Deleted", style: "bg-red-100 text-red-700" },
 };
 
 function formatTimestamp(iso) {

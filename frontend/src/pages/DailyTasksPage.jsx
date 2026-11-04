@@ -17,6 +17,7 @@ import {
   createDailyTask,
   dailyEvidenceUrl,
   deleteDailyTask,
+  deleteMonthlyReview,
   exportDailyDiary,
   getDailyAuditLog,
   getMonthlyReview,
@@ -49,6 +50,7 @@ const ACTION_LABEL = {
   daily_task_feedback: "Feedback ပေး · Feedback",
   daily_task_evidence_uploaded: "Evidence တင် · Evidence",
   daily_task_review_updated: "Review ပြင်ဆင် · Review",
+  daily_task_review_deleted: "Review ဖျက် · Review Deleted",
 };
 
 const EMPTY_FORM = {
@@ -430,6 +432,57 @@ export default function DailyTasksPage() {
       // The old button had no error handling at all — a failed save died
       // silently. Show the real reason instead.
       setNotice({ text: getErrorMessage(err, "Review သိမ်းလို့မရပါ။ ထပ်စမ်းကြည့်ပါ။"), ok: false });
+    } finally {
+      setConfirmBusy(false);
+      setConfirm(null);
+    }
+  };
+
+  // Saved review delete: only the author or a tenant admin may delete —
+  // a dept admin viewing a member's review gets no delete button at all,
+  // mirroring the backend rule (deleting would remove the author's own
+  // sections too, not just the HOD evaluation).
+  const canDeleteReview = !!review
+    && reviewUserId !== null
+    && (reviewUserId === user.id || user.role === "tenant_admin");
+
+  const requestDeleteReview = () => {
+    if (confirmBusy || !reviewUserId) return;
+    const monthLabel = `${year}-${String(month).padStart(2, "0")}`;
+    const ownerLabel = viewingName ? `${viewingName} ၏ review` : "ကိုယ့် review";
+    setConfirm({
+      title: "သိမ်းပြီးသော review ကို ဖျက်မလား?",
+      message: `${monthLabel} · ${ownerLabel}`,
+      details: (
+        <p className="rounded-xl bg-slate-50 px-3 py-2 text-[13px] text-slate-600">
+          အောင်မြင်မှုများ၊ အခက်အခဲ & ဖြေရှင်းပုံ၊ ပိုကောင်းအောင် ပြင်ဆင်မည့်အချက်၊ HOD အကဲဖြတ်ချက် — ၄ ချက်လုံး ဖျက်ပစ်မည်။ ပြန်ယူလို့မရပါ။
+        </p>
+      ),
+      confirmLabel: "သေချာတယ်၊ ဖျက်မယ်",
+      danger: true,
+      onConfirm: doDeleteReview,
+    });
+  };
+
+  const doDeleteReview = async () => {
+    setConfirmBusy(true);
+    try {
+      await deleteMonthlyReview(year, month, reviewUserId);
+      setReview(null);
+      setReviewDraft({
+        achievements: "",
+        challenges_solutions: "",
+        improvements_next_focus: "",
+        hod_evaluation: "",
+      });
+      try {
+        sessionStorage.removeItem(reviewStorageKey(year, month, reviewUserId));
+      } catch {
+        // See above.
+      }
+      setNotice({ text: "✓ Saved review ဖျက်ပြီးပါပြီ။", ok: true });
+    } catch (err) {
+      setNotice({ text: getErrorMessage(err, "Review ဖျက်လို့မရပါ။ ထပ်စမ်းကြည့်ပါ။"), ok: false });
     } finally {
       setConfirmBusy(false);
       setConfirm(null);
@@ -823,9 +876,18 @@ export default function DailyTasksPage() {
       <>
       {review && (review.achievements || review.challenges_solutions || review.improvements_next_focus || review.hod_evaluation) && (
       <section className={cardCls}>
-        <h2 className={sectionTitleCls}>
-          သိမ်းပြီးသော သုံးသပ်ချက် · Saved Review — {year}-{String(month).padStart(2, "0")}{viewingName ? ` · ${viewingName}` : ""}
-        </h2>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <h2 className={sectionTitleCls}>
+            သိမ်းပြီးသော သုံးသပ်ချက် · Saved Review — {year}-{String(month).padStart(2, "0")}{viewingName ? ` · ${viewingName}` : ""}
+          </h2>
+          {canDeleteReview && (
+            <button
+              className="shrink-0 rounded-full bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 ring-1 ring-red-100 hover:bg-red-100"
+              onClick={requestDeleteReview}>
+              ဖျက်ရန် · Delete
+            </button>
+          )}
+        </div>
         <div className="mt-4 grid gap-4">
           {[
             ["ဒီလ၏ အဓိက အောင်မြင်ပြီးစီးမှုများ", "Major Achievements", review.achievements],

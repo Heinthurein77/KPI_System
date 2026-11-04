@@ -58,6 +58,14 @@ export function saveMonthlyReview(year, month, userId, payload) {
     .then((r) => r.data);
 }
 
+export function deleteMonthlyReview(year, month, userId) {
+  return client
+    .delete("/api/daily-tasks/review/month", {
+      params: { year, month, user_id: userId },
+    })
+    .then((r) => r.data);
+}
+
 export function getDailyAuditLog(year, month, userId) {
   const params = {};
   if (year) params.year = year;

@@ -471,6 +471,73 @@ def test_dept_admin_cannot_write_self_hod_evaluation(db, client):
     assert r.json()["hod_evaluation"] in (None, "")
 
 
+def _save_review(client, tenant, user, target_id):
+    r = client.put("/api/daily-tasks/review/month",
+                    params={"year": 2026, "month": 11, "user_id": target_id},
+                    json={"achievements": "Shipped the report",
+                          "challenges_solutions": "Data was late; chased it",
+                          "improvements_next_focus": "Ask earlier",
+                          "hod_evaluation": "Good month"},
+                    headers=auth_headers(user, tenant))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def _get_review(client, tenant, user, target_id):
+    r = client.get("/api/daily-tasks/review/month",
+                    params={"year": 2026, "month": 11, "user_id": target_id},
+                    headers=auth_headers(user, tenant))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_owner_can_delete_saved_review(db, client):
+    from app.models.audit_log import AuditLog
+
+    tenant, _, emp, _, tenant_admin = _setup(db)
+    _save_review(client, tenant, emp, emp.id)
+    r = client.delete("/api/daily-tasks/review/month",
+                       params={"year": 2026, "month": 11, "user_id": emp.id},
+                       headers=auth_headers(emp, tenant))
+    assert r.status_code == 204, r.text
+    assert _get_review(client, tenant, emp, emp.id) is None
+    # Tenant admin sees the deletion in the audit trail.
+    trail = db.scalars(select(AuditLog).where(
+        AuditLog.entity_type == "daily_task_review",
+        AuditLog.action == "daily_task_review_deleted",
+    )).all()
+    assert len(trail) == 1
+    assert "2026-11" in trail[0].summary
+
+
+def test_tenant_admin_can_delete_member_review(db, client):
+    tenant, _, emp, _, tenant_admin = _setup(db)
+    _save_review(client, tenant, emp, emp.id)
+    r = client.delete("/api/daily-tasks/review/month",
+                       params={"year": 2026, "month": 11, "user_id": emp.id},
+                       headers=auth_headers(tenant_admin, tenant))
+    assert r.status_code == 204, r.text
+    assert _get_review(client, tenant, tenant_admin, emp.id) is None
+
+
+def test_dept_admin_cannot_delete_member_review(db, client):
+    tenant, _, emp, dept_admin, _ = _setup(db)
+    _save_review(client, tenant, emp, emp.id)
+    r = client.delete("/api/daily-tasks/review/month",
+                       params={"year": 2026, "month": 11, "user_id": emp.id},
+                       headers=auth_headers(dept_admin, tenant))
+    assert r.status_code == 403, r.text
+    assert _get_review(client, tenant, emp, emp.id) is not None
+
+
+def test_delete_missing_review_returns_404(db, client):
+    tenant, _, emp, _, _ = _setup(db)
+    r = client.delete("/api/daily-tasks/review/month",
+                       params={"year": 2026, "month": 11, "user_id": emp.id},
+                       headers=auth_headers(emp, tenant))
+    assert r.status_code == 404, r.text
+
+
 def test_evening_reminder_skips_suspended_tenant(db):
     from app.models.tenant import TenantStatus
 

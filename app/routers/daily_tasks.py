@@ -689,3 +689,39 @@ def put_monthly_review(
     db.commit()
     db.refresh(review)
     return MonthlyReviewOut.model_validate(review)
+
+
+@router.delete("/review/month", status_code=204)
+def delete_monthly_review(
+    year: int = Query(...),
+    month: int = Query(...),
+    user_id: int = Query(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_tenant_member),
+):
+    if user_id not in _visible_user_ids(db, user):
+        raise HTTPException(403, "Not allowed to delete this review.")
+    # Deleting removes the author's sections too, so a dept admin may not
+    # delete a member's review — only the author or a tenant admin can.
+    if user_id != user.id and user.role != UserRole.TENANT_ADMIN:
+        raise HTTPException(403, "Only the author or a tenant admin can delete a review.")
+    review = db.scalars(
+        select(DailyTaskMonthlyReview).where(
+            DailyTaskMonthlyReview.tenant_id == user.tenant_id,
+            DailyTaskMonthlyReview.user_id == user_id,
+            DailyTaskMonthlyReview.year == year,
+            DailyTaskMonthlyReview.month == month,
+        )
+    ).first()
+    if not review:
+        raise HTTPException(404, "No saved review for this month.")
+    target = db.get(User, user_id)
+    audit_service.log(
+        db, user, "daily_task_review_deleted", "daily_task_review", review.id,
+        f"{target.name if target else ''} — {year}-{month:02d}",
+        f"Deleted month-end review for {year}-{month:02d}.",
+        department_id=target.department_id if target else None,
+    )
+    db.delete(review)
+    db.commit()
+    return None

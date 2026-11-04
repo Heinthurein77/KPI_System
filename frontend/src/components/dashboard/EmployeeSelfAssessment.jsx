@@ -8,6 +8,13 @@ import PageLoading from "../ui/PageLoading";
 import { STYLES as STATUS_STYLES, LABELS as STATUS_LABELS } from "../ui/statusMeta";
 import { employeeSaveScores, employeeSubmit } from "../../api/kpi";
 import { getErrorMessage } from "../../api/errors";
+
+// How often every dashboard re-checks its current period in the
+// background. Shared cadence with the admin boards in DashboardPage.jsx:
+// 5 minutes is long enough that a background tick never surprises anyone
+// mid-edit, and short enough that the other side's changes show up
+// without a manual refresh. Skipped while the tab is hidden.
+const DASHBOARD_POLL_INTERVAL_MS = 5 * 60 * 1000;
 import { useToast } from "../../context/ToastContext";
 import { useAuth } from "../../context/AuthContext";
 
@@ -40,6 +47,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   const [scores, setScores] = useState({});
   const [comments, setComments] = useState({});
   const initialCommentsRef = useRef({});
+  const initialScoresRef = useRef({});
   const [error, setError] = useState(null);
   const [loadError, setLoadError] = useState(null);
   const [invalidScoreId, setInvalidScoreId] = useState(null);
@@ -49,8 +57,12 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   const paramsRef = useRef(params);
   const firstNavRef = useRef(true);
   const loadIdRef = useRef(0);
+  // Latest-render mirrors so the background tick (which closes over the
+  // first render) always sees current form state, not stale state.
+  const liveRef = useRef({ scores: {}, comments: {}, saving: false, confirmSubmit: false });
+  liveRef.current = { scores, comments, saving, confirmSubmit };
 
-  function load(nextParams) {
+  function load(nextParams, { silent = false } = {}) {
     // Guard against out-of-order responses: switching the period while a
     // previous request is still in flight must not let a stale response
     // overwrite the newer one.
@@ -68,18 +80,55 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
         });
         setScores(initial);
         setComments(initialComments);
+        initialScoresRef.current = initial;
         initialCommentsRef.current = initialComments;
       })
       .catch((err) => {
         if (loadIdRef.current !== requestId) return;
+        if (silent) return; // background tick: keep the old board, retry next tick
         const message = getErrorMessage(err);
         setLoadError(message);
         toast.error(message);
       });
   }
 
+  // True when the employee has typed something not yet saved. A background
+  // tick resets the whole form from fetched data, so it must never run
+  // while this is true — otherwise unsaved typing would be wiped.
+  function hasUnsavedEdits() {
+    const { scores: currentScores, comments: currentComments } = liveRef.current;
+    const initialScores = initialScoresRef.current;
+    const initialComments = initialCommentsRef.current;
+    const ids = new Set([...Object.keys(currentScores), ...Object.keys(initialScores)]);
+    for (const id of ids) {
+      if (String(currentScores[id] ?? "") !== String(initialScores[id] ?? "")) return true;
+    }
+    const commentIds = new Set([...Object.keys(currentComments), ...Object.keys(initialComments)]);
+    for (const id of commentIds) {
+      if ((currentComments[id] ?? "").trim() !== (initialComments[id] ?? "").trim()) return true;
+    }
+    return false;
+  }
+
   useEffect(() => {
     load(params);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Live board, same 5-minute cadence as the admin boards: re-check the
+  // current period in the background so approvals/rejections from the
+  // admin side appear without a manual refresh. Skipped while the tab is
+  // hidden, while a save is in flight, while the submit dialog is open,
+  // and whenever the form has unsaved edits (a tick would reset the form
+  // and wipe typing) — in those cases the next tick retries.
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (document.hidden) return;
+      if (liveRef.current.saving || liveRef.current.confirmSubmit) return;
+      if (hasUnsavedEdits()) return;
+      load(paramsRef.current, { silent: true });
+    }, DASHBOARD_POLL_INTERVAL_MS);
+    return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

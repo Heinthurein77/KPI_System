@@ -13,9 +13,10 @@ import { getErrorMessage } from "../api/errors";
 
 // How often the admin review boards silently re-check for new submissions,
 // so a KPI filled on the employee side shows on the admin side without a
-// manual refresh. Silent: a failed tick never toasts or wipes the board —
-// the next tick retries. Skipped while the tab is hidden.
-const BOARD_POLL_INTERVAL_MS = 15000;
+// manual refresh. Shared 5-minute cadence with the employee board in
+// EmployeeSelfAssessment.jsx. Silent: a failed tick never toasts or wipes
+// the board — the next tick retries. Skipped while the tab is hidden.
+const BOARD_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
 // Shown when the initial data load fails (instead of an endless spinner).
 // Lets the user retry the failed request.

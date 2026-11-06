@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
+import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 
 export default function PlatformLoginPage() {
@@ -100,12 +100,6 @@ export default function PlatformLoginPage() {
           </button>
         </form>
 
-        <p className="mt-6 text-center text-xs text-slate-500">
-          Not a platform admin?{" "}
-          <Link to="/login" className="font-medium text-slate-400 hover:text-brand-400">
-            Go to organization sign in
-          </Link>
-        </p>
       </div>
     </div>
   );

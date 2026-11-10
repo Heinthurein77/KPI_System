@@ -16,15 +16,11 @@ from fpdf import FPDF
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
+from app.core.months import MONTH_NAMES
 from app.core.timezone import today as app_today
 from app.models.department import Department
 from app.models.kpi_submission import KPISubmission, KPIStatus
 from app.models.user import User
-
-MONTH_NAMES = (
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-)
 
 FONT_DIR = Path(__file__).resolve().parent.parent / "assets" / "fonts"
 

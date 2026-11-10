@@ -30,10 +30,7 @@ from datetime import date, timedelta
 
 from fastapi import HTTPException, status
 
-MONTH_NAMES = (
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-)
+from app.core.months import MONTH_NAMES
 
 
 def period_end(year: int, period: str) -> date | None:

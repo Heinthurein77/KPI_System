@@ -37,6 +37,14 @@ from app.core.deps import (
     require_tenant_admin,
     require_tenant_member,
 )
+from app.core.proxy import trusted_client_ip
+from app.core.rate_limit import (
+    ATTENDANCE_RATE_LIMIT,
+    EXPORT_RATE_LIMIT,
+    REPORT_RATE_LIMIT,
+    _authenticated_user_key,
+    limiter,
+)
 from app.database import get_db
 from app.models.attendance import AttendanceRecord, AttendanceSettings
 from app.models.department import Department
@@ -50,6 +58,7 @@ from app.schemas.attendance import (
     LeaveCreate,
     LeaveUpdate,
 )
+from app.services import audit_service
 from app.services.attendance_export_service import build_attendance_detail_report
 from app.services.attendance_service import (
     DEFAULT_END,
@@ -73,19 +82,11 @@ require_attendance_author = RoleChecker([UserRole.EMPLOYEE, UserRole.DEPT_ADMIN]
 
 
 def _client_ip(request: Request) -> str:
-    """Real client IP.
-
-    Caddy (the only public front door) overwrites X-Forwarded-For with the
-    real client IP, so the rightmost entry is the one Caddy appended —
-    the same convention the app's rate limiter uses. Direct clients
-    cannot spoof it through Caddy. Falls back to the socket peer.
-    """
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        entries = [part.strip() for part in forwarded.split(",") if part.strip()]
-        if entries:
-            return entries[-1]
-    return request.client.host if request.client else ""
+    """Real client IP — X-Forwarded-For only when the socket peer is a
+    trusted proxy (Caddy on the private Docker network); otherwise the
+    socket peer. See app/core/proxy.py: a direct client forging the header
+    gets its real IP, so the WiFi gate cannot be bypassed off-network."""
+    return trusted_client_ip(request)
 
 
 def _settings_dict(db: Session, tenant_id: int) -> dict:
@@ -162,6 +163,8 @@ def _month_bounds(year: int, month: int) -> tuple[date_type, date_type]:
 
 
 def _serialize(db: Session, record: AttendanceRecord) -> AttendanceRecordOut:
+    # late_minutes is recorded in the DB but deliberately never exposed
+    # via the API (user decision: removed from UI + export as well).
     author = db.get(User, record.employee_id)
     return AttendanceRecordOut(
         id=record.id,
@@ -171,7 +174,6 @@ def _serialize(db: Session, record: AttendanceRecord) -> AttendanceRecordOut:
         check_in=record.check_in.strftime("%H:%M") if record.check_in else None,
         check_out=record.check_out.strftime("%H:%M") if record.check_out else None,
         status=record.status,
-        late_minutes=record.late_minutes,
     )
 
 
@@ -215,8 +217,6 @@ def _summary_for(
         leave=result["leave"],
         absent=result["absent"],
         attendance_pct=result["attendance_pct"],
-        total_late_minutes=sum(r.late_minutes for r in records),
-        late_days=sum(1 for r in records if r.late_minutes > 0),
         records=[_serialize(db, r) for r in sorted(records, key=lambda r: r.record_date)],
     )
 
@@ -258,6 +258,15 @@ def update_settings(
         row.office_ips_json = json.dumps([ip.strip() for ip in data["office_ips"] if ip.strip()])
     if "holidays" in data:
         row.holidays_json = json.dumps(data["holidays"])
+    # Audit: a tenant admin can silently clear office_ips (disabling the
+    # WiFi gate for everyone) — that change must be attributable.
+    changed = sorted(data.keys())
+    audit_service.log(
+        db, user, "attendance_settings_updated", "attendance_settings",
+        user.tenant_id, "Attendance settings",
+        f"Attendance settings updated by {user.name}: {', '.join(changed)}."
+        + (f" office_ips now: {row.office_ips_json}." if "office_ips" in data else ""),
+    )
     db.commit()
     db.refresh(row)
     return _settings_out(_settings_dict(db, user.tenant_id))
@@ -300,6 +309,7 @@ def get_today(
 
 
 @router.post("/check-in", response_model=AttendanceRecordOut, status_code=201)
+@limiter.limit(ATTENDANCE_RATE_LIMIT, key_func=_authenticated_user_key)
 def check_in(
     request: Request,
     db: Session = Depends(get_db),
@@ -353,6 +363,7 @@ def check_in(
 
 
 @router.post("/check-out", response_model=AttendanceRecordOut)
+@limiter.limit(ATTENDANCE_RATE_LIMIT, key_func=_authenticated_user_key)
 def check_out(
     request: Request,
     db: Session = Depends(get_db),
@@ -390,6 +401,10 @@ def check_out(
     record.status = day_status(record.check_in, check_out_time, start, end)
     db.commit()
     db.refresh(record)
+    logger.info(
+        "Attendance check-out user=%s date=%s ip=%s",
+        user.id, today.isoformat(), ip,
+    )
     return _serialize(db, record)
 
 

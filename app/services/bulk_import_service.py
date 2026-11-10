@@ -58,6 +58,7 @@ from openpyxl import Workbook, load_workbook
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.months import MONTH_NAMES
 from app.core.security import hash_password
 from app.core.timezone import today as app_today
 from app.models.tenant import Tenant
@@ -90,11 +91,6 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # Zip-bomb / abuse guard: reject workbooks with more data rows than this.
 MAX_IMPORT_ROWS = 5000
-
-MONTH_NAMES = (
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-)
 
 
 @dataclass

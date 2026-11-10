@@ -1,4 +1,5 @@
 from functools import lru_cache
+from math import log2
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -125,6 +126,25 @@ class Settings(BaseSettings):
                 "ENVIRONMENT=production. Every JWT session is signed with this key - "
                 "set a long, randomly-generated SECRET_KEY (e.g. `openssl rand -hex 32`) "
                 "before running in production."
+            )
+        # A long string is not a random one: 32x"a" (or 64x"f") passes the
+        # length check above but has zero entropy — anyone guessing the
+        # pattern forges every session. Require at least 128 bits of
+        # Shannon entropy in total (a 64-hex-char `openssl rand -hex 32`
+        # key carries ~256 bits; a repeated character carries 0).
+        counts: dict[str, int] = {}
+        for ch in self.SECRET_KEY:
+            counts[ch] = counts.get(ch, 0) + 1
+        total_bits = -sum(
+            (c / len(self.SECRET_KEY)) * log2(c / len(self.SECRET_KEY))
+            for c in counts.values()
+        ) * len(self.SECRET_KEY)
+        if total_bits < 128:
+            raise ValueError(
+                "SECRET_KEY looks non-random while ENVIRONMENT=production "
+                f"(~{max(total_bits, 0):.0f} bits of entropy; need at least 128). "
+                "Set a long, randomly-generated SECRET_KEY "
+                "(e.g. `openssl rand -hex 32`) before running in production."
             )
         return self
 

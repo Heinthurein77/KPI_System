@@ -14,6 +14,9 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.worksheet.worksheet import Worksheet
 
+from app.core.months import MONTH_NAMES
+from app.services.excel_safe import safe_cell_value as _safe
+
 _HEADER_FILL = PatternFill("solid", fgColor="1E3A5F")
 _SUMMARY_FILL = PatternFill("solid", fgColor="EAF2F8")
 _ALTERNATE_FILL = PatternFill("solid", fgColor="F8FAFC")
@@ -31,21 +34,6 @@ HEADERS = [
     "Check-out",
     "Status",
 ]
-
-MONTH_NAMES = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-]
-
-
-def _safe(value: object) -> object:
-    """Neutralize Excel formula injection: a string starting with =, +, - or @
-    is treated as a formula by spreadsheet apps, so prefix it with a single
-    quote to force plain-text interpretation."""
-    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@"):
-        return "'" + value
-    return value
-
 
 def build_attendance_detail_report(
     entries: list[dict],

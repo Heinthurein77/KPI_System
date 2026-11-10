@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.core.config import settings
+from app.core.months import MONTH_NAMES
 from app.core.timezone import today as app_today
 from app.core.deps import get_current_user
 from app.database import get_db
@@ -16,11 +17,6 @@ from app.services import kpi_service
 from app.services import submission_grace
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
-
-MONTH_NAMES = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-]
 
 
 def current_month_period(today: date | None = None) -> tuple[int, str]:

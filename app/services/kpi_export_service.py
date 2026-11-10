@@ -15,6 +15,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from app.models.kpi_submission import KPISubmission
 from app.models.user import User
+from app.services.excel_safe import safe_cell_value as _safe
 
 
 _HEADER_FILL = PatternFill("solid", fgColor="1E3A5F")
@@ -24,15 +25,6 @@ _HEADER_FONT = Font(color="FFFFFF", bold=True)
 _TITLE_FONT = Font(size=14, bold=True, color="1E3A5F")
 _LABEL_FONT = Font(bold=True, color="334155")
 _THIN_BORDER = Border(bottom=Side(style="thin", color="CBD5E1"))
-
-
-def _safe(value: object) -> object:
-    """Neutralize Excel formula injection: a string starting with =, +, - or @
-    is treated as a formula by spreadsheet apps, so prefix it with a single
-    quote to force plain-text interpretation."""
-    if isinstance(value, str) and value[:1] in ("=", "+", "-", "@"):
-        return "'" + value
-    return value
 
 
 def _write_summary_cell(sheet: Worksheet, label_cell: str, value_cell: str, label: str, value: object) -> None:

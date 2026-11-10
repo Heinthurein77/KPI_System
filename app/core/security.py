@@ -22,13 +22,29 @@ DUMMY_PASSWORD_HASH = "$2b$12$MmMYB4CC7fyouhVAesuW3e9TPIoyhPcVNISX.WMpDDqjHCkUU3
 
 
 def hash_password(plain_password: str) -> str:
-    password_bytes = plain_password.encode("utf-8")[:_MAX_PASSWORD_BYTES]
+    # bcrypt silently truncates past 72 bytes — a 100-char password would
+    # then be equivalent to its first 72 bytes. Refuse instead of silently
+    # weakening the credential; callers validate up front and return 400.
+    validate_password_length(plain_password)
+    password_bytes = plain_password.encode("utf-8")
     return bcrypt.hashpw(password_bytes, bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(plain_password: str, password_hash: str) -> bool:
-    password_bytes = plain_password.encode("utf-8")[:_MAX_PASSWORD_BYTES]
+    # A password longer than 72 bytes can never match a hash created by
+    # hash_password (which refuses them), so it is simply a wrong password —
+    # return False rather than truncating and comparing a prefix.
+    if len(plain_password.encode("utf-8")) > _MAX_PASSWORD_BYTES:
+        return False
+    password_bytes = plain_password.encode("utf-8")
     return bcrypt.checkpw(password_bytes, password_hash.encode("utf-8"))
+
+
+def validate_password_length(plain_password: str) -> None:
+    """Raise ValueError when a password exceeds bcrypt's 72-byte limit.
+    Handlers catch this and return a clear 400."""
+    if len(plain_password.encode("utf-8")) > _MAX_PASSWORD_BYTES:
+        raise ValueError("Password must be at most 72 bytes long.")
 
 
 class SessionClaims(NamedTuple):
@@ -67,15 +83,24 @@ def set_session_cookie(response: Response, token: str, secure: bool) -> None:
 
 
 def _request_is_secure(request) -> bool:
-    """True when the login request arrived over HTTPS, honoring the
-    X-Forwarded-Proto header set by the reverse proxy. Only affects the
-    caller's own session cookie, so trusting the header is safe."""
-    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
-    return proto.split(",")[0].strip().lower() == "https"
+    """True when the login request arrived over HTTPS. Delegates to the
+    trusted-proxy rule (app/core/proxy.py): X-Forwarded-Proto is honoured
+    only from a trusted proxy peer, so a direct client cannot claim HTTPS
+    (which would put the Secure flag — and HSTS — on a plain-HTTP response).
+    Only affects the caller's own session cookie, so trusting the header
+    from the proxy is safe."""
+    from app.core.proxy import is_secure_request
+
+    return is_secure_request(request)
 
 
-def clear_session_cookie(response: Response) -> None:
-    response.delete_cookie(SESSION_COOKIE_NAME, path="/", samesite="lax")
+def clear_session_cookie(response: Response, secure: bool = False) -> None:
+    """Delete the session cookie. ``secure`` must mirror how the cookie was
+    set (see set_session_cookie): a non-secure Set-Cookie cannot overwrite
+    a Secure cookie, so on HTTPS deployments logout would otherwise leave
+    a stale cookie behind. Callers pass secure=_request_is_secure(request);
+    on plain HTTP this is False, identical to the old behaviour."""
+    response.delete_cookie(SESSION_COOKIE_NAME, path="/", samesite="lax", secure=secure)
 
 
 def create_session_token(user_id: int, tenant_id: int | None, token_version: int = 0) -> str:

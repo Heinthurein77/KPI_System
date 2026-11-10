@@ -2,7 +2,8 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.config import settings
@@ -35,6 +36,35 @@ WEIGHT_TOTAL_MESSAGE = (
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _claim_submission(
+    db: Session, submission: KPISubmission, expected_statuses: list[KPIStatus], conflict_message: str
+) -> None:
+    """Atomically claim a submission for a state transition (C2).
+
+    Issues a conditional UPDATE — `WHERE id=? AND status IN (...)` — and
+    treats rowcount 0 as "already handled by another caller" (400). The
+    UPDATE takes the row lock, which the transaction holds until commit,
+    so a second concurrent caller blocks, then sees the status has moved
+    and gets rowcount 0. This works on both SQLite and Postgres (no
+    SELECT ... FOR UPDATE, which SQLite does not support). The UPDATE is
+    a no-op value-wise (it writes back the current status); the row lock
+    and the rowcount are the claim. Callers must call this BEFORE
+    mutating the submission and must not commit between claim and mutate.
+    """
+    result = db.execute(
+        update(KPISubmission)
+        .where(
+            KPISubmission.id == submission.id,
+            KPISubmission.tenant_id == submission.tenant_id,
+            KPISubmission.status.in_(expected_statuses),
+        )
+        .values(status=submission.status)
+    )
+    if result.rowcount == 0:
+        db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, conflict_message)
 
 
 def force_delete_template(db: Session, actor: User, template: KPITemplate) -> None:
@@ -291,7 +321,22 @@ def ensure_period_submissions(
         db.add(submission)
         created.append(submission)
 
-    db.commit()
+    # M2: concurrent first loads race to insert the same drafts — the
+    # unique constraint (uq_submission_period_metric) makes the loser
+    # fail at commit. Roll back and return the winner's committed rows
+    # instead of surfacing a 500.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        return db.scalars(
+            select(KPISubmission).where(
+                KPISubmission.employee_id == employee.id,
+                KPISubmission.year == year,
+                KPISubmission.month_or_quarter == period,
+                KPISubmission.tenant_id == employee.tenant_id,
+            )
+        ).all()
     return existing + created
 
 
@@ -580,6 +625,12 @@ def dept_save_score(
     """Dept Admin edits the score without forwarding yet."""
     if submission.status != KPIStatus.PENDING_DEPT_APPROVAL:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not awaiting department review.")
+    # C2: claim the row first so two concurrent saves serialize on the
+    # row lock instead of both writing + logging.
+    _claim_submission(
+        db, submission, [KPIStatus.PENDING_DEPT_APPROVAL],
+        "Submission is not awaiting department review.",
+    )
     _validate_score_within_target(submission, dept_score, "Dept score")
     old_score = submission.dept_score
     submission.dept_score = dept_score
@@ -614,6 +665,13 @@ def dept_approve(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not awaiting department review.")
     if reviewer.id == submission.employee_id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "You cannot approve your own KPI.")
+    # C2: atomic conditional-UPDATE claim — only the first concurrent
+    # caller proceeds; the rest get 400 and produce no audit row or
+    # notification.
+    _claim_submission(
+        db, submission, [KPIStatus.PENDING_DEPT_APPROVAL],
+        "Submission is not awaiting department review.",
+    )
     _validate_score_within_target(submission, dept_score, "Dept score")
     # Weight guard at approval time too: an over-100 period must not be
     # approvable into the record. (tenant_admin_override stays the
@@ -678,6 +736,11 @@ def final_approve(
     """
     if submission.status != KPIStatus.PENDING_FINAL_APPROVAL:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not awaiting final approval.")
+    # C2: atomic conditional-UPDATE claim (see dept_approve).
+    _claim_submission(
+        db, submission, [KPIStatus.PENDING_FINAL_APPROVAL],
+        "Submission is not awaiting final approval.",
+    )
     _validate_score_within_target(submission, final_score, "Final score")
     # Weight guard at approval time too (see dept_approve).
     validate_period_total_weight(
@@ -819,6 +882,13 @@ def reject_submission(
 ) -> None:
     if submission.status not in (KPIStatus.PENDING_DEPT_APPROVAL, KPIStatus.PENDING_FINAL_APPROVAL):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not in a reviewable state.")
+    # C2: atomic conditional-UPDATE claim, so a reject racing an approve
+    # has a deterministic outcome — only the first caller wins.
+    _claim_submission(
+        db, submission,
+        [KPIStatus.PENDING_DEPT_APPROVAL, KPIStatus.PENDING_FINAL_APPROVAL],
+        "Submission is not in a reviewable state.",
+    )
     submission.status = KPIStatus.REJECTED
     if remarks is not None:
         submission.remarks = remarks

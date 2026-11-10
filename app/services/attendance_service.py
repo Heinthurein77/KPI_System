@@ -19,10 +19,7 @@ from __future__ import annotations
 import calendar
 from datetime import date as date_type, time as time_type
 
-MONTH_NAMES = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-]
+from app.core.months import MONTH_NAMES
 
 DEFAULT_WORK_DAYS = [0, 1, 2, 3, 4]  # Mon-Fri (datetime.weekday())
 DEFAULT_START = "09:00"

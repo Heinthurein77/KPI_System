@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.months import MONTH_NAMES
 from app.core.timezone import today as app_today
 from app.core.deps import get_current_user, require_tenant_admin
 from app.database import get_db
@@ -26,11 +27,6 @@ from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.user import User, UserRole
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"])
-
-MONTH_NAMES = (
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-)
 
 BUCKET_LABELS = ("Need to improve", "Normal", "Performance")
 

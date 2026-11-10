@@ -7,7 +7,7 @@ from pydantic import ValidationError
 
 from app.core.config import Settings
 
-STRONG_KEY = "f" * 64
+STRONG_KEY = "9f2c7a1e4b8d03f6a5c1e7b9d2f4a6c8e0b3d5f7a1c9e4b6d8f0a2c4e6b8d0f"
 NEON_URL = "postgresql://user:pw@ep-cool-123.us-east-2.aws.neon.tech/db?sslmode=require"
 
 

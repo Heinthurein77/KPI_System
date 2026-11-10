@@ -19,3 +19,9 @@ from app.core.config import settings
 def today() -> date:
     """Current calendar date in the app's configured timezone."""
     return datetime.now(ZoneInfo(settings.TIMEZONE)).date()
+
+
+def now() -> datetime:
+    """Current date-time in the app's configured timezone (time-of-day
+    variant of today())."""
+    return datetime.now(ZoneInfo(settings.TIMEZONE))

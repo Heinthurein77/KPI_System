@@ -25,15 +25,10 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.months import MONTH_NAMES
 from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.kpi_template import KPITemplate
 from app.models.user import User, UserRole
-
-
-MONTH_NAMES = (
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-)
 
 
 def is_template_active_for_period(template: KPITemplate, year: int, period: str) -> bool:

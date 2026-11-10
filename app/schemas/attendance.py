@@ -66,7 +66,8 @@ class AttendanceRecordOut(BaseModel):
     check_in: str | None = None
     check_out: str | None = None
     status: str
-    late_minutes: int
+    # NOTE: late_minutes is recorded in the DB but deliberately NOT exposed
+    # here (user decision — removed from UI + export too).
 
     model_config = {"from_attributes": True}
 
@@ -96,8 +97,6 @@ class AttendanceSummaryOut(BaseModel):
     leave: int
     absent: int
     attendance_pct: float
-    total_late_minutes: int
-    late_days: int
     records: list[AttendanceRecordOut] = []
 
 

@@ -91,6 +91,9 @@ export default function AttendancePage() {
   const [deptFilter, setDeptFilter] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportingUserId, setExportingUserId] = useState(null);
+  const [viewingPerson, setViewingPerson] = useState(null);
+  const [personSummary, setPersonSummary] = useState(null);
+  const [personLoading, setPersonLoading] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -124,6 +127,36 @@ export default function AttendancePage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Per-person records modal (opened from a report row): fetches that
+  // person's summary — including the records array — for the selected
+  // month, and refetches when the month changes while it is open. The
+  // report only ever holds rows the viewer may see, so a dept admin can
+  // only ever open their own department's people here.
+  const refreshPersonSummary = useCallback(async (row) => {
+    if (!row) return;
+    setPersonLoading(true);
+    try {
+      setPersonSummary(await getAttendanceSummary(year, month, row.user_id));
+    } catch (e) {
+      setError(getErrorMessage(e));
+      setPersonSummary(null);
+    } finally {
+      setPersonLoading(false);
+    }
+  }, [year, month]);
+
+  useEffect(() => {
+    if (viewingPerson) refreshPersonSummary(viewingPerson);
+  }, [viewingPerson, refreshPersonSummary]);
+
+  // Don't close the person modal while the edit dialog or delete confirm
+  // is stacked on top of it (Escape/backdrop would otherwise close both).
+  function closePersonModal() {
+    if (editingLeave || deletingLeave) return;
+    setViewingPerson(null);
+    setPersonSummary(null);
+  }
 
   function shiftMonth(delta) {
     let m = month + delta;
@@ -221,6 +254,7 @@ export default function AttendancePage() {
       setNotice(`Leave day moved to ${editLeaveDate}. · ခွင့်ရက်ပြင်ပြီးပြီ။`);
       setEditingLeave(null);
       await load();
+      if (viewingPerson) await refreshPersonSummary(viewingPerson);
     } catch (e) {
       // Keep the dialog open so another date can be picked.
       setEditError(getErrorMessage(e));
@@ -239,12 +273,43 @@ export default function AttendancePage() {
       setNotice(`Leave day ${deletingLeave.record_date} deleted. · ခွင့်ရက်ဖျက်ပြီးပြီ။`);
       setDeletingLeave(null);
       await load();
+      if (viewingPerson) await refreshPersonSummary(viewingPerson);
     } catch (e) {
       setError(getErrorMessage(e));
       setDeletingLeave(null);
     } finally {
       setRecordBusy(false);
     }
+  }
+
+  // Edit/Delete buttons for a leave row, shared by the own-records table
+  // and the per-person records modal. Delete is tenant-admin-only on the
+  // backend, so the button is hidden for everyone else.
+  function leaveActions(r) {
+    return (
+      <span className="inline-flex gap-1.5">
+        <button
+          type="button"
+          onClick={() => openEditLeave(r)}
+          title={`Edit leave day ${r.record_date}`}
+          aria-label={`Edit leave day ${r.record_date}`}
+          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700"
+        >
+          Edit
+        </button>
+        {isAdmin && (
+          <button
+            type="button"
+            onClick={() => setDeletingLeave(r)}
+            title={`Delete leave day ${r.record_date}`}
+            aria-label={`Delete leave day ${r.record_date}`}
+            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-red-600 shadow-sm transition hover:border-red-200 hover:bg-red-50"
+          >
+            Delete
+          </button>
+        )}
+      </span>
+    );
   }
 
   // Departments present in the loaded report rows (sorted by name).
@@ -542,30 +607,7 @@ export default function AttendancePage() {
                       <td className="px-4 py-2.5 tabular-nums text-slate-700">{r.check_out || "—"}</td>
                       <td className="px-4 py-2.5"><StatusPill status={r.status} /></td>
                       <td className="px-4 py-2.5 text-right">
-                        {r.status === "leave" && (
-                          <span className="inline-flex gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => openEditLeave(r)}
-                              title={`Edit leave day ${r.record_date}`}
-                              aria-label={`Edit leave day ${r.record_date}`}
-                              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700"
-                            >
-                              Edit
-                            </button>
-                            {isAdmin && (
-                              <button
-                                type="button"
-                                onClick={() => setDeletingLeave(r)}
-                                title={`Delete leave day ${r.record_date}`}
-                                aria-label={`Delete leave day ${r.record_date}`}
-                                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-red-600 shadow-sm transition hover:border-red-200 hover:bg-red-50"
-                              >
-                                Delete
-                              </button>
-                            )}
-                          </span>
-                        )}
+                        {r.status === "leave" && leaveActions(r)}
                       </td>
                     </tr>
                   ))}
@@ -670,7 +712,7 @@ export default function AttendancePage() {
                     <th className="px-4 py-3 text-right">Half</th>
                     <th className="px-4 py-3 text-right">Leave</th>
                     <th className="px-4 py-3 text-right">Absent</th>
-                    <th className="px-4 py-3"><span className="sr-only">Download</span></th>
+                    <th className="px-4 py-3"><span className="sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -687,9 +729,19 @@ export default function AttendancePage() {
                       <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{row.leave}</td>
                       <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{row.absent}</td>
                       <td className="px-4 py-2.5 text-right">
-                        <button
-                          type="button"
-                          onClick={() => handleExportPerson(row)}
+                        <span className="inline-flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setViewingPerson(row)}
+                            title={`View ${row.employee_name}'s records`}
+                            aria-label={`View ${row.employee_name}'s records`}
+                            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700"
+                          >
+                            View
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleExportPerson(row)}
                           disabled={exportingUserId !== null}
                           title={`Download ${row.employee_name}'s Excel`}
                           aria-label={`Download ${row.employee_name}'s attendance Excel`}
@@ -699,6 +751,7 @@ export default function AttendancePage() {
                             <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 4v12m0 0l-4-4m4 4l4-4" />
                           </svg>
                         </button>
+                        </span>
                       </td>
                     </tr>
                   ))}
@@ -707,6 +760,57 @@ export default function AttendancePage() {
             </div>
           </section>
         )}
+
+        {/* Per-person records (opened from a report row) */}
+        <Modal
+          open={viewingPerson !== null}
+          title={viewingPerson ? `${viewingPerson.employee_name} · ${monthName} ${year}` : ""}
+          onClose={closePersonModal}
+          wide
+        >
+          {personLoading && <p className="text-sm text-slate-500">Loading…</p>}
+          {!personLoading && personSummary && (
+            <>
+              <p className="text-sm text-slate-500">
+                {viewingPerson.department_name || "—"} · {personSummary.attendance_pct}% attendance ·
+                Present {personSummary.present} · Half {personSummary.half} ·
+                Leave {personSummary.leave} · Absent {personSummary.absent}
+              </p>
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                    <tr>
+                      <th className="px-4 py-3">Date</th>
+                      <th className="px-4 py-3">Check-in</th>
+                      <th className="px-4 py-3">Check-out</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3"><span className="sr-only">Actions</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {personSummary.records.length === 0 && (
+                      <tr><td colSpan={5} className="px-4 py-4 text-slate-400">No attendance records this month yet.</td></tr>
+                    )}
+                    {personSummary.records.map((r) => (
+                      <tr key={r.id} className="border-t border-slate-100 transition hover:bg-slate-50">
+                        <td className="px-4 py-2.5 tabular-nums text-slate-900">{r.record_date}</td>
+                        <td className="px-4 py-2.5 tabular-nums text-slate-700">{r.check_in || "—"}</td>
+                        <td className="px-4 py-2.5 tabular-nums text-slate-700">{r.check_out || "—"}</td>
+                        <td className="px-4 py-2.5"><StatusPill status={r.status} /></td>
+                        <td className="px-4 py-2.5 text-right">
+                          {r.status === "leave" && leaveActions(r)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+          {!personLoading && !personSummary && (
+            <p className="text-sm text-slate-500">Could not load this person&apos;s records.</p>
+          )}
+        </Modal>
 
         {/* Tenant admin settings */}
         {isAdmin && settingsForm && (

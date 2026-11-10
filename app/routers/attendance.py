@@ -513,13 +513,18 @@ def export_report(
     year: int = Query(...),
     month: int = Query(...),
     department_id: int | None = Query(None),
+    user_id: int | None = Query(None),
     db: Session = Depends(get_db),
     user: User = Depends(require_tenant_member),
 ):
     """Download the monthly attendance detail as .xlsx — one row per working
     day per person. Same visibility as GET /report: a dept admin only ever
     gets their own department, even when no department filter is given.
-    Working days without a record appear as Absent with blank times."""
+    Working days without a record appear as Absent with blank times.
+    With user_id, only that person is exported (per-person download); a
+    user outside the caller's visible set yields a headers-only file.
+    Late minutes are recorded in the database but deliberately never
+    exported."""
     _month_bounds(year, month)  # 400 on an invalid month
     start, end = _month_bounds(year, month)
     visible = _visible_user_ids(db, user)
@@ -539,6 +544,18 @@ def export_report(
         else:
             dept_label = dept.name
             users = [u for u in users if u.department_id == department_id]
+    person_label = None
+    if user_id is not None:
+        target = db.get(User, user_id)
+        if (
+            target is None
+            or target.id not in visible
+            or target.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN)
+        ):
+            users = []
+        else:
+            users = [target]
+            person_label = target.name
     working = _working_days(db, user.tenant_id, year, month)
     entries = []
     for u in users:
@@ -566,7 +583,6 @@ def export_report(
                         "check_in": "",
                         "check_out": "",
                         "status": "Absent",
-                        "late_minutes": 0,
                     }
                 )
             else:
@@ -579,12 +595,13 @@ def export_report(
                         "check_in": record.check_in.strftime("%H:%M") if record.check_in else "",
                         "check_out": record.check_out.strftime("%H:%M") if record.check_out else "",
                         "status": _STATUS_LABELS.get(record.status, record.status),
-                        "late_minutes": record.late_minutes,
                     }
                 )
-    output = build_attendance_detail_report(entries, year, month, dept_label)
+    output = build_attendance_detail_report(entries, year, month, dept_label, person_label)
     filename = f"attendance-{year}-{month:02d}"
-    if dept_label:
+    if person_label:
+        filename += f"-{_safe_file_part(person_label)}"
+    elif dept_label:
         filename += f"-{_safe_file_part(dept_label)}"
     filename += ".xlsx"
     return StreamingResponse(

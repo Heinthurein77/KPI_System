@@ -114,6 +114,11 @@ def test_export_detail_columns_and_rows(client, db):
     assert len(working) == 21
     # 4 report users (Alice, Bob, Carol, Dana) x 21 working days.
     assert len(data) == 84
+    # Late is recorded in the DB but never exported.
+    assert HEADERS == [
+        "Date", "Employee Name", "Department", "Role",
+        "Check-in", "Check-out", "Status",
+    ]
 
     def row_for(name, day):
         return next(r for r in data if r[1] == name and r[0] == day)
@@ -121,20 +126,19 @@ def test_export_detail_columns_and_rows(client, db):
     alice_day1 = row_for("Alice Aung", "2026-11-02")
     assert alice_day1[2] == "Sales" and alice_day1[3] == "Employee"
     assert alice_day1[4] == "09:05" and alice_day1[5] == "17:00"
-    assert alice_day1[6] == "Present" and alice_day1[7] == 5
+    assert alice_day1[6] == "Present"
 
     alice_day2 = row_for("Alice Aung", "2026-11-03")
     assert alice_day2[6] == "Absent"
     assert alice_day2[4] in (None, "") and alice_day2[5] in (None, "")
-    assert alice_day2[7] == 0
 
     bob_half = row_for("Bob Bo", "2026-11-03")
     assert bob_half[6] == "Half day"
-    assert bob_half[4] == "14:00" and bob_half[7] == 300
+    assert bob_half[4] == "14:00"
 
     carol_leave = row_for("Carol Chan", "2026-11-04")
     assert carol_leave[6] == "Leave"
-    assert carol_leave[4] in (None, "") and carol_leave[7] == 0
+    assert carol_leave[4] in (None, "")
 
     # Weekends are not rows; ordering is employee name, then date.
     dates = {r[0] for r in data}
@@ -190,6 +194,47 @@ def test_export_tenant_isolation(client, db):
 def test_export_unknown_department_is_headers_only(client, db):
     fx = _setup(client, db)
     _, rows = _export(client, fx["admin"], fx["tenant"], {"department_id": 999999})
+    assert _data_rows(rows) == []
+
+
+def test_export_user_id_person_only(client, db):
+    fx = _setup(client, db)
+    resp, rows = _export(
+        client, fx["admin"], fx["tenant"], {"user_id": fx["alice"].id}
+    )
+    data = _data_rows(rows)
+    assert len(data) == 21  # Alice x 21 working days
+    assert {r[1] for r in data} == {"Alice Aung"}
+    assert "alice-aung" in resp.headers["content-disposition"]
+    assert "Employee: Alice Aung" in [c for r in rows[:2] for c in r if c]
+
+
+def test_export_user_id_scoping(client, db):
+    fx = _setup(client, db)
+    # An employee asking for someone else gets a headers-only file.
+    _, rows = _export(
+        client, fx["alice"], fx["tenant"], {"user_id": fx["bob"].id}
+    )
+    assert _data_rows(rows) == []
+    # A dept admin asking for someone outside their department: same.
+    _, rows = _export(
+        client, fx["dana"], fx["tenant"], {"user_id": fx["carol"].id}
+    )
+    assert _data_rows(rows) == []
+    # A dept admin asking for someone in their own department: works.
+    _, rows = _export(
+        client, fx["dana"], fx["tenant"], {"user_id": fx["bob"].id}
+    )
+    data = _data_rows(rows)
+    assert len(data) == 21
+    assert {r[1] for r in data} == {"Bob Bo"}
+    # An employee asking for themself: works.
+    _, rows = _export(
+        client, fx["alice"], fx["tenant"], {"user_id": fx["alice"].id}
+    )
+    assert len(_data_rows(rows)) == 21
+    # Unknown user: headers-only.
+    _, rows = _export(client, fx["admin"], fx["tenant"], {"user_id": 999999})
     assert _data_rows(rows) == []
 
 

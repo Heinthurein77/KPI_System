@@ -30,7 +30,6 @@ HEADERS = [
     "Check-in",
     "Check-out",
     "Status",
-    "Late (min)",
 ]
 
 MONTH_NAMES = [
@@ -53,30 +52,38 @@ def build_attendance_detail_report(
     year: int,
     month: int,
     department_label: str | None = None,
+    person_label: str | None = None,
 ) -> BytesIO:
     """Return a formatted .xlsx with one row per working day per person.
 
     Each entry is a dict with keys: date (ISO "YYYY-MM-DD" string),
-    employee_name, department_name, role, check_in, check_out, status,
-    late_minutes. Entries are written in the order given (employee name,
-    then date). When entries is empty only the title + header row are
-    written (headers-only file).
+    employee_name, department_name, role, check_in, check_out, status.
+    Entries are written in the order given (employee name, then date).
+    When entries is empty only the title + header row are written
+    (headers-only file). When person_label is given the subtitle names
+    that person instead of a department (per-person download).
+
+    Late minutes are recorded in the database but deliberately never
+    shown or exported.
     """
     workbook = Workbook()
     sheet: Worksheet = workbook.active
     sheet.title = "Attendance Detail"
     sheet.sheet_view.showGridLines = False
 
-    sheet.merge_cells("A1:H1")
+    sheet.merge_cells("A1:G1")
     sheet["A1"] = f"Attendance Detail — {MONTH_NAMES[month - 1]} {year}"
     sheet["A1"].font = _TITLE_FONT
     sheet["A1"].alignment = Alignment(horizontal="left")
 
-    sheet.merge_cells("A2:H2")
-    sheet["A2"] = f"Department: {department_label}" if department_label else "Department: All departments"
+    sheet.merge_cells("A2:G2")
+    if person_label:
+        sheet["A2"] = f"Employee: {person_label}"
+    else:
+        sheet["A2"] = f"Department: {department_label}" if department_label else "Department: All departments"
     sheet["A2"].font = _LABEL_FONT
     sheet["A2"].alignment = Alignment(horizontal="left")
-    for row in sheet["A1:H2"]:
+    for row in sheet["A1:G2"]:
         for cell in row:
             cell.fill = _SUMMARY_FILL
             cell.alignment = Alignment(vertical="center")
@@ -97,7 +104,6 @@ def build_attendance_detail_report(
             entry["check_in"],
             entry["check_out"],
             entry["status"],
-            entry["late_minutes"],
         ]
         for column_number, value in enumerate(values, start=1):
             sheet.cell(row=row_number, column=column_number, value=_safe(value))
@@ -109,7 +115,7 @@ def build_attendance_detail_report(
             cell.alignment = Alignment(vertical="center")
 
     sheet.freeze_panes = "A5"
-    widths = {"A": 14, "B": 24, "C": 20, "D": 14, "E": 12, "F": 12, "G": 12, "H": 12}
+    widths = {"A": 14, "B": 24, "C": 20, "D": 14, "E": 12, "F": 12, "G": 12}
     for column, width in widths.items():
         sheet.column_dimensions[column].width = width
 

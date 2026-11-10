@@ -45,3 +45,12 @@ export function downloadAttendanceReportExcel(year, month, departmentId) {
     .get("/api/attendance/report/export", { params, responseType: "blob" })
     .then((r) => r.data);
 }
+
+export function downloadAttendancePersonExcel(year, month, userId) {
+  return client
+    .get("/api/attendance/report/export", {
+      params: { year, month, user_id: userId },
+      responseType: "blob",
+    })
+    .then((r) => r.data);
+}

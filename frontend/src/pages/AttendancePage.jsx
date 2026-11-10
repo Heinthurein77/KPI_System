@@ -6,6 +6,7 @@ import { getBlobErrorMessage, getErrorMessage } from "../api/errors";
 import {
   checkIn,
   checkOut,
+  downloadAttendancePersonExcel,
   downloadAttendanceReportExcel,
   getAttendanceReport,
   getAttendanceSettings,
@@ -21,13 +22,43 @@ const STATUS_LABEL = {
   half: "Half day · နေ့တစ်ဝက်",
   leave: "Leave · ခွင့်",
 };
+// Restrained status pills, same shape as the shared StatusBadge.
+const STATUS_PILL = {
+  present: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/20",
+  half: "bg-amber-50 text-amber-700 ring-1 ring-amber-600/20",
+  leave: "bg-sky-50 text-sky-700 ring-1 ring-sky-600/20",
+  absent: "bg-rose-50 text-rose-700 ring-1 ring-rose-600/20",
+};
 
-function Stat({ label, value, sub }) {
+function StatusPill({ status }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white px-4 py-3">
-      <p className="text-xs text-slate-500">{label}</p>
-      <p className="mt-1 text-2xl font-bold text-slate-900">{value}</p>
-      {sub && <p className="text-xs text-slate-400">{sub}</p>}
+    <span
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${
+        STATUS_PILL[status] || "bg-slate-100 text-slate-600"
+      }`}
+    >
+      {STATUS_LABEL[status] || status}
+    </span>
+  );
+}
+
+function slugify(value) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function Stat({ label, value, sub, accent }) {
+  return (
+    <div
+      className={`rounded-2xl border bg-white px-4 py-3 shadow-sm ${
+        accent ? "border-brand-200" : "border-slate-200"
+      }`}
+    >
+      <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">{label}</p>
+      <p className={`mt-1 text-2xl font-bold ${accent ? "text-brand-700" : "text-slate-900"}`}>{value}</p>
+      {sub && <p className="mt-0.5 text-xs text-slate-400">{sub}</p>}
     </div>
   );
 }
@@ -47,6 +78,7 @@ export default function AttendancePage() {
   const [leaveDate, setLeaveDate] = useState("");
   const [deptFilter, setDeptFilter] = useState("");
   const [exporting, setExporting] = useState(false);
+  const [exportingUserId, setExportingUserId] = useState(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -194,9 +226,7 @@ export default function AttendancePage() {
       const link = document.createElement("a");
       link.href = url;
       const dept = reportDepartments.find((d) => String(d.id) === effectiveDeptFilter);
-      const slug = dept
-        ? `-${dept.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`
-        : "";
+      const slug = dept ? `-${slugify(dept.name)}` : "";
       link.download = `attendance-${year}-${String(month).padStart(2, "0")}${slug}.xlsx`;
       document.body.appendChild(link);
       link.click();
@@ -207,6 +237,29 @@ export default function AttendancePage() {
       setError(await getBlobErrorMessage(e, "Could not download the Excel. Please try again."));
     } finally {
       setExporting(false);
+    }
+  }
+
+  async function handleExportPerson(row) {
+    if (exportingUserId) return;
+    setError("");
+    setNotice("");
+    setExportingUserId(row.user_id);
+    try {
+      const file = await downloadAttendancePersonExcel(year, month, row.user_id);
+      const url = URL.createObjectURL(file);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `attendance-${year}-${String(month).padStart(2, "0")}-${slugify(row.employee_name)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      setNotice(`${row.employee_name}'s attendance Excel downloaded.`);
+    } catch (e) {
+      setError(await getBlobErrorMessage(e, "Could not download the Excel. Please try again."));
+    } finally {
+      setExportingUserId(null);
     }
   }
 
@@ -271,61 +324,99 @@ export default function AttendancePage() {
 
   return (
     <AppShell>
-      <div className="mx-auto max-w-5xl px-4 py-6">
-        <h1 className="text-2xl font-bold text-slate-900">Attendance · တက်ရောက်မှု</h1>
-        <p className="mt-1 text-sm text-slate-500">
-          Office WiFi only · ရုံး WiFi နဲ့မှ check-in/check-out လုပ်လို့ရပါတယ်။ Late never
-          deducts — late time is shown for info only.
-        </p>
+      <div className="mx-auto max-w-6xl px-4 py-8">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-slate-900">Attendance · တက်ရောက်မှု</h1>
+            <p className="mt-1 text-sm text-slate-500">
+              Office WiFi only · ရုံး WiFi နဲ့မှ check-in/check-out လုပ်လို့ရပါတယ်။
+            </p>
+          </div>
+          {todayData && (
+            <span
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-semibold ${
+                !todayData.wifi_enforced
+                  ? "bg-amber-50 text-amber-700 ring-1 ring-amber-600/20"
+                  : todayData.ip_allowed
+                    ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/20"
+                    : "bg-rose-50 text-rose-700 ring-1 ring-rose-600/20"
+              }`}
+            >
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  !todayData.wifi_enforced
+                    ? "bg-amber-500"
+                    : todayData.ip_allowed
+                      ? "bg-emerald-500"
+                      : "bg-rose-500"
+                }`}
+              />
+              {!todayData.wifi_enforced
+                ? "WiFi not enforced yet"
+                : todayData.ip_allowed
+                  ? "On office WiFi"
+                  : "Not on office WiFi"}
+            </span>
+          )}
+        </div>
 
         {error && (
-          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="mt-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 shadow-sm">
             {error}
           </div>
         )}
         {notice && (
-          <div className="mt-4 rounded-lg border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800">
+          <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 shadow-sm">
             {notice}
           </div>
         )}
 
         {/* Today */}
-        <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5">
-          <h2 className="text-lg font-semibold text-slate-900">Today · ဒီနေ့</h2>
-          {todayData && (
-            <>
-              <p className="mt-1 text-sm text-slate-600">
+        <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-base font-semibold text-slate-900">Today · ဒီနေ့</h2>
+            {todayData && (
+              <p className="text-sm text-slate-500">
                 {todayData.today} · Office {todayData.start_time}–{todayData.end_time} ·
                 Midday {todayData.midday} · {todayData.is_working_day ? "Working day" : "Not a working day"}
               </p>
+            )}
+          </div>
+          {todayData && (
+            <>
               {todayData.wifi_enforced ? (
-                <p className={`mt-2 text-sm ${todayData.ip_allowed ? "text-emerald-700" : "text-red-700"}`}>
+                <p className={`mt-3 text-sm font-medium ${todayData.ip_allowed ? "text-emerald-700" : "text-red-700"}`}>
                   {todayData.ip_allowed
                     ? "✓ You are on office WiFi."
                     : "✕ You are NOT on office WiFi — check-in/out is disabled."}
                 </p>
               ) : (
-                <p className="mt-2 text-sm text-amber-700">
+                <p className="mt-3 text-sm font-medium text-amber-700">
                   ⚠ No office WiFi IP is configured yet — check-in is allowed for testing.
                   Ask the tenant admin to add the office public IP in Settings below.
                 </p>
               )}
               {record && (
-                <p className="mt-2 text-sm text-slate-700">
-                  Check-in {record.check_in || "—"}
-                  {record.check_out ? ` · Check-out ${record.check_out}` : " · Not checked out yet"}
-                  {" · "}
-                  {STATUS_LABEL[record.status] || record.status}
-                  {record.late_minutes > 0 && ` · Late ${record.late_minutes} min`}
-                </p>
+                <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-slate-100 pt-4 text-sm">
+                  <span className="text-slate-600">
+                    Check-in <span className="font-semibold tabular-nums text-slate-900">{record.check_in || "—"}</span>
+                  </span>
+                  <span className="text-slate-600">
+                    Check-out <span className="font-semibold tabular-nums text-slate-900">{record.check_out || "—"}</span>
+                  </span>
+                  <StatusPill status={record.status} />
+                  {!record.check_out && record.status !== "leave" && (
+                    <span className="text-xs text-slate-400">Not checked out yet</span>
+                  )}
+                </div>
               )}
               {canCheckIn && (
-                <div className="mt-4 flex gap-3">
+                <div className="mt-5 flex gap-3">
                   <button
                     type="button"
                     onClick={handleCheckIn}
                     disabled={busy || !todayData.is_working_day || !todayData.ip_allowed || !!record}
-                    className="rounded-lg bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
+                    className="rounded-lg bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-40"
                   >
                     Check-in
                   </button>
@@ -333,7 +424,7 @@ export default function AttendancePage() {
                     type="button"
                     onClick={handleCheckOut}
                     disabled={busy || !todayData.ip_allowed || !record || !!record.check_out || record.status === "leave"}
-                    className="rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 disabled:opacity-40"
+                    className="rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-40"
                   >
                     Check-out
                   </button>
@@ -341,92 +432,106 @@ export default function AttendancePage() {
               )}
             </>
           )}
-        </div>
+        </section>
 
         {/* Month navigation + summary */}
-        <div className="mt-6 flex items-center gap-3">
-          <button type="button" onClick={() => shiftMonth(-1)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">‹ Prev</button>
-          <h2 className="text-lg font-semibold text-slate-900">{monthName} {year}</h2>
-          <button type="button" onClick={() => shiftMonth(1)} className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm">Next ›</button>
+        <div className="mt-8 flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => shiftMonth(-1)}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
+            aria-label="Previous month"
+          >
+            ‹ Prev
+          </button>
+          <h2 className="text-lg font-semibold tracking-tight text-slate-900">{monthName} {year}</h2>
+          <button
+            type="button"
+            onClick={() => shiftMonth(1)}
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
+            aria-label="Next month"
+          >
+            Next ›
+          </button>
         </div>
 
         {summary && (
           <>
-            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-              <Stat label="Attendance" value={`${summary.attendance_pct}%`} sub={`${summary.present + summary.half * 0.5} / ${summary.working_days} days`} />
+            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+              <Stat accent label="Attendance" value={`${summary.attendance_pct}%`} sub={`${summary.present + summary.half * 0.5} / ${summary.working_days} days`} />
               <Stat label="Present" value={summary.present} />
               <Stat label="Half day" value={summary.half} />
               <Stat label="Leave" value={summary.leave} sub="counts as absent" />
               <Stat label="Absent" value={summary.absent} sub="no record" />
-              <Stat label="Late" value={`${summary.late_days} days`} sub={`${summary.total_late_minutes} min total`} />
             </div>
 
-            <div className="mt-6 overflow-x-auto rounded-xl border border-slate-200 bg-white">
+            <section className="mt-6 overflow-x-auto rounded-2xl border border-slate-200 bg-white shadow-sm">
               <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 text-slate-500">
+                <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                   <tr>
-                    <th className="px-4 py-2">Date</th>
-                    <th className="px-4 py-2">Check-in</th>
-                    <th className="px-4 py-2">Check-out</th>
-                    <th className="px-4 py-2">Status</th>
-                    <th className="px-4 py-2">Late</th>
+                    <th className="px-4 py-3">Date</th>
+                    <th className="px-4 py-3">Check-in</th>
+                    <th className="px-4 py-3">Check-out</th>
+                    <th className="px-4 py-3">Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {summary.records.length === 0 && (
-                    <tr><td colSpan={5} className="px-4 py-4 text-slate-400">No attendance records this month yet.</td></tr>
+                    <tr><td colSpan={4} className="px-4 py-4 text-slate-400">No attendance records this month yet.</td></tr>
                   )}
                   {summary.records.map((r) => (
-                    <tr key={r.id} className="border-t border-slate-100">
-                      <td className="px-4 py-2">{r.record_date}</td>
-                      <td className="px-4 py-2">{r.check_in || "—"}</td>
-                      <td className="px-4 py-2">{r.check_out || "—"}</td>
-                      <td className="px-4 py-2">{STATUS_LABEL[r.status] || r.status}</td>
-                      <td className="px-4 py-2">{r.late_minutes > 0 ? `${r.late_minutes} min` : "—"}</td>
+                    <tr key={r.id} className="border-t border-slate-100 transition hover:bg-slate-50">
+                      <td className="px-4 py-2.5 tabular-nums text-slate-900">{r.record_date}</td>
+                      <td className="px-4 py-2.5 tabular-nums text-slate-700">{r.check_in || "—"}</td>
+                      <td className="px-4 py-2.5 tabular-nums text-slate-700">{r.check_out || "—"}</td>
+                      <td className="px-4 py-2.5"><StatusPill status={r.status} /></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
+            </section>
 
             {/* Mark leave */}
-            <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5">
-              <h3 className="font-semibold text-slate-900">Mark a leave day · ခွင့်ရက်မှတ်ရန်</h3>
+            <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+              <h3 className="text-base font-semibold text-slate-900">Mark a leave day · ခွင့်ရက်မှတ်ရန်</h3>
               <p className="mt-1 text-sm text-slate-500">Approved leave counts as absent in the attendance %.</p>
-              <div className="mt-3 flex flex-wrap items-center gap-3">
+              <div className="mt-4 flex flex-wrap items-center gap-3">
                 <input
                   type="date"
                   value={leaveDate}
                   onChange={(e) => setLeaveDate(e.target.value)}
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
                 />
                 <button
                   type="button"
                   onClick={handleLeave}
                   disabled={busy || !leaveDate}
-                  className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                  className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700 disabled:opacity-40"
                 >
                   Mark leave
                 </button>
               </div>
-            </div>
+            </section>
           </>
         )}
 
         {/* Admin report */}
         {report && (
-          <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5">
-            <h3 className="font-semibold text-slate-900">Monthly report · လချုပ်အစီရင်ခံစာ</h3>
+          <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <h3 className="text-base font-semibold text-slate-900">Monthly report · လချုပ်အစီရင်ခံစာ</h3>
+              <p className="text-xs text-slate-400">{filteredReport.length} {filteredReport.length === 1 ? "person" : "people"}</p>
+            </div>
             <p className="mt-1 text-sm text-slate-500">
               Attendance % is display-only — it is never written to KPI.
             </p>
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <label className="flex items-center gap-2 text-sm text-slate-700">
-                Department
+            <div className="mt-4 flex flex-wrap items-end gap-3">
+              <label className="text-sm font-medium text-slate-700">
+                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">Department</span>
                 <select
                   value={effectiveDeptFilter}
                   onChange={(e) => setDeptFilter(e.target.value)}
-                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
                 >
                   <option value="">All departments</option>
                   {reportDepartments.map((d) => (
@@ -438,23 +543,26 @@ export default function AttendancePage() {
                 type="button"
                 onClick={handleExport}
                 disabled={exporting}
-                className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+                className="inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-40"
               >
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 4v12m0 0l-4-4m4 4l4-4" />
+                </svg>
                 {exporting ? "Exporting…" : "Export Excel"}
               </button>
             </div>
             <div className="mt-4 overflow-x-auto">
               <table className="w-full text-left text-sm">
-                <thead className="bg-slate-50 text-slate-500">
+                <thead className="bg-slate-50 text-[11px] font-semibold uppercase tracking-wider text-slate-500">
                   <tr>
-                    <th className="px-4 py-2">Employee</th>
-                    <th className="px-4 py-2">Department</th>
-                    <th className="px-4 py-2">Attendance</th>
-                    <th className="px-4 py-2">Present</th>
-                    <th className="px-4 py-2">Half</th>
-                    <th className="px-4 py-2">Leave</th>
-                    <th className="px-4 py-2">Absent</th>
-                    <th className="px-4 py-2">Late</th>
+                    <th className="px-4 py-3">Employee</th>
+                    <th className="px-4 py-3">Department</th>
+                    <th className="px-4 py-3 text-right">Attendance</th>
+                    <th className="px-4 py-3 text-right">Present</th>
+                    <th className="px-4 py-3 text-right">Half</th>
+                    <th className="px-4 py-3 text-right">Leave</th>
+                    <th className="px-4 py-3 text-right">Absent</th>
+                    <th className="px-4 py-3"><span className="sr-only">Download</span></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -462,27 +570,40 @@ export default function AttendancePage() {
                     <tr><td colSpan={8} className="px-4 py-4 text-slate-400">No attendance records for this department yet.</td></tr>
                   )}
                   {filteredReport.map((row) => (
-                    <tr key={row.user_id} className="border-t border-slate-100">
-                      <td className="px-4 py-2">{row.employee_name}</td>
-                      <td className="px-4 py-2">{row.department_name || "—"}</td>
-                      <td className="px-4 py-2 font-semibold">{row.attendance_pct}%</td>
-                      <td className="px-4 py-2">{row.present}</td>
-                      <td className="px-4 py-2">{row.half}</td>
-                      <td className="px-4 py-2">{row.leave}</td>
-                      <td className="px-4 py-2">{row.absent}</td>
-                      <td className="px-4 py-2">{row.late_days} days · {row.total_late_minutes} min</td>
+                    <tr key={row.user_id} className="border-t border-slate-100 transition hover:bg-slate-50">
+                      <td className="px-4 py-2.5 font-medium text-slate-900">{row.employee_name}</td>
+                      <td className="px-4 py-2.5 text-slate-700">{row.department_name || "—"}</td>
+                      <td className="px-4 py-2.5 text-right font-semibold tabular-nums text-slate-900">{row.attendance_pct}%</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{row.present}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{row.half}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{row.leave}</td>
+                      <td className="px-4 py-2.5 text-right tabular-nums text-slate-700">{row.absent}</td>
+                      <td className="px-4 py-2.5 text-right">
+                        <button
+                          type="button"
+                          onClick={() => handleExportPerson(row)}
+                          disabled={exportingUserId !== null}
+                          title={`Download ${row.employee_name}'s Excel`}
+                          aria-label={`Download ${row.employee_name}'s attendance Excel`}
+                          className="inline-flex items-center justify-center rounded-lg border border-slate-200 bg-white p-2 text-slate-500 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700 disabled:opacity-40"
+                        >
+                          <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v2a2 2 0 002 2h12a2 2 0 002-2v-2M12 4v12m0 0l-4-4m4 4l4-4" />
+                          </svg>
+                        </button>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          </div>
+          </section>
         )}
 
         {/* Tenant admin settings */}
         {isAdmin && settingsForm && (
-          <div className="mt-6 rounded-xl border border-slate-200 bg-white p-5">
-            <h3 className="font-semibold text-slate-900">Attendance settings · ဆက်တင် (your organization only)</h3>
+          <section className="mt-8 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+            <h3 className="text-base font-semibold text-slate-900">Attendance settings · ဆက်တင် (your organization only)</h3>
             <div className="mt-4 space-y-4">
               <div>
                 <p className="text-sm font-medium text-slate-700">Working days</p>
@@ -560,12 +681,12 @@ export default function AttendancePage() {
                 type="button"
                 onClick={() => setShowSaveConfirm(true)}
                 disabled={busy || settingsSaving}
-                className="rounded-lg bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-40"
+                className="rounded-lg bg-brand-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-40"
               >
                 Save settings
               </button>
             </div>
-          </div>
+          </section>
         )}
       </div>
       <ConfirmDialog

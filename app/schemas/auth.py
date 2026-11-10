@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.user import UserOut
 
@@ -16,5 +16,8 @@ class LoginResponse(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
-    new_password: str
+    # max_length 128 matches create/reset password schemas; the 8-char
+    # minimum is enforced in the handlers (400, not 422) as before.
+    # bcrypt also rejects passwords over 72 bytes (see security.py).
+    current_password: str = Field(max_length=128)
+    new_password: str = Field(max_length=128)

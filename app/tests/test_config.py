@@ -29,7 +29,7 @@ def test_production_without_database_url_is_rejected(monkeypatch):
         build(monkeypatch, ENVIRONMENT="production", SECRET_KEY=STRONG_KEY)
 
 
-@pytest.mark.parametrize("key", ["dev-only-secret-change-me", "short", "please-change-this-to-something-long-and-random"])
+@pytest.mark.parametrize("key", ["dev-only-secret-change-me", "short", "please-change-this-to-something-long-and-random", "a" * 32, "f" * 64])
 def test_production_with_placeholder_or_short_secret_key_is_rejected(monkeypatch, key):
     with pytest.raises(ValidationError, match="SECRET_KEY"):
         build(monkeypatch, ENVIRONMENT="production", SECRET_KEY=key, DATABASE_URL=NEON_URL)

@@ -1,14 +1,22 @@
 from datetime import date
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 from app.core.config import settings
 from app.core.deps import get_current_user, require_dept_admin, require_tenant_admin
+from app.core.rate_limit import (
+    ADMIN_WRITE_RATE_LIMIT,
+    EXPORT_RATE_LIMIT,
+    PASSWORD_RATE_LIMIT,
+    RECURRING_RATE_LIMIT,
+    _authenticated_user_key,
+    limiter,
+)
 from app.core.timezone import today as app_today
-from app.core.security import hash_password
+from app.core.security import hash_password, validate_password_length
 from app.core.tenant import get_tenant_scoped_or_404
 from app.database import get_db
 from app.models.audit_log import AuditLog
@@ -280,7 +288,9 @@ def get_user_submissions_for_period(
 
 
 @router.get("/kpi-export")
+@limiter.limit(EXPORT_RATE_LIMIT, key_func=_authenticated_user_key)
 def export_employee_kpi_report(
+    request: Request,
     employee_id: int,
     month: str,
     year: int,
@@ -325,7 +335,9 @@ def export_employee_kpi_report(
 
 
 @router.get("/kpi-export/annual")
+@limiter.limit(EXPORT_RATE_LIMIT, key_func=_authenticated_user_key)
 def export_employee_annual_kpi_report(
+    request: Request,
     employee_id: int,
     year: int,
     db: Session = Depends(get_db),
@@ -367,11 +379,17 @@ def export_employee_annual_kpi_report(
 
 
 @router.post("/users", response_model=UserOut)
+@limiter.limit(ADMIN_WRITE_RATE_LIMIT, key_func=_authenticated_user_key)
 def create_user(
+    request: Request,
     payload: CreateUserRequest, db: Session = Depends(get_db), user: User = Depends(require_dept_admin)
 ):
     if payload.role == UserRole.SUPER_ADMIN:
         raise HTTPException(400, "Cannot assign the platform Super Admin role to a tenant user.")
+    try:
+        validate_password_length(payload.password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
 
     email = payload.email.strip().lower()
     existing = db.scalar(
@@ -470,7 +488,9 @@ def toggle_user_active(user_id: int, db: Session = Depends(get_db), user: User =
 
 
 @router.post("/users/{user_id}/reset-password", response_model=UserOut)
+@limiter.limit(PASSWORD_RATE_LIMIT, key_func=_authenticated_user_key)
 def reset_user_password(
+    request: Request,
     user_id: int,
     payload: ResetPasswordRequest,
     db: Session = Depends(get_db),
@@ -487,6 +507,10 @@ def reset_user_password(
     ):
         raise HTTPException(403, "You can only reset passwords for employees in your department.")
 
+    try:
+        validate_password_length(payload.password)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     target.password_hash = hash_password(payload.password)
     target.must_change_password = True
     target.token_version = (target.token_version or 0) + 1
@@ -546,6 +570,10 @@ def edit_user(
     if target.role in (UserRole.DEPT_ADMIN, UserRole.EMPLOYEE) and target.department_id is None:
         raise HTTPException(400, "Department Admins and Employees must belong to a department.")
     if payload.password:
+        try:
+            validate_password_length(payload.password)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
         target.password_hash = hash_password(payload.password)
         target.must_change_password = True
         target.token_version = (target.token_version or 0) + 1
@@ -620,7 +648,9 @@ def list_templates(db: Session = Depends(get_db), user: User = Depends(require_d
 
 
 @router.post("/templates", response_model=KPITemplateOut)
+@limiter.limit(ADMIN_WRITE_RATE_LIMIT, key_func=_authenticated_user_key)
 def create_template(
+    request: Request,
     payload: CreateTemplateRequest, db: Session = Depends(get_db), user: User = Depends(require_dept_admin)
 ):
     if user.role == UserRole.DEPT_ADMIN:
@@ -935,7 +965,9 @@ def rename_template(
 
 
 @router.post("/recurring/run")
+@limiter.limit(RECURRING_RATE_LIMIT, key_func=_authenticated_user_key)
 def run_recurring_kpis(
+    request: Request,
     payload: RunRecurringKpisRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_tenant_admin),

@@ -4,8 +4,15 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.deps import require_platform_super_admin
-from app.core.rate_limit import LOGIN_RATE_LIMIT, limiter
-from app.core.security import DUMMY_PASSWORD_HASH, _request_is_secure, clear_session_cookie, create_session_token, hash_password, set_session_cookie, verify_password
+from app.core.rate_limit import (
+    LOGIN_RATE_LIMIT,
+    PASSWORD_RATE_LIMIT,
+    clear_failed_logins,
+    is_login_locked,
+    limiter,
+    record_failed_login,
+)
+from app.core.security import DUMMY_PASSWORD_HASH, _request_is_secure, clear_session_cookie, create_session_token, hash_password, set_session_cookie, validate_password_length, verify_password
 from app.database import get_db
 from app.models.tenant import Tenant, TenantStatus
 from app.models.user import User, UserRole
@@ -24,6 +31,10 @@ def platform_login(request: Request, response: Response, payload: LoginRequest, 
     user = db.scalar(
         select(User).where(User.tenant_id.is_(None), User.email == payload.email.strip().lower())
     )
+    email = payload.email.strip().lower()
+    account_key = f"platform:{email}"
+    if user is not None and is_login_locked(account_key):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many attempts. Please wait a minute and try again.")
     # Same timing-safety reasoning as app/routers/auth.py's login(): always run
     # verify_password once, against DUMMY_PASSWORD_HASH when no row matched,
     # so a nonexistent/tenant-scoped email doesn't fail measurably faster than
@@ -31,8 +42,11 @@ def platform_login(request: Request, response: Response, payload: LoginRequest, 
     password_hash = user.password_hash if user is not None else DUMMY_PASSWORD_HASH
     password_ok = verify_password(payload.password, password_hash)
     if user is None or not user.is_active or not password_ok:
+        if user is not None:
+            record_failed_login(account_key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password.")
 
+    clear_failed_logins(account_key)
     token = create_session_token(user.id, tenant_id=None, token_version=user.token_version or 0)
     set_session_cookie(response, token, secure=_request_is_secure(request))
     return LoginResponse(user=user)
@@ -47,7 +61,9 @@ def platform_me(user: User = Depends(require_platform_super_admin)):
 
 
 @router.post("/auth/change-password", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit(PASSWORD_RATE_LIMIT)
 def platform_change_password(
+    request: Request,
     payload: ChangePasswordRequest,
     response: Response,
     db: Session = Depends(get_db),
@@ -60,13 +76,17 @@ def platform_change_password(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect.")
     if len(payload.new_password) < 8:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "New password must be at least 8 characters.")
+    try:
+        validate_password_length(payload.new_password)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     admin.password_hash = hash_password(payload.new_password)
     admin.must_change_password = False
     admin.token_version = (admin.token_version or 0) + 1
     db.commit()
     # The token_version bump invalidates this session — clear the now-dead
     # cookie so the SPA doesn't keep sending it. The admin logs in again.
-    clear_session_cookie(response)
+    clear_session_cookie(response, secure=_request_is_secure(request))
 
 
 @router.get("/tenants", response_model=list[TenantOut])
@@ -86,6 +106,10 @@ def create_tenant(
     # brand-new tenant admin credential gets set.
     if len(payload.admin_password) < 8:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Admin password must be at least 8 characters.")
+    try:
+        validate_password_length(payload.admin_password)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     tenant = Tenant(name=payload.name.strip(), slug=slug, status=TenantStatus.ACTIVE)
     db.add(tenant)

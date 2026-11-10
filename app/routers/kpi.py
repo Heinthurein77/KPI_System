@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from app.core.deps import get_current_user, require_dept_admin, require_tenant_admin
+from app.core.rate_limit import BULK_APPROVE_RATE_LIMIT, _authenticated_user_key, limiter
 from app.database import get_db
 from app.models.kpi_submission import KPISubmission
 from app.models.user import User, UserRole
@@ -82,7 +83,9 @@ def employee_submit(
 
 
 @router.post("/bulk-approve")
+@limiter.limit(BULK_APPROVE_RATE_LIMIT, key_func=_authenticated_user_key)
 def bulk_approve(
+    request: Request,
     payload: BulkApproveRequest,
     db: Session = Depends(get_db),
     user: User = Depends(require_dept_admin),

@@ -111,6 +111,10 @@ async def upload_import(
     contents = bytes(contents)
     if not contents:
         raise HTTPException(400, "The uploaded file is empty.")
+    # An .xlsx is a ZIP archive: check the magic bytes, not just the
+    # filename extension, before handing the bytes to openpyxl.
+    if not contents.startswith((b"PK\x03\x04", b"PK\x05\x06")):
+        raise HTTPException(400, "The uploaded file is not a valid Excel (.xlsx) file.")
 
     parsed = bulk_import_service.parse_import_file(contents, db, user.tenant_id)
 

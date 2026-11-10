@@ -14,6 +14,7 @@ from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.config import settings
 from app.core.rate_limit import limiter
+from app.core.security import _request_is_secure
 from app.core.tenant import TenantResolutionMiddleware
 from app.database import engine
 from app.routers import admin, analytics, attendance, auth, dashboard, importer, kpi, notifications, platform, reminders, reports
@@ -129,12 +130,57 @@ app.add_middleware(
 
 app.add_middleware(TenantResolutionMiddleware)
 
+_STATE_CHANGING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+)
+
+
+def _cross_site_origin(request: Request) -> bool:
+    """True when a state-changing request carries an Origin (or Referer)
+    from somewhere other than this app. SameSite=Lax already blocks most
+    cross-site cookie POSTs, but this is the explicit second line of
+    defence (M7). Allowed: the request's own Host (same-origin, including
+    the deployed domain) and the configured CORS origins (the Vite dev
+    server, which proxies /api to the backend). Requests with neither
+    header (API clients, tests, curl) are allowed."""
+    from urllib.parse import urlparse
+
+    origin = request.headers.get("origin")
+    referer = request.headers.get("referer")
+    if not origin and not referer:
+        return False
+    allowed = {urlparse(o).netloc.lower() for o in settings.cors_origins_list if urlparse(o).netloc}
+    host = request.headers.get("host", "")
+    if host:
+        allowed.add(host.lower())
+    for value in (origin, referer):
+        if value:
+            netloc = urlparse(value).netloc.lower()
+            if netloc and netloc not in allowed:
+                return True
+    return False
+
+
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
+    if request.method in _STATE_CHANGING_METHODS and _cross_site_origin(request):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "Cross-site request rejected."},
+        )
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["Content-Security-Policy"] = _CSP
+    # HSTS only when this request actually arrived over HTTPS — sending
+    # it over plain HTTP would be meaningless (and the header is also
+    # set by Caddy in production).
+    if _request_is_secure(request):
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
     return response
 
 

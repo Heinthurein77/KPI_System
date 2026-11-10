@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import AppShell from "../components/layout/AppShell";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
@@ -127,6 +127,43 @@ export default function AttendancePage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  // M17: the page used to load once and go stale (WiFi chip, Today date
+  // and check-in button state froze if the page sat open). Re-check
+  // /today every 60s and on window focus, and reload at local midnight
+  // — same cadence as the notification bell's poll. The /today refresh
+  // is silent and never wipes the summary/report; the midnight refresh
+  // is a full load (new day, new month) and then re-arms itself.
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  useEffect(() => {
+    let midnightTimer;
+    async function refreshToday() {
+      if (document.hidden) return;
+      try {
+        setTodayData(await getAttendanceToday());
+      } catch {
+        // Keep the stale chip; the next tick retries.
+      }
+    }
+    function scheduleMidnight() {
+      const next = new Date();
+      next.setHours(24, 0, 0, 0);
+      midnightTimer = setTimeout(() => {
+        loadRef.current();
+        scheduleMidnight();
+      }, next.getTime() - Date.now());
+    }
+    const interval = setInterval(refreshToday, 60 * 1000);
+    const onFocus = () => refreshToday();
+    window.addEventListener("focus", onFocus);
+    scheduleMidnight();
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener("focus", onFocus);
+      clearTimeout(midnightTimer);
+    };
+  }, []);
 
   // Per-person records modal (opened from a report row): fetches that
   // person's summary — including the records array — for the selected

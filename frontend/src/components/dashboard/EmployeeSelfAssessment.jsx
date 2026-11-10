@@ -62,6 +62,35 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   const liveRef = useRef({ scores: {}, comments: {}, saving: false, confirmSubmit: false });
   liveRef.current = { scores, comments, saving, confirmSubmit };
 
+  // M16: draft autosave — a session expiring mid-task must not wipe
+  // unsaved scores/comments. Drafts live in localStorage, keyed per
+  // user + period, saved debounced on change, restored on load, and
+  // cleared on successful save/submit. Best-effort throughout: a
+  // blocked/full store must never break the form.
+  function draftKey(year, period) {
+    return user?.id ? `kpi-draft:${user.id}:${year}:${period}` : null;
+  }
+  function readDraft(year, period) {
+    const key = draftKey(year, period);
+    if (!key) return null;
+    try {
+      const parsed = JSON.parse(localStorage.getItem(key));
+      if (!parsed || typeof parsed !== "object") return null;
+      return parsed;
+    } catch {
+      return null;
+    }
+  }
+  function clearDraft(year, period) {
+    const key = draftKey(year, period);
+    if (!key) return;
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      // Best-effort.
+    }
+  }
+
   function load(nextParams, { silent = false } = {}) {
     // Guard against out-of-order responses: switching the period while a
     // previous request is still in flight must not let a stale response
@@ -82,6 +111,37 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
         setComments(initialComments);
         initialScoresRef.current = initial;
         initialCommentsRef.current = initialComments;
+        // M16: restore an autosaved draft for this period, if one
+        // exists. Only editable rows are restored (a row submitted or
+        // approved since the draft was saved keeps its server value),
+        // and the server values stay the "initial" baseline, so a
+        // restored draft still counts as unsaved edits and the
+        // background tick will not wipe it.
+        const draft = readDraft(d.active_year, d.active_period);
+        if (draft) {
+          const restoredScores = { ...initial };
+          const restoredComments = { ...initialComments };
+          let restored = false;
+          for (const s of d.submissions) {
+            const editable =
+              d.is_current_period &&
+              d.is_month_end &&
+              (s.status === "draft" || s.status === "rejected");
+            if (!editable) continue;
+            if (draft.scores && draft.scores[s.id] !== undefined) {
+              restoredScores[s.id] = draft.scores[s.id];
+              restored = true;
+            }
+            if (draft.comments && draft.comments[s.id] !== undefined) {
+              restoredComments[s.id] = draft.comments[s.id];
+              restored = true;
+            }
+          }
+          if (restored) {
+            setScores(restoredScores);
+            setComments(restoredComments);
+          }
+        }
       })
       .catch((err) => {
         if (loadIdRef.current !== requestId) return;
@@ -114,6 +174,23 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     load(params);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // M16: autosave the draft (debounced 500ms) whenever the form
+  // changes, so a reload or an expired session restores what was typed.
+  useEffect(() => {
+    if (!data) return;
+    const key = draftKey(data.active_year, data.active_period);
+    if (!key) return;
+    const timer = setTimeout(() => {
+      try {
+        localStorage.setItem(key, JSON.stringify({ scores, comments }));
+      } catch {
+        // Best-effort: a full/blocked store must not break the form.
+      }
+    }, 500);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scores, comments, data]);
 
   // Live board, same 5-minute cadence as the admin boards: re-check the
   // current period in the background so approvals/rejections from the
@@ -303,6 +380,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     setError(null);
     try {
       await employeeSaveScores({ year: data.active_year, period: data.active_period, scores: buildScoresPayload(), comments: buildCommentsPayload() });
+      clearDraft(data.active_year, data.active_period);
       toast.success("Draft saved.");
       load(params);
     } catch (err) {
@@ -318,6 +396,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     setError(null);
     try {
       await employeeSubmit({ year: data.active_year, period: data.active_period, scores: buildScoresPayload(), comments: buildCommentsPayload() });
+      clearDraft(data.active_year, data.active_period);
       toast.success("Submitted for department approval.");
       load(params);
     } catch (err) {

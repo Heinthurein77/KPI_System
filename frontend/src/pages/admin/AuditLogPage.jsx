@@ -21,6 +21,11 @@ const ACTION_META = {
   kpi_template_created: { label: "Metric Created", style: "bg-blue-100 text-blue-700" },
   kpi_template_renamed: { label: "Metric Renamed", style: "bg-indigo-100 text-indigo-700" },
   kpi_template_deleted: { label: "Metric Deleted", style: "bg-red-100 text-red-700" },
+  attendance_settings_updated: { label: "Attendance Settings", style: "bg-cyan-100 text-cyan-700" },
+  attendance_leave_created: { label: "Leave Marked", style: "bg-teal-100 text-teal-700" },
+  attendance_leave_updated: { label: "Leave Edited", style: "bg-teal-100 text-teal-700" },
+  attendance_record_deleted: { label: "Attendance Record Deleted", style: "bg-red-100 text-red-700" },
+  attendance_export: { label: "Attendance Export", style: "bg-slate-100 text-slate-700" },
 };
 
 function formatTimestamp(iso) {

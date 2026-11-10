@@ -11,6 +11,8 @@ from datetime import date as date_type, time as time_type
 
 import pytest
 
+from sqlalchemy import select
+
 from app.models.attendance import AttendanceRecord, AttendanceSettings
 from app.models.kpi_submission import KPIStatus
 from app.services.attendance_service import (
@@ -315,8 +317,16 @@ def test_summary_counts_present_half_absent_and_late(client, db):
     assert summary["present"] == 1
     assert summary["half"] == 1
     assert summary["absent"] == len(days) - 2
-    assert summary["total_late_minutes"] == 325
-    assert summary["late_days"] == 2
+    # Late is still recorded in the DB (check the row directly) but is
+    # deliberately never exposed via the API (m3).
+    assert "total_late_minutes" not in summary
+    assert "late_days" not in summary
+    assert all("late_minutes" not in r for r in summary["records"])
+    from app.models.attendance import AttendanceRecord as _AR
+
+    assert db.scalar(
+        select(_AR).where(_AR.employee_id == employee.id, _AR.record_date == days[0])
+    ).late_minutes == 25
     assert summary["attendance_pct"] == round(1.5 / len(days) * 100, 1)
 
 

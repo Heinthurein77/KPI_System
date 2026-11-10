@@ -6,11 +6,7 @@ import { downloadAnnualAppraisalPdf, downloadEmployeeAnnualKpiReport, downloadEm
 import { getBlobErrorMessage, getErrorMessage } from "../../api/errors";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-
-const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
+import { MONTHS } from "../../utils/months";
 
 function safeFilePart(value) {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");

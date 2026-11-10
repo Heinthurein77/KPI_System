@@ -3,6 +3,7 @@ import AppShell from "../../components/layout/AppShell";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { downloadImportTemplate, uploadImport } from "../../api/import";
 import { getErrorMessage } from "../../api/errors";
+import { MONTH_NAMES_EN } from "../../utils/months";
 
 function downloadBlob(blob, filename) {
   const url = URL.createObjectURL(blob);
@@ -14,11 +15,6 @@ function downloadBlob(blob, filename) {
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
-
-const MONTH_NAMES_EN = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
 
 // The only period the M6 admin-creation gate allows right now: during the
 // grace week (days 1..SUBMISSION_GRACE_DAYS, default 7) the previous month;

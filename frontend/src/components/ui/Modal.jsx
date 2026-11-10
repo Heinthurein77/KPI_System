@@ -1,15 +1,43 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 
 // Generic form/content dialog, following the ConfirmDialog pattern:
 // portal to document.body (so no transformed ancestor shrinks it),
 // Escape closes, backdrop click closes. Unlike ConfirmDialog this has no
 // built-in action buttons — the content (e.g. a form) owns its own.
+// Accessibility (m23): the first focusable control is focused on open,
+// and Tab is trapped inside the dialog while it is open.
 export default function Modal({ open, title, onClose, children, wide = false }) {
+  const dialogRef = useRef(null);
+
   useEffect(() => {
     if (!open) return;
+    const dialog = dialogRef.current;
+    function focusableItems() {
+      if (!dialog) return [];
+      return [...dialog.querySelectorAll(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      )].filter((el) => !el.disabled);
+    }
+    const first = focusableItems()[0];
+    if (first) first.focus();
     function handleKey(e) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      if (e.key !== "Tab") return;
+      const items = focusableItems();
+      if (items.length === 0) return;
+      const firstItem = items[0];
+      const lastItem = items[items.length - 1];
+      if (e.shiftKey && document.activeElement === firstItem) {
+        e.preventDefault();
+        lastItem.focus();
+      } else if (!e.shiftKey && document.activeElement === lastItem) {
+        e.preventDefault();
+        firstItem.focus();
+      }
     }
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
@@ -23,6 +51,7 @@ export default function Modal({ open, title, onClose, children, wide = false }) 
       onClick={onClose}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         className={`w-full ${wide ? "max-w-2xl" : "max-w-lg"} max-h-[90vh] overflow-y-auto rounded-xl bg-white shadow-2xl animate-dialog-in`}

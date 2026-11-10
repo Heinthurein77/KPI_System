@@ -1,9 +1,5 @@
 import { useEffect, useState } from "react";
-
-const DEFAULT_MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
+import { MONTHS } from "../../utils/months";
 
 export default function PeriodSelector({
   activeYear,
@@ -15,7 +11,7 @@ export default function PeriodSelector({
   months,
   onApply,
 }) {
-  const monthNames = months || DEFAULT_MONTHS;
+  const monthNames = months || MONTHS;
   const [year, setYear] = useState(activeYear);
   const [period, setPeriod] = useState(activePeriod);
   const [status, setStatus] = useState(statusFilter || "");

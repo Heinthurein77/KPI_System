@@ -53,7 +53,7 @@ export function downloadAttendanceReportExcel(year, month, departmentId) {
   if (departmentId) params.department_id = departmentId;
   return client
     .get("/api/attendance/report/export", { params, responseType: "blob" })
-    .then((r) => r.data);
+    .then((r) => ({ blob: r.data, filename: filenameFromResponse(r) }));
 }
 
 export function downloadAttendancePersonExcel(year, month, userId) {
@@ -62,5 +62,15 @@ export function downloadAttendancePersonExcel(year, month, userId) {
       params: { year, month, user_id: userId },
       responseType: "blob",
     })
-    .then((r) => r.data);
+    .then((r) => ({ blob: r.data, filename: filenameFromResponse(r) }));
+}
+
+// m22: prefer the server's Content-Disposition filename — the server
+// slugs department/person names (with a department/employee fallback for
+// non-Latin names), so the browser never has to rebuild the name.
+function filenameFromResponse(response) {
+  const disposition = response.headers?.["content-disposition"] || "";
+  const match =
+    /filename="([^"]+)"/.exec(disposition) || /filename=([^;]+)/.exec(disposition);
+  return match ? match[1].trim() : null;
 }

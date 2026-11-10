@@ -4,6 +4,9 @@ import AppShell from "../components/layout/AppShell";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import Modal from "../components/ui/Modal";
 import { getBlobErrorMessage, getErrorMessage } from "../api/errors";
+import { MONTHS } from "../utils/months";
+import { slugify } from "../utils/slugify";
+import { middayLabel } from "../utils/time";
 import {
   checkIn,
   checkOut,
@@ -20,14 +23,11 @@ import {
 } from "../api/attendance";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
 const STATUS_LABEL = {
   present: "Present · လာတယ်",
   half: "Half day · နေ့တစ်ဝက်",
   leave: "Leave · ခွင့်",
+  absent: "Absent · ပျက်ကွက်",
 };
 // Restrained status pills, same shape as the shared StatusBadge.
 const STATUS_PILL = {
@@ -47,13 +47,6 @@ function StatusPill({ status }) {
       {STATUS_LABEL[status] || status}
     </span>
   );
-}
-
-function slugify(value) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-|-$/g, "");
 }
 
 function Stat({ label, value, sub, accent }) {
@@ -102,24 +95,48 @@ export default function AttendancePage() {
   const isDeptAdmin = user?.role === "dept_admin";
   const canCheckIn = user?.role === "employee" || isDeptAdmin;
 
+  // m21: a request sequence number — month Prev/Next + dropdowns each
+  // fire load(), and a slow earlier response must not overwrite a newer
+  // month's data. m14: the default month comes from the server's /today
+  // date (Asia/Yangon), not the browser's clock — synced once, the first
+  // time /today loads, so a device in another timezone opens the right
+  // month. The sync re-runs load() for the server month; the guard keeps
+  // the extra fetch from looping.
+  const loadSeq = useRef(0);
+  const monthSyncedRef = useRef(false);
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current;
     setError("");
     try {
       const [today, sum] = await Promise.all([
         getAttendanceToday(),
         getAttendanceSummary(year, month),
       ]);
+      if (seq !== loadSeq.current) return;
+      if (!monthSyncedRef.current && today.today) {
+        monthSyncedRef.current = true;
+        const [y, m] = today.today.split("-").map(Number);
+        if (y !== year || m !== month) {
+          setYear(y);
+          setMonth(m);
+          return;
+        }
+      }
       setTodayData(today);
       setSummary(sum);
       if (isAdmin || isDeptAdmin) {
-        setReport(await getAttendanceReport(year, month));
+        const rep = await getAttendanceReport(year, month);
+        if (seq !== loadSeq.current) return;
+        setReport(rep);
       }
       if (isAdmin) {
         const s = await getAttendanceSettings();
+        if (seq !== loadSeq.current) return;
         setSettings(s);
         setSettingsForm(s);
       }
     } catch (e) {
+      if (seq !== loadSeq.current) return;
       setError(getErrorMessage(e));
     }
   }, [year, month, isAdmin, isDeptAdmin]);
@@ -230,7 +247,12 @@ export default function AttendancePage() {
     setNotice("");
     setBusy(true);
     try {
-      if (!(await recheckWifiBeforeSubmit())) return;
+      // M12: a failed re-check must say so — silently doing nothing
+      // looks like a broken button.
+      if (!(await recheckWifiBeforeSubmit())) {
+        setError("You are not on office WiFi — check-in/out is disabled.");
+        return;
+      }
       await checkIn();
       setNotice("Checked in. · Check-in လုပ်ပြီးပြီ။");
       await load();
@@ -246,7 +268,10 @@ export default function AttendancePage() {
     setNotice("");
     setBusy(true);
     try {
-      if (!(await recheckWifiBeforeSubmit())) return;
+      if (!(await recheckWifiBeforeSubmit())) {
+        setError("You are not on office WiFi — check-in/out is disabled.");
+        return;
+      }
       await checkOut();
       setNotice("Checked out. · Check-out လုပ်ပြီးပြီ။");
       await load();
@@ -374,17 +399,19 @@ export default function AttendancePage() {
     setNotice("");
     setExporting(true);
     try {
-      const file = await downloadAttendanceReportExcel(
+      const { blob, filename } = await downloadAttendanceReportExcel(
         year,
         month,
         effectiveDeptFilter || undefined,
       );
-      const url = URL.createObjectURL(file);
+      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
       const dept = reportDepartments.find((d) => String(d.id) === effectiveDeptFilter);
-      const slug = dept ? `-${slugify(dept.name)}` : "";
-      link.download = `attendance-${year}-${String(month).padStart(2, "0")}${slug}.xlsx`;
+      const slug = dept ? `-${slugify(dept.name, "department")}` : "";
+      // Prefer the server's filename; rebuild locally only as a fallback.
+      link.download =
+        filename || `attendance-${year}-${String(month).padStart(2, "0")}${slug}.xlsx`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -403,11 +430,13 @@ export default function AttendancePage() {
     setNotice("");
     setExportingUserId(row.user_id);
     try {
-      const file = await downloadAttendancePersonExcel(year, month, row.user_id);
-      const url = URL.createObjectURL(file);
+      const { blob, filename } = await downloadAttendancePersonExcel(year, month, row.user_id);
+      const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `attendance-${year}-${String(month).padStart(2, "0")}-${slugify(row.employee_name)}.xlsx`;
+      link.download =
+        filename ||
+        `attendance-${year}-${String(month).padStart(2, "0")}-${slugify(row.employee_name, "employee")}.xlsx`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -425,12 +454,15 @@ export default function AttendancePage() {
   function pendingSettingsSummary() {
     if (!settingsForm) return "";
     const days = settingsForm.work_days.map((d) => WEEKDAYS[d]).join(", ");
-    const toMin = (t) => {
-      const [h, m] = t.split(":").map(Number);
-      return h * 60 + m;
-    };
-    const mid = (toMin(settingsForm.start_time) + toMin(settingsForm.end_time)) / 2;
-    const midday = `${String(Math.floor(mid / 60)).padStart(2, "0")}:${String(mid % 60).padStart(2, "0")}`;
+    // m17: reuse the backend-computed midday when the pending hours are
+    // the saved ones; only compute client-side for pending (unsaved)
+    // hours, via the shared helper.
+    const midday =
+      settings &&
+      settingsForm.start_time === settings.start_time &&
+      settingsForm.end_time === settings.end_time
+        ? settings.midday
+        : middayLabel(settingsForm.start_time, settingsForm.end_time);
     const ips = settingsForm.office_ips.length;
     const holidays = settingsForm.holidays.length;
     return [
@@ -661,6 +693,7 @@ export default function AttendancePage() {
                   type="date"
                   value={leaveDate}
                   onChange={(e) => setLeaveDate(e.target.value)}
+                  aria-label="Leave date"
                   className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
                 />
                 <button

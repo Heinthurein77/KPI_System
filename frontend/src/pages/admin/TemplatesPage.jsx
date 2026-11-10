@@ -7,11 +7,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { createCustomTemplateWithRebalance, deleteTemplate, listTemplates, renameTemplate } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
-
-const MONTH_NAMES_EN = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
+import { MONTH_NAMES_EN } from "../../utils/months";
 
 // The only period the M6 admin-creation gate allows right now: during the
 // grace week (days 1..SUBMISSION_GRACE_DAYS, default 7) the previous month;

@@ -17,11 +17,7 @@ import {
 import AppShell from "../../components/layout/AppShell";
 import { getAnalyticsOverview, getAnalyticsTrend } from "../../api/analytics";
 import { getErrorMessage } from "../../api/errors";
-
-const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December",
-];
+import { MONTHS } from "../../utils/months";
 
 const BUCKET_COLORS = {
   "Need to improve": "#f87171",

@@ -177,13 +177,22 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
 
   // M16: autosave the draft (debounced 500ms) whenever the form
   // changes, so a reload or an expired session restores what was typed.
+  // Only genuine unsaved edits are stored: when the form matches the
+  // server values (e.g. right after a successful save, which clears
+  // the draft), any stale draft for the period is removed instead of
+  // being re-written — otherwise the clear-on-save would be undone
+  // by the next debounced tick.
   useEffect(() => {
     if (!data) return;
     const key = draftKey(data.active_year, data.active_period);
     if (!key) return;
     const timer = setTimeout(() => {
       try {
-        localStorage.setItem(key, JSON.stringify({ scores, comments }));
+        if (hasUnsavedEdits()) {
+          localStorage.setItem(key, JSON.stringify({ scores, comments }));
+        } else {
+          localStorage.removeItem(key);
+        }
       } catch {
         // Best-effort: a full/blocked store must not break the form.
       }

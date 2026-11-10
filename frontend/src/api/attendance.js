@@ -37,3 +37,11 @@ export function getAttendanceReport(year, month) {
     .get("/api/attendance/report", { params: { year, month } })
     .then((r) => r.data);
 }
+
+export function downloadAttendanceReportExcel(year, month, departmentId) {
+  const params = { year, month };
+  if (departmentId) params.department_id = departmentId;
+  return client
+    .get("/api/attendance/report/export", { params, responseType: "blob" })
+    .then((r) => r.data);
+}

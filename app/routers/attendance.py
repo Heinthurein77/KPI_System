@@ -26,6 +26,7 @@ from datetime import date as date_type, datetime, time as time_type
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -38,6 +39,7 @@ from app.core.deps import (
 )
 from app.database import get_db
 from app.models.attendance import AttendanceRecord, AttendanceSettings
+from app.models.department import Department
 from app.models.user import User, UserRole
 from app.schemas.attendance import (
     AttendanceRecordOut,
@@ -47,6 +49,7 @@ from app.schemas.attendance import (
     AttendanceTodayOut,
     LeaveCreate,
 )
+from app.services.attendance_export_service import build_attendance_detail_report
 from app.services.attendance_service import (
     DEFAULT_END,
     DEFAULT_START,
@@ -202,6 +205,9 @@ def _summary_for(
         month=month,
         user_id=employee.id,
         employee_name=employee.name,
+        department_id=employee.department_id,
+        department_name=employee.department.name if employee.department else None,
+        role=employee.role.value,
         working_days=result["working_days"],
         present=result["present"],
         half=result["half"],
@@ -480,3 +486,109 @@ def get_report(
         .order_by(User.name)
     ).all()
     return [_summary_for(db, user.tenant_id, u, year, month) for u in users]
+
+
+_ROLE_LABELS = {
+    UserRole.EMPLOYEE: "Employee",
+    UserRole.DEPT_ADMIN: "Dept Admin",
+    UserRole.TENANT_ADMIN: "Tenant Admin",
+    UserRole.SUPER_ADMIN: "Super Admin",
+}
+
+_STATUS_LABELS = {
+    "present": "Present",
+    "half": "Half day",
+    "leave": "Leave",
+    "absent": "Absent",
+}
+
+
+def _safe_file_part(value: str) -> str:
+    slug = "".join(c if c.isalnum() or c in "-_" else "-" for c in value.lower().replace(" ", "-"))
+    return slug.strip("-") or "department"
+
+
+@router.get("/report/export")
+def export_report(
+    year: int = Query(...),
+    month: int = Query(...),
+    department_id: int | None = Query(None),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_tenant_member),
+):
+    """Download the monthly attendance detail as .xlsx — one row per working
+    day per person. Same visibility as GET /report: a dept admin only ever
+    gets their own department, even when no department filter is given.
+    Working days without a record appear as Absent with blank times."""
+    _month_bounds(year, month)  # 400 on an invalid month
+    start, end = _month_bounds(year, month)
+    visible = _visible_user_ids(db, user)
+    users = db.scalars(
+        select(User)
+        .where(
+            User.id.in_(visible),
+            User.role.in_([UserRole.EMPLOYEE, UserRole.DEPT_ADMIN]),
+        )
+        .order_by(User.name)
+    ).all()
+    dept_label = None
+    if department_id is not None:
+        dept = db.get(Department, department_id)
+        if dept is None or dept.tenant_id != user.tenant_id:
+            users = []
+        else:
+            dept_label = dept.name
+            users = [u for u in users if u.department_id == department_id]
+    working = _working_days(db, user.tenant_id, year, month)
+    entries = []
+    for u in users:
+        records = {
+            r.record_date: r
+            for r in db.scalars(
+                select(AttendanceRecord).where(
+                    AttendanceRecord.tenant_id == user.tenant_id,
+                    AttendanceRecord.employee_id == u.id,
+                    AttendanceRecord.record_date >= start,
+                    AttendanceRecord.record_date < end,
+                )
+            ).all()
+        }
+        dept_name = u.department.name if u.department else "—"
+        for day in working:
+            record = records.get(day)
+            if record is None:
+                entries.append(
+                    {
+                        "date": day.isoformat(),
+                        "employee_name": u.name,
+                        "department_name": dept_name,
+                        "role": _ROLE_LABELS.get(u.role, u.role.value),
+                        "check_in": "",
+                        "check_out": "",
+                        "status": "Absent",
+                        "late_minutes": 0,
+                    }
+                )
+            else:
+                entries.append(
+                    {
+                        "date": day.isoformat(),
+                        "employee_name": u.name,
+                        "department_name": dept_name,
+                        "role": _ROLE_LABELS.get(u.role, u.role.value),
+                        "check_in": record.check_in.strftime("%H:%M") if record.check_in else "",
+                        "check_out": record.check_out.strftime("%H:%M") if record.check_out else "",
+                        "status": _STATUS_LABELS.get(record.status, record.status),
+                        "late_minutes": record.late_minutes,
+                    }
+                )
+    output = build_attendance_detail_report(entries, year, month, dept_label)
+    filename = f"attendance-{year}-{month:02d}"
+    if dept_label:
+        filename += f"-{_safe_file_part(dept_label)}"
+    filename += ".xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

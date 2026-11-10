@@ -87,6 +87,9 @@ class AttendanceSummaryOut(BaseModel):
     month: int
     user_id: int
     employee_name: str | None = None
+    department_id: int | None = None
+    department_name: str | None = None
+    role: str | None = None
     working_days: int
     present: int
     half: int

@@ -2,10 +2,11 @@ import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import AppShell from "../components/layout/AppShell";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
-import { getErrorMessage } from "../api/errors";
+import { getBlobErrorMessage, getErrorMessage } from "../api/errors";
 import {
   checkIn,
   checkOut,
+  downloadAttendanceReportExcel,
   getAttendanceReport,
   getAttendanceSettings,
   getAttendanceSummary,
@@ -44,6 +45,8 @@ export default function AttendancePage() {
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [leaveDate, setLeaveDate] = useState("");
+  const [deptFilter, setDeptFilter] = useState("");
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [busy, setBusy] = useState(false);
@@ -154,6 +157,56 @@ export default function AttendancePage() {
       setError(getErrorMessage(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Departments present in the loaded report rows (sorted by name).
+  // The filter is client-side: the report already holds exactly the rows
+  // the viewer may see, so a dept admin only ever sees their own dept.
+  const reportDepartments = (report || [])
+    .reduce((acc, row) => {
+      if (row.department_id != null && !acc.some((d) => d.id === row.department_id)) {
+        acc.push({ id: row.department_id, name: row.department_name || "—" });
+      }
+      return acc;
+    }, [])
+    .sort((a, b) => a.name.localeCompare(b.name));
+  // If the selected department is gone from the new month's rows, fall
+  // back to All instead of showing an empty table.
+  const effectiveDeptFilter =
+    deptFilter && reportDepartments.some((d) => String(d.id) === deptFilter) ? deptFilter : "";
+  const filteredReport = (report || []).filter(
+    (row) => !effectiveDeptFilter || String(row.department_id) === effectiveDeptFilter,
+  );
+
+  async function handleExport() {
+    if (exporting) return;
+    setError("");
+    setNotice("");
+    setExporting(true);
+    try {
+      const file = await downloadAttendanceReportExcel(
+        year,
+        month,
+        effectiveDeptFilter || undefined,
+      );
+      const url = URL.createObjectURL(file);
+      const link = document.createElement("a");
+      link.href = url;
+      const dept = reportDepartments.find((d) => String(d.id) === effectiveDeptFilter);
+      const slug = dept
+        ? `-${dept.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`
+        : "";
+      link.download = `attendance-${year}-${String(month).padStart(2, "0")}${slug}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      setNotice("Attendance Excel downloaded. · Excel ထုတ်ပြီးပြီ။");
+    } catch (e) {
+      setError(await getBlobErrorMessage(e, "Could not download the Excel. Please try again."));
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -367,11 +420,35 @@ export default function AttendancePage() {
             <p className="mt-1 text-sm text-slate-500">
               Attendance % is display-only — it is never written to KPI.
             </p>
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-sm text-slate-700">
+                Department
+                <select
+                  value={effectiveDeptFilter}
+                  onChange={(e) => setDeptFilter(e.target.value)}
+                  className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                >
+                  <option value="">All departments</option>
+                  {reportDepartments.map((d) => (
+                    <option key={d.id} value={d.id}>{d.name}</option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                onClick={handleExport}
+                disabled={exporting}
+                className="rounded-lg bg-slate-800 px-4 py-2 text-sm font-semibold text-white disabled:opacity-40"
+              >
+                {exporting ? "Exporting…" : "Export Excel"}
+              </button>
+            </div>
             <div className="mt-4 overflow-x-auto">
               <table className="w-full text-left text-sm">
                 <thead className="bg-slate-50 text-slate-500">
                   <tr>
                     <th className="px-4 py-2">Employee</th>
+                    <th className="px-4 py-2">Department</th>
                     <th className="px-4 py-2">Attendance</th>
                     <th className="px-4 py-2">Present</th>
                     <th className="px-4 py-2">Half</th>
@@ -381,9 +458,13 @@ export default function AttendancePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {report.map((row) => (
+                  {filteredReport.length === 0 && (
+                    <tr><td colSpan={8} className="px-4 py-4 text-slate-400">No attendance records for this department yet.</td></tr>
+                  )}
+                  {filteredReport.map((row) => (
                     <tr key={row.user_id} className="border-t border-slate-100">
                       <td className="px-4 py-2">{row.employee_name}</td>
+                      <td className="px-4 py-2">{row.department_name || "—"}</td>
                       <td className="px-4 py-2 font-semibold">{row.attendance_pct}%</td>
                       <td className="px-4 py-2">{row.present}</td>
                       <td className="px-4 py-2">{row.half}</td>

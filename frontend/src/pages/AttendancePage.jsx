@@ -93,11 +93,27 @@ export default function AttendancePage() {
     setMonth(m);
   }
 
+  // Re-check the office-WiFi gate immediately before submitting, so a page
+  // loaded at the office cannot submit from home. Returns true when the
+  // fresh /today answer allows check-in/out. The server enforces the same
+  // gate per request and stays the arbiter: when the re-check itself fails
+  // we proceed and let the server decide (its 403 is surfaced as before).
+  async function recheckWifiBeforeSubmit() {
+    try {
+      const fresh = await getAttendanceToday();
+      setTodayData(fresh);
+      return fresh.ip_allowed;
+    } catch {
+      return true;
+    }
+  }
+
   async function handleCheckIn() {
     setError("");
     setNotice("");
     setBusy(true);
     try {
+      if (!(await recheckWifiBeforeSubmit())) return;
       await checkIn();
       setNotice("Checked in. · Check-in လုပ်ပြီးပြီ။");
       await load();
@@ -113,6 +129,7 @@ export default function AttendancePage() {
     setNotice("");
     setBusy(true);
     try {
+      if (!(await recheckWifiBeforeSubmit())) return;
       await checkOut();
       setNotice("Checked out. · Check-out လုပ်ပြီးပြီ။");
       await load();

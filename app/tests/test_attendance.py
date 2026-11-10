@@ -422,6 +422,7 @@ def test_attendance_module_has_no_kpi_imports():
         repo / "app/routers/attendance.py",
         repo / "app/schemas/attendance.py",
         repo / "app/services/attendance_service.py",
+        repo / "app/services/attendance_export_service.py",
     ]
     banned = ("kpi_submission", "kpi_template", "kpi_service", "calculate_kpi")
     for path in files:

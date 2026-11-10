@@ -191,10 +191,16 @@ def test_export_tenant_isolation(client, db):
     assert _data_rows(rows) == []
 
 
-def test_export_unknown_department_is_headers_only(client, db):
+def test_export_unknown_department_returns_404(client, db):
+    # m20: an unknown department_id is a typo'd filter, not an empty
+    # scope — 404 instead of a silently empty file.
     fx = _setup(client, db)
-    _, rows = _export(client, fx["admin"], fx["tenant"], {"department_id": 999999})
-    assert _data_rows(rows) == []
+    resp = client.get(
+        "/api/attendance/report/export",
+        params={"year": YEAR, "month": MONTH, "department_id": 999999},
+        headers=auth_headers(fx["admin"], fx["tenant"]),
+    )
+    assert resp.status_code == 404, resp.text
 
 
 def test_export_user_id_person_only(client, db):
@@ -233,9 +239,13 @@ def test_export_user_id_scoping(client, db):
         client, fx["alice"], fx["tenant"], {"user_id": fx["alice"].id}
     )
     assert len(_data_rows(rows)) == 21
-    # Unknown user: headers-only.
-    _, rows = _export(client, fx["admin"], fx["tenant"], {"user_id": 999999})
-    assert _data_rows(rows) == []
+    # Unknown user: 404 (m20), not a silently empty file.
+    resp = client.get(
+        "/api/attendance/report/export",
+        params={"year": YEAR, "month": MONTH, "user_id": 999999},
+        headers=auth_headers(fx["admin"], fx["tenant"]),
+    )
+    assert resp.status_code == 404, resp.text
 
 
 def test_export_invalid_month(client, db):

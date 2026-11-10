@@ -24,13 +24,14 @@ class AttendanceSettingsUpdate(BaseModel):
     office_ips: list[str] | None = None
     holidays: list[str] | None = None  # "YYYY-MM-DD"
 
-    @field_validator("work_days")
+    @field_validator("work_days", mode="before")
     @classmethod
     def _check_work_days(cls, value):
         if value is None:
             return value
-        # isinstance(True, int) is True — exclude booleans explicitly.
-        if not value or any(
+        # mode="before": raw JSON values. isinstance(True, int) is True,
+        # so exclude booleans explicitly before Pydantic coerces True->1.
+        if not isinstance(value, list) or not value or any(
             isinstance(d, bool) or not isinstance(d, int) or not 0 <= d <= 6
             for d in value
         ):

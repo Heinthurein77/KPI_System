@@ -12,7 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.config import settings
 from app.core.rate_limit import limiter
 from app.core.tenant import TenantResolutionMiddleware
-from app.routers import admin, analytics, auth, daily_tasks, dashboard, importer, kpi, notifications, platform, reminders, reports
+from app.routers import admin, analytics, attendance, auth, daily_tasks, dashboard, importer, kpi, notifications, platform, reminders, reports
 logger = logging.getLogger("kpi_system")
 
 if settings.is_production and settings.SECRET_KEY == "change-this-secret-key-in-production":
@@ -115,6 +115,7 @@ app.include_router(analytics.router)
 app.include_router(importer.router)
 app.include_router(reports.router)
 app.include_router(daily_tasks.router)
+app.include_router(attendance.router)
 
 
 @app.get("/healthz")

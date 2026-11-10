@@ -49,13 +49,15 @@ def test_migration_chain_upgrades_to_head_on_scratch_db(tmp_path):
     try:
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()
         assert version is not None
-        assert version[0] == "0019_audit_label_text"
+        assert version[0] == "0020_attendance"
 
         tables = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
         )}
         assert "revoked_tokens" in tables
         assert "daily_task_entries" in tables
+        assert "attendance_settings" in tables
+        assert "attendance_records" in tables
 
         # The diary unique constraint lands as a UNIQUE autoindex on
         # SQLite (no SQL text, no preserved name) — verify uniqueness on
@@ -81,6 +83,6 @@ def test_migration_chain_upgrades_to_head_on_scratch_db(tmp_path):
     conn = sqlite3.connect(db_path)
     try:
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-        assert version[0] == "0019_audit_label_text"
+        assert version[0] == "0020_attendance"
     finally:
         conn.close()

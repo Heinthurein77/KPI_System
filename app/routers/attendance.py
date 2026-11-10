@@ -48,6 +48,7 @@ from app.schemas.attendance import (
     AttendanceSummaryOut,
     AttendanceTodayOut,
     LeaveCreate,
+    LeaveUpdate,
 )
 from app.services.attendance_export_service import build_attendance_detail_report
 from app.services.attendance_service import (
@@ -429,6 +430,43 @@ def mark_leave(
         status="leave",
     )
     db.add(record)
+    db.commit()
+    db.refresh(record)
+    return _serialize(db, record)
+
+
+@router.patch("/records/{record_id}", response_model=AttendanceRecordOut)
+def update_record(
+    record_id: int,
+    payload: LeaveUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_tenant_member),
+):
+    """Move a leave day to another date. Leave records only — check-in/out
+    records are never editable. Permissions mirror mark_leave: the owner,
+    or a dept/tenant admin for a user in their visible set. No working-day
+    validation, same as mark_leave."""
+    record = db.get(AttendanceRecord, record_id)
+    if record is None or record.tenant_id != user.tenant_id:
+        raise HTTPException(404, "Attendance record not found.")
+    if record.status != "leave":
+        raise HTTPException(400, "Only leave records can be edited.")
+    if record.employee_id != user.id:
+        if record.employee_id not in _visible_user_ids(db, user):
+            raise HTTPException(403, "Not allowed to edit this user's leave.")
+        if user.role == UserRole.EMPLOYEE:
+            raise HTTPException(403, "Employees can only edit their own leave.")
+    existing = db.scalar(
+        select(AttendanceRecord).where(
+            AttendanceRecord.tenant_id == user.tenant_id,
+            AttendanceRecord.employee_id == record.employee_id,
+            AttendanceRecord.record_date == payload.record_date,
+            AttendanceRecord.id != record.id,
+        )
+    )
+    if existing is not None:
+        raise HTTPException(409, "An attendance record already exists for this day.")
+    record.record_date = payload.record_date
     db.commit()
     db.refresh(record)
     return _serialize(db, record)

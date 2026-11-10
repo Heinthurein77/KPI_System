@@ -26,6 +26,16 @@ export function markLeave(recordDate) {
     .then((r) => r.data);
 }
 
+export function updateAttendanceRecord(recordId, recordDate) {
+  return client
+    .patch(`/api/attendance/records/${recordId}`, { record_date: recordDate })
+    .then((r) => r.data);
+}
+
+export function deleteAttendanceRecord(recordId) {
+  return client.delete(`/api/attendance/records/${recordId}`).then((r) => r.data);
+}
+
 export function getAttendanceSummary(year, month, userId) {
   const params = { year, month };
   if (userId) params.user_id = userId;

@@ -104,3 +104,7 @@ class AttendanceSummaryOut(BaseModel):
 class LeaveCreate(BaseModel):
     user_id: int | None = None  # admin marking for someone else; None = self
     record_date: date_type
+
+
+class LeaveUpdate(BaseModel):
+    record_date: date_type

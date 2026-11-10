@@ -2,10 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { useAuth } from "../context/AuthContext";
 import AppShell from "../components/layout/AppShell";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
+import Modal from "../components/ui/Modal";
 import { getBlobErrorMessage, getErrorMessage } from "../api/errors";
 import {
   checkIn,
   checkOut,
+  deleteAttendanceRecord,
   downloadAttendancePersonExcel,
   downloadAttendanceReportExcel,
   getAttendanceReport,
@@ -13,10 +15,15 @@ import {
   getAttendanceSummary,
   getAttendanceToday,
   markLeave,
+  updateAttendanceRecord,
   updateAttendanceSettings,
 } from "../api/attendance";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MONTHS = [
+  "January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December",
+];
 const STATUS_LABEL = {
   present: "Present · လာတယ်",
   half: "Half day · နေ့တစ်ဝက်",
@@ -76,6 +83,11 @@ export default function AttendancePage() {
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [leaveDate, setLeaveDate] = useState("");
+  const [editingLeave, setEditingLeave] = useState(null);
+  const [editLeaveDate, setEditLeaveDate] = useState("");
+  const [editError, setEditError] = useState("");
+  const [deletingLeave, setDeletingLeave] = useState(null);
+  const [recordBusy, setRecordBusy] = useState(false);
   const [deptFilter, setDeptFilter] = useState("");
   const [exporting, setExporting] = useState(false);
   const [exportingUserId, setExportingUserId] = useState(null);
@@ -189,6 +201,49 @@ export default function AttendancePage() {
       setError(getErrorMessage(e));
     } finally {
       setBusy(false);
+    }
+  }
+
+  function openEditLeave(record) {
+    setEditError("");
+    setEditLeaveDate(record.record_date);
+    setEditingLeave(record);
+  }
+
+  async function handleSaveEditLeave() {
+    if (!editingLeave || !editLeaveDate) return;
+    setEditError("");
+    setError("");
+    setNotice("");
+    setRecordBusy(true);
+    try {
+      await updateAttendanceRecord(editingLeave.id, editLeaveDate);
+      setNotice(`Leave day moved to ${editLeaveDate}. · ခွင့်ရက်ပြင်ပြီးပြီ။`);
+      setEditingLeave(null);
+      await load();
+    } catch (e) {
+      // Keep the dialog open so another date can be picked.
+      setEditError(getErrorMessage(e));
+    } finally {
+      setRecordBusy(false);
+    }
+  }
+
+  async function handleDeleteLeave() {
+    if (!deletingLeave) return;
+    setError("");
+    setNotice("");
+    setRecordBusy(true);
+    try {
+      await deleteAttendanceRecord(deletingLeave.id);
+      setNotice(`Leave day ${deletingLeave.record_date} deleted. · ခွင့်ရက်ဖျက်ပြီးပြီ။`);
+      setDeletingLeave(null);
+      await load();
+    } catch (e) {
+      setError(getErrorMessage(e));
+      setDeletingLeave(null);
+    } finally {
+      setRecordBusy(false);
     }
   }
 
@@ -473,11 +528,12 @@ export default function AttendancePage() {
                     <th className="px-4 py-3">Check-in</th>
                     <th className="px-4 py-3">Check-out</th>
                     <th className="px-4 py-3">Status</th>
+                    <th className="px-4 py-3"><span className="sr-only">Actions</span></th>
                   </tr>
                 </thead>
                 <tbody>
                   {summary.records.length === 0 && (
-                    <tr><td colSpan={4} className="px-4 py-4 text-slate-400">No attendance records this month yet.</td></tr>
+                    <tr><td colSpan={5} className="px-4 py-4 text-slate-400">No attendance records this month yet.</td></tr>
                   )}
                   {summary.records.map((r) => (
                     <tr key={r.id} className="border-t border-slate-100 transition hover:bg-slate-50">
@@ -485,6 +541,32 @@ export default function AttendancePage() {
                       <td className="px-4 py-2.5 tabular-nums text-slate-700">{r.check_in || "—"}</td>
                       <td className="px-4 py-2.5 tabular-nums text-slate-700">{r.check_out || "—"}</td>
                       <td className="px-4 py-2.5"><StatusPill status={r.status} /></td>
+                      <td className="px-4 py-2.5 text-right">
+                        {r.status === "leave" && (
+                          <span className="inline-flex gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => openEditLeave(r)}
+                              title={`Edit leave day ${r.record_date}`}
+                              aria-label={`Edit leave day ${r.record_date}`}
+                              className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-600 shadow-sm transition hover:border-brand-200 hover:bg-brand-50 hover:text-brand-700"
+                            >
+                              Edit
+                            </button>
+                            {isAdmin && (
+                              <button
+                                type="button"
+                                onClick={() => setDeletingLeave(r)}
+                                title={`Delete leave day ${r.record_date}`}
+                                aria-label={`Delete leave day ${r.record_date}`}
+                                className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-red-600 shadow-sm transition hover:border-red-200 hover:bg-red-50"
+                              >
+                                Delete
+                              </button>
+                            )}
+                          </span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -526,6 +608,32 @@ export default function AttendancePage() {
               Attendance % is display-only — it is never written to KPI.
             </p>
             <div className="mt-4 flex flex-wrap items-end gap-3">
+              <label className="text-sm font-medium text-slate-700">
+                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">Month</span>
+                <select
+                  value={month}
+                  onChange={(e) => setMonth(Number(e.target.value))}
+                  aria-label="Month"
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+                >
+                  {MONTHS.map((name, i) => (
+                    <option key={i + 1} value={i + 1}>{name}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="text-sm font-medium text-slate-700">
+                <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">Year</span>
+                <select
+                  value={year}
+                  onChange={(e) => setYear(Number(e.target.value))}
+                  aria-label="Year"
+                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+                >
+                  {[now.getFullYear() - 2, now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1, now.getFullYear() + 2].map((y) => (
+                    <option key={y} value={y}>{y}</option>
+                  ))}
+                </select>
+              </label>
               <label className="text-sm font-medium text-slate-700">
                 <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">Department</span>
                 <select
@@ -698,6 +806,54 @@ export default function AttendancePage() {
         submitting={settingsSaving}
         onConfirm={handleSaveSettings}
         onCancel={() => setShowSaveConfirm(false)}
+      />
+      <Modal
+        open={editingLeave !== null}
+        title="Edit leave day · ခွင့်ရက်ပြင်ရန်"
+        onClose={() => setEditingLeave(null)}
+      >
+        <p className="text-sm text-slate-500">
+          Move the leave day{editingLeave ? ` from ${editingLeave.record_date}` : ""} to another date.
+        </p>
+        <div className="mt-4">
+          <input
+            type="date"
+            value={editLeaveDate}
+            onChange={(e) => setEditLeaveDate(e.target.value)}
+            aria-label="New leave date"
+            className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+          />
+        </div>
+        {editError && (
+          <p className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{editError}</p>
+        )}
+        <div className="mt-5 flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setEditingLeave(null)}
+            className="flex-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-[13px] font-semibold text-slate-600 hover:bg-slate-50 transition"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={handleSaveEditLeave}
+            disabled={recordBusy || !editLeaveDate || (editingLeave && editLeaveDate === editingLeave.record_date)}
+            className="flex-1 rounded-lg bg-brand-600 px-3 py-2 text-[13px] font-bold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-60"
+          >
+            {recordBusy ? "Wait…" : "Save"}
+          </button>
+        </div>
+      </Modal>
+      <ConfirmDialog
+        open={deletingLeave !== null}
+        title="Delete this leave day?"
+        message={deletingLeave ? `Remove the leave record for ${deletingLeave.record_date}? The day will count as absent (no record) in the attendance %.` : ""}
+        confirmLabel="Delete"
+        tone="danger"
+        submitting={recordBusy}
+        onConfirm={handleDeleteLeave}
+        onCancel={() => setDeletingLeave(null)}
       />
     </AppShell>
   );

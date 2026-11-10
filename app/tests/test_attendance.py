@@ -449,3 +449,112 @@ def test_settings_patch_returns_the_values_the_notice_shows(client, db):
     row = db.query(AttendanceSettings).filter_by(tenant_id=tenant.id).one()
     assert row.office_ips == [OFFICE_IP]
     assert row.start_time == "09:00" and row.end_time == "17:00"
+
+
+# ------------------------------------------------- leave record PATCH
+
+
+def _leave_patch_setup(db):
+    """Tenant with Sales (Alice, Bob, dept admin Dana) and Operations (Carol)."""
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Hein Admin")
+    sales = make_department(db, tenant, name="Sales")
+    ops = make_department(db, tenant, name="Operations")
+    dana = make_user(db, tenant, UserRole.DEPT_ADMIN, name="Dana Dept", department=sales)
+    alice = make_user(db, tenant, UserRole.EMPLOYEE, name="Alice Aung", department=sales)
+    bob = make_user(db, tenant, UserRole.EMPLOYEE, name="Bob Bo", department=sales)
+    carol = make_user(db, tenant, UserRole.EMPLOYEE, name="Carol Chan", department=ops)
+    return {
+        "tenant": tenant, "admin": admin, "sales": sales, "ops": ops,
+        "dana": dana, "alice": alice, "bob": bob, "carol": carol,
+    }
+
+
+def _patch_leave(client, user, tenant, record_id, new_date):
+    return client.patch(
+        f"/api/attendance/records/{record_id}",
+        json={"record_date": new_date},
+        headers=auth_headers(user, tenant),
+    )
+
+
+def test_patch_leave_moves_date_and_frees_old_day(client, db):
+    fx = _leave_patch_setup(db)
+    leave = _insert_record(db, fx["tenant"], fx["alice"], date_type(2026, 11, 2), "leave")
+    resp = _patch_leave(client, fx["alice"], fx["tenant"], leave.id, "2026-11-05")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["record_date"] == "2026-11-05"
+    assert resp.json()["status"] == "leave"
+    # The old day is free again: marking leave there now succeeds.
+    resp = client.post(
+        "/api/attendance/leave",
+        json={"record_date": "2026-11-02"},
+        headers=auth_headers(fx["alice"], fx["tenant"]),
+    )
+    assert resp.status_code == 201, resp.text
+
+
+def test_patch_leave_collision_returns_409(client, db):
+    fx = _leave_patch_setup(db)
+    leave = _insert_record(db, fx["tenant"], fx["alice"], date_type(2026, 11, 2), "leave")
+    _insert_record(
+        db, fx["tenant"], fx["alice"], date_type(2026, 11, 3), "present",
+        check_in=time_type(9, 5),
+    )
+    resp = _patch_leave(client, fx["alice"], fx["tenant"], leave.id, "2026-11-03")
+    assert resp.status_code == 409, resp.text
+
+
+def test_patch_non_leave_record_returns_400(client, db):
+    fx = _leave_patch_setup(db)
+    present = _insert_record(
+        db, fx["tenant"], fx["alice"], date_type(2026, 11, 2), "present",
+        check_in=time_type(9, 5),
+    )
+    resp = _patch_leave(client, fx["alice"], fx["tenant"], present.id, "2026-11-05")
+    assert resp.status_code == 400, resp.text
+
+
+def test_patch_leave_employee_cannot_edit_someone_elses(client, db):
+    fx = _leave_patch_setup(db)
+    leave = _insert_record(db, fx["tenant"], fx["bob"], date_type(2026, 11, 2), "leave")
+    resp = _patch_leave(client, fx["alice"], fx["tenant"], leave.id, "2026-11-05")
+    assert resp.status_code == 403, resp.text
+
+
+def test_patch_leave_dept_admin_own_department_works(client, db):
+    fx = _leave_patch_setup(db)
+    leave = _insert_record(db, fx["tenant"], fx["alice"], date_type(2026, 11, 2), "leave")
+    resp = _patch_leave(client, fx["dana"], fx["tenant"], leave.id, "2026-11-05")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["record_date"] == "2026-11-05"
+
+
+def test_patch_leave_dept_admin_cross_department_forbidden(client, db):
+    fx = _leave_patch_setup(db)
+    leave = _insert_record(db, fx["tenant"], fx["carol"], date_type(2026, 11, 2), "leave")
+    resp = _patch_leave(client, fx["dana"], fx["tenant"], leave.id, "2026-11-05")
+    assert resp.status_code == 403, resp.text
+
+
+def test_patch_leave_tenant_admin_can_edit_anyone(client, db):
+    fx = _leave_patch_setup(db)
+    leave = _insert_record(db, fx["tenant"], fx["carol"], date_type(2026, 11, 2), "leave")
+    resp = _patch_leave(client, fx["admin"], fx["tenant"], leave.id, "2026-11-05")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["record_date"] == "2026-11-05"
+
+
+def test_patch_leave_other_tenant_returns_404(client, db):
+    fx = _leave_patch_setup(db)
+    leave = _insert_record(db, fx["tenant"], fx["alice"], date_type(2026, 11, 2), "leave")
+    other_tenant = make_tenant(db, name="Other", slug="other")
+    other_admin = make_user(db, other_tenant, UserRole.TENANT_ADMIN, name="Other Admin")
+    resp = _patch_leave(client, other_admin, other_tenant, leave.id, "2026-11-05")
+    assert resp.status_code == 404, resp.text
+
+
+def test_patch_leave_missing_record_returns_404(client, db):
+    fx = _leave_patch_setup(db)
+    resp = _patch_leave(client, fx["admin"], fx["tenant"], 999999, "2026-11-05")
+    assert resp.status_code == 404, resp.text

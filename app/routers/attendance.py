@@ -72,7 +72,7 @@ router = APIRouter(prefix="/api/attendance", tags=["attendance"])
 logger = logging.getLogger("kpi_system")
 
 # Check-in/out authors: employees and dept admins (tenant admins never
-# fill their own attendance record — same boundary as the daily diary).
+# fill their own attendance record).
 require_attendance_author = RoleChecker([UserRole.EMPLOYEE, UserRole.DEPT_ADMIN])
 
 

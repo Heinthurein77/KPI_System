@@ -5,7 +5,7 @@ or ``datetime.now(timezone.utc).date()`` directly: the business operates
 on Asia/Yangon time, and server-local/UTC dates shift month boundaries by
 hours (e.g. a bulk import run in the first hours of a Yangon month would
 otherwise land in the previous month, and a reminder run near a UTC/Yangon
-midnight boundary would target the wrong diary day).
+midnight boundary would target the wrong day).
 """
 
 from __future__ import annotations

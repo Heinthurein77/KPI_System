@@ -169,6 +169,4 @@ require_platform_super_admin = RoleChecker([UserRole.SUPER_ADMIN])
 require_tenant_admin = RoleChecker([UserRole.TENANT_ADMIN])
 require_dept_admin = RoleChecker([UserRole.TENANT_ADMIN, UserRole.DEPT_ADMIN])
 require_tenant_member = RoleChecker([UserRole.TENANT_ADMIN, UserRole.DEPT_ADMIN, UserRole.EMPLOYEE])
-# Diary authors: only employees and dept admins fill a daily diary.
-# Tenant admins never fill one — they view, give feedback, and evaluate.
-require_diary_author = RoleChecker([UserRole.DEPT_ADMIN, UserRole.EMPLOYEE])
+

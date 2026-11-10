@@ -11,8 +11,8 @@
 // "abcmib": admin@local.test = tenant admin, manager@local.test =
 // dept admin, aung@local.test = employee; password TestPass123!).
 // Override with E2E_TENANT_SLUG / E2E_*_EMAIL / E2E_PASSWORD.
-// The backend is NOT reset between specs: the diary spec uses a
-// timestamp-unique work string and deletes its own entry afterwards,
+// The backend is NOT reset between specs: specs must use
+// timestamp-unique values and clean up after themselves,
 // so reruns never collide with leftovers.
 //
 // The config starts the vite dev server itself (and reuses it if it

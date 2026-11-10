@@ -16,7 +16,3 @@ export async function loginAs(page, email, password = accounts.password) {
   await page.getByRole("button", { name: "Sign in" }).click();
   await page.waitForURL(/\/dashboard/, { timeout: 15 * 1000 });
 }
-
-export function uniqueWork(prefix = "E2E diary") {
-  return `${prefix} ${Date.now()}`;
-}

@@ -1,8 +1,8 @@
 #!/bin/sh
-# Back up the kpi_uploads Docker volume (diary evidence files) to a
-# timestamped tar.gz. Evidence files live ONLY in this volume — not in
+# Back up the kpi_uploads Docker volume (uploaded files) to a
+# timestamped tar.gz. Uploaded files live ONLY in this volume — not in
 # the Neon database — so without this backup a VPS/volume loss deletes
-# every attachment while the diary rows themselves survive.
+# every uploaded file.
 #
 # Usage (on the server, or anywhere with docker access):
 #   ./scripts/backup-uploads.sh

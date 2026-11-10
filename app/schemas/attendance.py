@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+import ipaddress
 from datetime import date as date_type
 
 from pydantic import BaseModel, field_validator
+
+# RFC 1918 private ranges — a private IP can never match a check-in, because
+# the WiFi gate compares the request's PUBLIC IP. Saving one would silently
+# lock the whole tenant out of check-in, so settings reject them outright.
+_RFC1918_NETWORKS = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+)
 
 
 class AttendanceSettingsUpdate(BaseModel):
@@ -19,7 +29,11 @@ class AttendanceSettingsUpdate(BaseModel):
     def _check_work_days(cls, value):
         if value is None:
             return value
-        if not value or any(not isinstance(d, int) or not 0 <= d <= 6 for d in value):
+        # isinstance(True, int) is True — exclude booleans explicitly.
+        if not value or any(
+            isinstance(d, bool) or not isinstance(d, int) or not 0 <= d <= 6
+            for d in value
+        ):
             raise ValueError("work_days must be weekday numbers 0-6 (0=Monday).")
         return sorted(set(value))
 
@@ -35,6 +49,29 @@ class AttendanceSettingsUpdate(BaseModel):
         except ValueError as exc:
             raise ValueError(str(exc)) from exc
         return value
+
+    @field_validator("office_ips")
+    @classmethod
+    def _check_office_ips(cls, value):
+        if value is None:
+            return value
+        cleaned = []
+        for item in value:
+            entry = item.strip() if isinstance(item, str) else item
+            if not entry:
+                continue
+            try:
+                ip = ipaddress.ip_address(entry)
+            except ValueError:
+                raise ValueError(f"office_ips must be valid IP addresses (got {entry!r}).") from None
+            if any(ip in network for network in _RFC1918_NETWORKS):
+                raise ValueError(
+                    f"office_ips must be public IPs — {entry} is a private (RFC 1918) "
+                    "address and can never match a check-in, because the WiFi gate "
+                    "compares public IPs. Use the office's public IP instead."
+                )
+            cleaned.append(str(ip))
+        return cleaned
 
     @field_validator("holidays")
     @classmethod
@@ -101,6 +138,9 @@ class AttendanceSummaryOut(BaseModel):
 
 
 class LeaveCreate(BaseModel):
+    # Admin-API-only: no UI caller marks leave for someone else (the UI
+    # only ever marks the signed-in user's own leave). Tenant/dept admins
+    # may use this via the API; visibility is enforced in mark_leave.
     user_id: int | None = None  # admin marking for someone else; None = self
     record_date: date_type
 

@@ -20,6 +20,7 @@ Visibility mirrors the KPI role model:
 
 from __future__ import annotations
 
+import calendar
 import json
 import logging
 from datetime import date as date_type, datetime, time as time_type, timedelta
@@ -38,6 +39,7 @@ from app.core.deps import (
     require_tenant_admin,
     require_tenant_member,
 )
+from app.core.timezone import now as _now_local, today as _today_local
 from app.core.proxy import trusted_client_ip
 from app.core.rate_limit import (
     ATTENDANCE_RATE_LIMIT,
@@ -70,7 +72,6 @@ from app.services.attendance_service import (
     midday,
     monthly_summary,
     parse_time,
-    working_days_in_month,
 )
 
 router = APIRouter(prefix="/api/attendance", tags=["attendance"])
@@ -78,7 +79,7 @@ router = APIRouter(prefix="/api/attendance", tags=["attendance"])
 logger = logging.getLogger("kpi_system")
 
 # Check-in/out authors: employees and dept admins (tenant admins never
-# fill their own attendance record — same boundary as the daily diary).
+# fill their own attendance record).
 require_attendance_author = RoleChecker([UserRole.EMPLOYEE, UserRole.DEPT_ADMIN])
 
 
@@ -135,16 +136,17 @@ def _ip_allowed(cfg: dict, ip: str) -> tuple[bool, bool]:
     return ip in ips, True
 
 
-def _now_local() -> datetime:
-    return datetime.now(ZoneInfo(settings.TIMEZONE))
-
-
 def _visible_user_ids(db: Session, user: User) -> list[int]:
     if user.role == UserRole.TENANT_ADMIN:
         stmt = select(User.id).where(
             User.tenant_id == user.tenant_id, User.is_active == True  # noqa: E712
         )
     elif user.role == UserRole.DEPT_ADMIN:
+        if user.department_id is None:
+            # A dept admin with no department sees only themself:
+            # department_id == None would render as IS NULL and leak
+            # every user with no department.
+            return [user.id]
         stmt = select(User.id).where(
             User.tenant_id == user.tenant_id,
             User.department_id == user.department_id,
@@ -156,11 +158,19 @@ def _visible_user_ids(db: Session, user: User) -> list[int]:
 
 
 def _month_bounds(year: int, month: int) -> tuple[date_type, date_type]:
+    """First and last day of the month (inclusive).
+
+    Years outside 1-9999 are rejected with 400: date(0, …) / date(10000, …)
+    raise ValueError, which the generic handler would otherwise turn into
+    a 500. The bound is inclusive (not first-of-next-month) so December
+    9999 is representable — there is no 10000-01-01 date object.
+    """
+    if not 1 <= year <= 9999:
+        raise HTTPException(400, "year must be 1-9999")
     if not 1 <= month <= 12:
         raise HTTPException(400, "month must be 1-12")
-    start = date_type(year, month, 1)
-    end = date_type(year + 1, 1, 1) if month == 12 else date_type(year, month + 1, 1)
-    return start, end
+    _, last_day = calendar.monthrange(year, month)
+    return date_type(year, month, 1), date_type(year, month, last_day)
 
 
 def _serialize(
@@ -183,19 +193,38 @@ def _serialize(
     )
 
 
-def _working_days(
-    db: Session, tenant_id: int, year: int, month: int, cfg: dict | None = None
-) -> list[date_type]:
-    # M13: pass cfg when the caller already loaded settings once.
-    if cfg is None:
-        cfg = _settings_dict(db, tenant_id)
+def _holidays_set(cfg: dict) -> set[date_type]:
     holidays = set()
     for raw in cfg["holidays"]:
         try:
             holidays.add(date_type.fromisoformat(raw))
         except ValueError:
             continue
-    return working_days_in_month(year, month, cfg["work_days"], holidays)
+    return holidays
+
+
+def is_working_day(cfg: dict, day: date_type) -> bool:
+    """The ONE working-day rule: weekday in work_days AND not a holiday.
+
+    Shared by /today, check-in, check-out, leave marking/editing and the
+    monthly working-days list, so a holiday can never be a working day in
+    one place and a non-working day in another.
+    """
+    return day.weekday() in cfg["work_days"] and day not in _holidays_set(cfg)
+
+
+def _working_days(
+    db: Session, tenant_id: int, year: int, month: int, cfg: dict | None = None
+) -> list[date_type]:
+    # M13: pass cfg when the caller already loaded settings once.
+    if cfg is None:
+        cfg = _settings_dict(db, tenant_id)
+    _, last_day = calendar.monthrange(year, month)
+    return [
+        date_type(year, month, day)
+        for day in range(1, last_day + 1)
+        if is_working_day(cfg, date_type(year, month, day))
+    ]
 
 
 def _summary_for(
@@ -217,7 +246,7 @@ def _summary_for(
                 AttendanceRecord.tenant_id == tenant_id,
                 AttendanceRecord.employee_id == employee.id,
                 AttendanceRecord.record_date >= start,
-                AttendanceRecord.record_date < end,
+                AttendanceRecord.record_date <= end,
             )
         ).all()
     by_date = {r.record_date: r.status for r in records}
@@ -290,9 +319,14 @@ def update_settings(
     user: User = Depends(require_tenant_admin),
 ):
     data = payload.model_dump(exclude_unset=True)
-    if "start_time" in data and "end_time" in data:
-        if parse_time(data["start_time"]) >= parse_time(data["end_time"]):
-            raise HTTPException(400, "start_time must be before end_time.")
+    # M10: validate the EFFECTIVE (merged stored + patched) start/end
+    # pair, not just the pair in the payload — a PATCH with only
+    # start_time="18:00" against a stored end_time="17:00" must fail.
+    cfg = _settings_dict(db, user.tenant_id)
+    effective_start = data.get("start_time", cfg["start_time"])
+    effective_end = data.get("end_time", cfg["end_time"])
+    if parse_time(effective_start) >= parse_time(effective_end):
+        raise HTTPException(400, "start_time must be before end_time.")
     # M1: two admins creating settings at once race the INSERT against
     # uq_attendance_settings_tenant — the loser re-reads the winner's
     # row and applies the update to it instead of 500ing.
@@ -314,8 +348,7 @@ def get_today(
     user: User = Depends(require_tenant_member),
 ):
     cfg = _settings_dict(db, user.tenant_id)
-    now = _now_local()
-    today = now.date()
+    today = _today_local()
     record = db.scalar(
         select(AttendanceRecord).where(
             AttendanceRecord.tenant_id == user.tenant_id,
@@ -327,7 +360,7 @@ def get_today(
     out = _settings_out(cfg)
     return AttendanceTodayOut(
         today=today,
-        is_working_day=today.weekday() in cfg["work_days"],
+        is_working_day=is_working_day(cfg, today),
         start_time=out.start_time,
         end_time=out.end_time,
         midday=out.midday,
@@ -350,7 +383,7 @@ def check_in(
     cfg = _settings_dict(db, user.tenant_id)
     now = _now_local()
     today = now.date()
-    if today.weekday() not in cfg["work_days"]:
+    if not is_working_day(cfg, today):
         raise HTTPException(400, "Today is not a working day for your organization.")
     ip = _client_ip(request)
     allowed, enforced = _ip_allowed(cfg, ip)
@@ -373,7 +406,7 @@ def check_in(
         raise HTTPException(409, "You have already checked in today.")
     start = parse_time(cfg["start_time"])
     end = parse_time(cfg["end_time"])
-    check_in_time = time_type(now.hour, now.minute)
+    check_in_time = time_type(now.hour, now.minute, now.second)
     record = AttendanceRecord(
         tenant_id=user.tenant_id,
         employee_id=user.id,
@@ -456,11 +489,17 @@ def check_out(
         )
         if record is None:
             raise HTTPException(409, "You have not checked in today.")
+    # M11: the day being closed must be a working day (a holiday/weekend
+    # record — e.g. created before the day became a holiday — cannot be
+    # checked out). Checked against the record's date, not today, so the
+    # after-midnight fallback (M18) still works when today is a weekend.
+    if not is_working_day(cfg, record.record_date):
+        raise HTTPException(400, "That day is not a working day for your organization.")
     if record.check_out is not None:
         raise HTTPException(409, "You have already checked out today.")
     start = parse_time(cfg["start_time"])
     end = parse_time(cfg["end_time"])
-    check_out_time = time_type(now.hour, now.minute)
+    check_out_time = time_type(now.hour, now.minute, now.second)
     # Compute the new status in Python first (check-in is known, the
     # check-out time is now), then close the record with one atomic
     # conditional UPDATE — M3: only the first concurrent check-out
@@ -506,6 +545,13 @@ def mark_leave(
     target = db.get(User, target_id)
     if target is None or target.tenant_id != user.tenant_id:
         raise HTTPException(404, "User not found.")
+    # m11: leave only on a working day — weekends and holidays are not
+    # working days, so there is nothing to take leave from.
+    cfg = _settings_dict(db, user.tenant_id)
+    if not is_working_day(cfg, payload.record_date):
+        raise HTTPException(
+            400, "Leave can only be marked on a working day (not a weekend or holiday)."
+        )
     existing = db.scalar(
         select(AttendanceRecord).where(
             AttendanceRecord.tenant_id == user.tenant_id,
@@ -560,8 +606,9 @@ def update_record(
 ):
     """Move a leave day to another date. Leave records only — check-in/out
     records are never editable. Permissions mirror mark_leave: the owner,
-    or a dept/tenant admin for a user in their visible set. No working-day
-    validation, same as mark_leave."""
+    or a dept/tenant admin for a user in their visible set. The new date
+    must be a working day in the SAME month as the original record —
+    moving across months is not allowed (delete + re-mark instead)."""
     record = db.get(AttendanceRecord, record_id)
     if record is None or record.tenant_id != user.tenant_id:
         raise HTTPException(404, "Attendance record not found.")
@@ -572,6 +619,21 @@ def update_record(
             raise HTTPException(403, "Not allowed to edit this user's leave.")
         if user.role == UserRole.EMPLOYEE:
             raise HTTPException(403, "Employees can only edit their own leave.")
+    # m11: the new date must be a working day, in the same month.
+    cfg = _settings_dict(db, user.tenant_id)
+    if not is_working_day(cfg, payload.record_date):
+        raise HTTPException(
+            400, "Leave can only be moved to a working day (not a weekend or holiday)."
+        )
+    if (payload.record_date.year, payload.record_date.month) != (
+        record.record_date.year,
+        record.record_date.month,
+    ):
+        raise HTTPException(
+            400,
+            "A leave day can only be moved within the same month. "
+            "Delete it and mark a new leave day instead.",
+        )
     existing = db.scalar(
         select(AttendanceRecord).where(
             AttendanceRecord.tenant_id == user.tenant_id,
@@ -687,7 +749,7 @@ def get_report(
                 AttendanceRecord.tenant_id == user.tenant_id,
                 AttendanceRecord.employee_id.in_([u.id for u in users]),
                 AttendanceRecord.record_date >= start,
-                AttendanceRecord.record_date < end,
+                AttendanceRecord.record_date <= end,
             )
         ).all():
             by_user.setdefault(r.employee_id, []).append(r)
@@ -712,9 +774,16 @@ _STATUS_LABELS = {
 }
 
 
-def _safe_file_part(value: str) -> str:
-    slug = "".join(c if c.isalnum() or c in "-_" else "-" for c in value.lower().replace(" ", "-"))
-    return slug.strip("-") or "department"
+def _safe_file_part(value: str, fallback: str = "department") -> str:
+    """ASCII slug for a filename part. Non-Latin names (e.g. Burmese) have
+    no ASCII letters, so they fall back to `fallback` instead of producing
+    an empty slug — "department" for a department file, "employee" for a
+    per-person file."""
+    slug = "".join(
+        c if c.isascii() and (c.isalnum() or c in "-_") else "-"
+        for c in value.lower().replace(" ", "-")
+    )
+    return slug.strip("-") or fallback
 
 
 @router.get("/report/export")
@@ -734,9 +803,10 @@ def export_report(
     Working days without a record appear as Absent with blank times.
     With user_id, only that person is exported (per-person download); a
     user outside the caller's visible set yields a headers-only file.
-    Late minutes are recorded in the database but deliberately never
-    exported."""
-    _month_bounds(year, month)  # 400 on an invalid month
+    An unknown department_id/user_id (no such row, or another tenant's)
+    returns 404 instead of a silently empty file; headers-only is only
+    for a valid-but-empty scope. Late minutes are recorded in the
+    database but deliberately never exported."""
     start, end = _month_bounds(year, month)
     visible = _visible_user_ids(db, user)
     users = db.scalars(
@@ -752,21 +822,21 @@ def export_report(
     if department_id is not None:
         dept = db.get(Department, department_id)
         if dept is None or dept.tenant_id != user.tenant_id:
-            users = []
-        else:
-            # Only put the department name in the filename when the caller
-            # may see that department (tenant admin: any; anyone else:
-            # only their own). Otherwise a headers-only file for an
-            # out-of-scope department would still leak its name.
-            if user.role == UserRole.TENANT_ADMIN or user.department_id == department_id:
-                dept_label = dept.name
-            users = [u for u in users if u.department_id == department_id]
+            raise HTTPException(404, "Department not found.")
+        # Only put the department name in the filename when the caller
+        # may see that department (tenant admin: any; anyone else:
+        # only their own). Otherwise a headers-only file for an
+        # out-of-scope department would still leak its name.
+        if user.role == UserRole.TENANT_ADMIN or user.department_id == department_id:
+            dept_label = dept.name
+        users = [u for u in users if u.department_id == department_id]
     person_label = None
     if user_id is not None:
         target = db.get(User, user_id)
+        if target is None or target.tenant_id != user.tenant_id:
+            raise HTTPException(404, "User not found.")
         if (
-            target is None
-            or target.id not in visible
+            target.id not in visible
             or target.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN)
         ):
             users = []
@@ -785,7 +855,7 @@ def export_report(
                 AttendanceRecord.tenant_id == user.tenant_id,
                 AttendanceRecord.employee_id.in_([u.id for u in users]),
                 AttendanceRecord.record_date >= start,
-                AttendanceRecord.record_date < end,
+                AttendanceRecord.record_date <= end,
             )
         ).all():
             records_by_user.setdefault(r.employee_id, {})[r.record_date] = r
@@ -830,9 +900,9 @@ def export_report(
     output = build_attendance_detail_report(entries, year, month, dept_label, person_label)
     filename = f"attendance-{year}-{month:02d}"
     if person_label:
-        filename += f"-{_safe_file_part(person_label)}"
+        filename += f"-{_safe_file_part(person_label, 'employee')}"
     elif dept_label:
-        filename += f"-{_safe_file_part(dept_label)}"
+        filename += f"-{_safe_file_part(dept_label, 'department')}"
     filename += ".xlsx"
     return StreamingResponse(
         output,

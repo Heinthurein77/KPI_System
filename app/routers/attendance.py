@@ -22,13 +22,14 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date as date_type, datetime, time as time_type
+from datetime import date as date_type, datetime, time as time_type, timedelta
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session, selectinload
 
 from app.core.config import settings
 from app.core.deps import (
@@ -162,10 +163,15 @@ def _month_bounds(year: int, month: int) -> tuple[date_type, date_type]:
     return start, end
 
 
-def _serialize(db: Session, record: AttendanceRecord) -> AttendanceRecordOut:
+def _serialize(
+    db: Session, record: AttendanceRecord, author: User | None = None
+) -> AttendanceRecordOut:
     # late_minutes is recorded in the DB but deliberately never exposed
     # via the API (user decision: removed from UI + export as well).
-    author = db.get(User, record.employee_id)
+    # M13: callers that already loaded the user pass it in, so a report
+    # over N records does not do N extra db.get calls.
+    if author is None:
+        author = db.get(User, record.employee_id)
     return AttendanceRecordOut(
         id=record.id,
         employee_id=record.employee_id,
@@ -177,8 +183,12 @@ def _serialize(db: Session, record: AttendanceRecord) -> AttendanceRecordOut:
     )
 
 
-def _working_days(db: Session, tenant_id: int, year: int, month: int) -> list[date_type]:
-    cfg = _settings_dict(db, tenant_id)
+def _working_days(
+    db: Session, tenant_id: int, year: int, month: int, cfg: dict | None = None
+) -> list[date_type]:
+    # M13: pass cfg when the caller already loaded settings once.
+    if cfg is None:
+        cfg = _settings_dict(db, tenant_id)
     holidays = set()
     for raw in cfg["holidays"]:
         try:
@@ -189,19 +199,29 @@ def _working_days(db: Session, tenant_id: int, year: int, month: int) -> list[da
 
 
 def _summary_for(
-    db: Session, tenant_id: int, employee: User, year: int, month: int
+    db: Session,
+    tenant_id: int,
+    employee: User,
+    year: int,
+    month: int,
+    cfg: dict | None = None,
+    records: list[AttendanceRecord] | None = None,
 ) -> AttendanceSummaryOut:
+    # M13: cfg/records are optional pre-loaded inputs — get_report passes
+    # one settings dict and one batched records query for all users, so a
+    # report no longer costs a settings + records query per user.
     start, end = _month_bounds(year, month)
-    records = db.scalars(
-        select(AttendanceRecord).where(
-            AttendanceRecord.tenant_id == tenant_id,
-            AttendanceRecord.employee_id == employee.id,
-            AttendanceRecord.record_date >= start,
-            AttendanceRecord.record_date < end,
-        )
-    ).all()
+    if records is None:
+        records = db.scalars(
+            select(AttendanceRecord).where(
+                AttendanceRecord.tenant_id == tenant_id,
+                AttendanceRecord.employee_id == employee.id,
+                AttendanceRecord.record_date >= start,
+                AttendanceRecord.record_date < end,
+            )
+        ).all()
     by_date = {r.record_date: r.status for r in records}
-    working = _working_days(db, tenant_id, year, month)
+    working = _working_days(db, tenant_id, year, month, cfg=cfg)
     result = monthly_summary(by_date, working)
     return AttendanceSummaryOut(
         year=year,
@@ -217,7 +237,7 @@ def _summary_for(
         leave=result["leave"],
         absent=result["absent"],
         attendance_pct=result["attendance_pct"],
-        records=[_serialize(db, r) for r in sorted(records, key=lambda r: r.record_date)],
+        records=[_serialize(db, r, author=employee) for r in sorted(records, key=lambda r: r.record_date)],
     )
 
 
@@ -232,16 +252,7 @@ def get_settings(
     return _settings_out(_settings_dict(db, user.tenant_id))
 
 
-@router.patch("/settings", response_model=AttendanceSettingsOut)
-def update_settings(
-    payload: AttendanceSettingsUpdate,
-    db: Session = Depends(get_db),
-    user: User = Depends(require_tenant_admin),
-):
-    data = payload.model_dump(exclude_unset=True)
-    if "start_time" in data and "end_time" in data:
-        if parse_time(data["start_time"]) >= parse_time(data["end_time"]):
-            raise HTTPException(400, "start_time must be before end_time.")
+def _save_settings(db: Session, user: User, data: dict) -> AttendanceSettings:
     row = db.scalar(
         select(AttendanceSettings).where(AttendanceSettings.tenant_id == user.tenant_id)
     )
@@ -269,6 +280,27 @@ def update_settings(
     )
     db.commit()
     db.refresh(row)
+    return row
+
+
+@router.patch("/settings", response_model=AttendanceSettingsOut)
+def update_settings(
+    payload: AttendanceSettingsUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_tenant_admin),
+):
+    data = payload.model_dump(exclude_unset=True)
+    if "start_time" in data and "end_time" in data:
+        if parse_time(data["start_time"]) >= parse_time(data["end_time"]):
+            raise HTTPException(400, "start_time must be before end_time.")
+    # M1: two admins creating settings at once race the INSERT against
+    # uq_attendance_settings_tenant — the loser re-reads the winner's
+    # row and applies the update to it instead of 500ing.
+    try:
+        _save_settings(db, user, data)
+    except IntegrityError:
+        db.rollback()
+        _save_settings(db, user, data)
     return _settings_out(_settings_dict(db, user.tenant_id))
 
 
@@ -353,7 +385,25 @@ def check_in(
         check_in_ip=ip,
     )
     db.add(record)
-    db.commit()
+    # M1: a double-tap / two tabs racing the INSERT hits the unique
+    # constraint (uq_attendance_tenant_employee_day) — roll back and
+    # answer 409 with the winner's record instead of a 500.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.scalar(
+            select(AttendanceRecord).where(
+                AttendanceRecord.tenant_id == user.tenant_id,
+                AttendanceRecord.employee_id == user.id,
+                AttendanceRecord.record_date == today,
+            )
+        )
+        if existing is not None:
+            if existing.status == "leave":
+                raise HTTPException(409, "This day is recorded as leave. Ask an admin to remove the leave record first.")
+            raise HTTPException(409, "You have already checked in today.")
+        raise
     db.refresh(record)
     logger.info(
         "Attendance check-in user=%s date=%s ip=%s enforced=%s",
@@ -387,23 +437,51 @@ def check_out(
             AttendanceRecord.record_date == today,
         )
     )
-    if record is None or record.check_in is None:
-        raise HTTPException(409, "You have not checked in today.")
-    if record.status == "leave":
+    if record is not None and record.status == "leave":
         raise HTTPException(409, "This day is recorded as leave.")
+    if record is None or record.check_in is None:
+        # M18: check-out after midnight — no record for today, so fall
+        # back to the most recent OPEN record from yesterday only and
+        # close that one. Anything older stays open (an admin corrects
+        # it); with no open record, keep the existing 409.
+        yesterday = today - timedelta(days=1)
+        record = db.scalar(
+            select(AttendanceRecord).where(
+                AttendanceRecord.tenant_id == user.tenant_id,
+                AttendanceRecord.employee_id == user.id,
+                AttendanceRecord.record_date == yesterday,
+                AttendanceRecord.check_in.is_not(None),
+                AttendanceRecord.check_out.is_(None),
+            )
+        )
+        if record is None:
+            raise HTTPException(409, "You have not checked in today.")
     if record.check_out is not None:
         raise HTTPException(409, "You have already checked out today.")
     start = parse_time(cfg["start_time"])
     end = parse_time(cfg["end_time"])
     check_out_time = time_type(now.hour, now.minute)
-    record.check_out = check_out_time
-    record.check_out_ip = ip
-    record.status = day_status(record.check_in, check_out_time, start, end)
+    # Compute the new status in Python first (check-in is known, the
+    # check-out time is now), then close the record with one atomic
+    # conditional UPDATE — M3: only the first concurrent check-out
+    # closes it; the rest see rowcount 0 and get 409.
+    new_status = day_status(record.check_in, check_out_time, start, end)
+    result = db.execute(
+        update(AttendanceRecord)
+        .where(
+            AttendanceRecord.id == record.id,
+            AttendanceRecord.check_out.is_(None),
+        )
+        .values(check_out=check_out_time, check_out_ip=ip, status=new_status)
+    )
+    if result.rowcount == 0:
+        db.rollback()
+        raise HTTPException(409, "You have already checked out today.")
     db.commit()
     db.refresh(record)
     logger.info(
         "Attendance check-out user=%s date=%s ip=%s",
-        user.id, today.isoformat(), ip,
+        user.id, record.record_date.isoformat(), ip,
     )
     return _serialize(db, record)
 
@@ -445,7 +523,30 @@ def mark_leave(
         status="leave",
     )
     db.add(record)
-    db.commit()
+    # M1: the pre-check above can race a concurrent check-in/leave for
+    # the same day — the unique constraint is the arbiter. The flush
+    # raises IntegrityError for the loser; roll back and answer 409.
+    try:
+        db.flush()  # assigns record.id for the audit entry below
+        audit_service.log(
+            db, user, "attendance_leave_created", "attendance_record",
+            record.id, f"{target.name} — {payload.record_date.isoformat()}",
+            f"Leave marked for {target.name} on {payload.record_date.isoformat()} by {user.name}.",
+            department_id=target.department_id,
+        )
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        existing = db.scalar(
+            select(AttendanceRecord).where(
+                AttendanceRecord.tenant_id == user.tenant_id,
+                AttendanceRecord.employee_id == target_id,
+                AttendanceRecord.record_date == payload.record_date,
+            )
+        )
+        if existing is not None:
+            raise HTTPException(409, "An attendance record already exists for this day.")
+        raise
     db.refresh(record)
     return _serialize(db, record)
 
@@ -481,8 +582,21 @@ def update_record(
     )
     if existing is not None:
         raise HTTPException(409, "An attendance record already exists for this day.")
+    old_date = record.record_date
     record.record_date = payload.record_date
-    db.commit()
+    audit_service.log(
+        db, user, "attendance_leave_updated", "attendance_record",
+        record.id, f"Leave — {payload.record_date.isoformat()}",
+        f"Leave moved for user {record.employee_id}: "
+        f"{old_date.isoformat()} → {payload.record_date.isoformat()} by {user.name}.",
+        department_id=record.department_id,
+    )
+    # M1: same race as mark_leave — two moves landing on the same day.
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "An attendance record already exists for this day.")
     db.refresh(record)
     return _serialize(db, record)
 
@@ -493,10 +607,21 @@ def delete_record(
     db: Session = Depends(get_db),
     user: User = Depends(require_tenant_admin),
 ):
-    """Correction tool for tenant admins (wrong leave day, bad record)."""
+    """Correction tool for tenant admins (wrong leave day, bad record).
+    Leave records only — check-in/out records are never deletable via
+    this endpoint (the UI only exposes Delete on leave rows)."""
     record = db.get(AttendanceRecord, record_id)
     if record is None or record.tenant_id != user.tenant_id:
         raise HTTPException(404, "Attendance record not found.")
+    if record.status != "leave":
+        raise HTTPException(400, "Only leave records can be deleted.")
+    audit_service.log(
+        db, user, "attendance_record_deleted", "attendance_record",
+        record.id, f"Leave — {record.record_date.isoformat()}",
+        f"Leave record for user {record.employee_id} on "
+        f"{record.record_date.isoformat()} deleted by {user.name}.",
+        department_id=record.department_id,
+    )
     db.delete(record)
     db.commit()
     return None
@@ -523,22 +648,53 @@ def get_summary(
 
 
 @router.get("/report", response_model=list[AttendanceSummaryOut])
+@limiter.limit(REPORT_RATE_LIMIT, key_func=_authenticated_user_key)
 def get_report(
+    request: Request,
     year: int = Query(...),
     month: int = Query(...),
+    limit: int | None = Query(None, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     user: User = Depends(require_tenant_member),
 ):
+    # M13: settings loaded once, all of the month's records fetched in
+    # ONE query and grouped in memory, and _serialize takes the already-
+    # loaded user — a report no longer costs ~2 queries per user plus
+    # one db.get per record. limit/offset paginate the user list; the
+    # default (no limit) returns every visible row, as the frontend
+    # expects.
+    start, end = _month_bounds(year, month)
+    cfg = _settings_dict(db, user.tenant_id)
     visible = _visible_user_ids(db, user)
-    users = db.scalars(
+    users_stmt = (
         select(User)
+        .options(selectinload(User.department))
         .where(
             User.id.in_(visible),
             User.role.in_([UserRole.EMPLOYEE, UserRole.DEPT_ADMIN]),
         )
         .order_by(User.name)
-    ).all()
-    return [_summary_for(db, user.tenant_id, u, year, month) for u in users]
+        .offset(offset)
+    )
+    if limit is not None:
+        users_stmt = users_stmt.limit(limit)
+    users = db.scalars(users_stmt).all()
+    by_user: dict[int, list[AttendanceRecord]] = {}
+    if users:
+        for r in db.scalars(
+            select(AttendanceRecord).where(
+                AttendanceRecord.tenant_id == user.tenant_id,
+                AttendanceRecord.employee_id.in_([u.id for u in users]),
+                AttendanceRecord.record_date >= start,
+                AttendanceRecord.record_date < end,
+            )
+        ).all():
+            by_user.setdefault(r.employee_id, []).append(r)
+    return [
+        _summary_for(db, user.tenant_id, u, year, month, cfg=cfg, records=by_user.get(u.id, []))
+        for u in users
+    ]
 
 
 _ROLE_LABELS = {
@@ -562,7 +718,9 @@ def _safe_file_part(value: str) -> str:
 
 
 @router.get("/report/export")
+@limiter.limit(EXPORT_RATE_LIMIT, key_func=_authenticated_user_key)
 def export_report(
+    request: Request,
     year: int = Query(...),
     month: int = Query(...),
     department_id: int | None = Query(None),
@@ -583,6 +741,7 @@ def export_report(
     visible = _visible_user_ids(db, user)
     users = db.scalars(
         select(User)
+        .options(selectinload(User.department))
         .where(
             User.id.in_(visible),
             User.role.in_([UserRole.EMPLOYEE, UserRole.DEPT_ADMIN]),
@@ -595,7 +754,12 @@ def export_report(
         if dept is None or dept.tenant_id != user.tenant_id:
             users = []
         else:
-            dept_label = dept.name
+            # Only put the department name in the filename when the caller
+            # may see that department (tenant admin: any; anyone else:
+            # only their own). Otherwise a headers-only file for an
+            # out-of-scope department would still leak its name.
+            if user.role == UserRole.TENANT_ADMIN or user.department_id == department_id:
+                dept_label = dept.name
             users = [u for u in users if u.department_id == department_id]
     person_label = None
     if user_id is not None:
@@ -609,20 +773,25 @@ def export_report(
         else:
             users = [target]
             person_label = target.name
-    working = _working_days(db, user.tenant_id, year, month)
+    # M13: one settings load and one records query for the whole export,
+    # grouped in memory — not a settings + records query per user, and
+    # no lazy department load per user (eager-loaded above).
+    cfg = _settings_dict(db, user.tenant_id)
+    working = _working_days(db, user.tenant_id, year, month, cfg=cfg)
+    records_by_user: dict[int, dict] = {}
+    if users:
+        for r in db.scalars(
+            select(AttendanceRecord).where(
+                AttendanceRecord.tenant_id == user.tenant_id,
+                AttendanceRecord.employee_id.in_([u.id for u in users]),
+                AttendanceRecord.record_date >= start,
+                AttendanceRecord.record_date < end,
+            )
+        ).all():
+            records_by_user.setdefault(r.employee_id, {})[r.record_date] = r
     entries = []
     for u in users:
-        records = {
-            r.record_date: r
-            for r in db.scalars(
-                select(AttendanceRecord).where(
-                    AttendanceRecord.tenant_id == user.tenant_id,
-                    AttendanceRecord.employee_id == u.id,
-                    AttendanceRecord.record_date >= start,
-                    AttendanceRecord.record_date < end,
-                )
-            ).all()
-        }
+        records = records_by_user.get(u.id, {})
         dept_name = u.department.name if u.department else "—"
         for day in working:
             record = records.get(day)
@@ -650,6 +819,14 @@ def export_report(
                         "status": _STATUS_LABELS.get(record.status, record.status),
                     }
                 )
+    audit_service.log(
+        db, user, "attendance_export", "attendance_export",
+        user.tenant_id,
+        f"Attendance export {year}-{month:02d}",
+        f"Attendance export for {year}-{month:02d} by {user.name} "
+        f"({len(users)} user(s){', ' + dept_label if dept_label else ''}).",
+    )
+    db.commit()
     output = build_attendance_detail_report(entries, year, month, dept_label, person_label)
     filename = f"attendance-{year}-{month:02d}"
     if person_label:

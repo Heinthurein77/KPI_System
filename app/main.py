@@ -144,7 +144,9 @@ def _cross_site_origin(request: Request) -> bool:
     cross-site cookie POSTs, but this is the explicit second line of
     defence (M7). Allowed: the request's own Host (same-origin, including
     the deployed domain) and the configured CORS origins (the Vite dev
-    server, which proxies /api to the backend). Requests with neither
+    server, which proxies /api to the backend), and any loopback origin
+    (localhost / 127.0.0.1 — dev tooling on any port; a remote attacker's
+    site can never carry a loopback origin). Requests with neither
     header (API clients, tests, curl) are allowed."""
     from urllib.parse import urlparse
 
@@ -158,8 +160,12 @@ def _cross_site_origin(request: Request) -> bool:
         allowed.add(host.lower())
     for value in (origin, referer):
         if value:
-            netloc = urlparse(value).netloc.lower()
+            parsed = urlparse(value)
+            netloc = parsed.netloc.lower()
             if netloc and netloc not in allowed:
+                # Loopback origins are local dev tooling, never a remote site.
+                if parsed.hostname in ("localhost", "127.0.0.1", "::1"):
+                    continue
                 return True
     return False
 

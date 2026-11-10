@@ -61,10 +61,19 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
+    # M15: Alembic's engine must inherit the same bounded connect
+    # timeout the app's engine has (app/database.py sets 10s) — without
+    # it a slow/unreachable Neon hangs the startup migration until
+    # gunicorn's --timeout kills the worker. SQLite's connect() takes
+    # no connect_timeout kwarg, so only pass it for real databases.
+    connect_kwargs: dict = {}
+    if not settings.is_sqlite:
+        connect_kwargs = {"connect_args": {"connect_timeout": 10}}
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        **connect_kwargs,
     )
 
     with connectable.connect() as connection:

@@ -22,8 +22,9 @@ services:
     # Give gunicorn's graceful-timeout (30s) room to finish in-flight requests
     # before docker escalates to SIGKILL on `docker compose down/up`.
     stop_grace_period: 40s
-    # The image ships its own HEALTHCHECK (GET /healthz — never touches the database,
-    # so it can't keep a suspended Neon compute awake).
+    # The image ships its own HEALTHCHECK (GET /readyz — runs SELECT 1, so
+    # Caddy only gets traffic once the database answers; the 30s probe
+    # keeps a suspended Neon compute awake, see the Dockerfile comment).
     logging:
       driver: json-file
       options:

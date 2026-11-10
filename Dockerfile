@@ -42,11 +42,17 @@ USER appuser
 
 EXPOSE 8000
 
-# /healthz answers without touching the database (so probing it never wakes a
-# suspended Neon compute). start-period covers first boot: a cold DB wake plus
-# running Alembic migrations before the app accepts requests.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-    CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PORT', '8000') + '/healthz', timeout=4)"]
+# /readyz proves the app can reach the database (SELECT 1), so a dead or
+# suspended Neon marks the container unhealthy and Caddy stops routing to
+# it — /healthz never touches the DB and would report healthy while every
+# API call 500s. Trade-off: the 30s probe keeps a Neon compute awake (a
+# suspended compute wakes on the first probe, so the check costs a wake
+# per suspend cycle). start-period covers first boot: a cold DB wake plus
+# running Alembic migrations before the app accepts requests. The probe
+# timeout (10s) matches the DB connect timeout, so a cold wake is given
+# time to answer instead of flapping unhealthy.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PORT', '8000') + '/readyz', timeout=9)"]
 
 # `exec` makes gunicorn the container's main process so `docker stop` delivers
 # SIGTERM to it (graceful shutdown) instead of to a wrapper shell.

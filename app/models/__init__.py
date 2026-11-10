@@ -5,6 +5,7 @@ from app.models.kpi_template import KPITemplate
 from app.models.user import User, UserRole
 from app.models.audit_log import AuditLog
 from app.models.notification import Notification
+from app.models.attendance import AttendanceRecord, AttendanceSettings
 from app.models.revoked_token import RevokedToken
 
 __all__ = [
@@ -18,5 +19,7 @@ __all__ = [
     "UserRole",
     "AuditLog",
     "Notification",
+    "AttendanceRecord",
+    "AttendanceSettings",
     "RevokedToken",
 ]

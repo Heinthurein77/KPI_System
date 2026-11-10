@@ -75,6 +75,13 @@ export default function Sidebar({ open = false, onClose }) {
             >
               Dashboard
             </NavLink>
+            <NavLink
+              to="/attendance"
+              active={pathname === "/attendance"}
+              icon={<path strokeLinecap="round" strokeLinejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />}
+            >
+              Attendance
+            </NavLink>
             {(user.role === "employee" || user.role === "dept_admin") && (
               <NavLink
                 to="/my-trend"

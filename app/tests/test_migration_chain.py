@@ -11,7 +11,8 @@ scratch file.
 Covers: upgrade head from empty, the head downgrade (batch mode) and
 re-upgrade, and the artifacts the Major fixes depend on (the
 revoked_tokens table). The Daily Task tables were removed by 0021 and
-the Attendance tables by 0022, and must NOT exist at head.
+must NOT exist at head; the Attendance tables were removed by 0022 and
+re-created by 0023 as a standalone dashboard (no KPI linkage).
 """
 
 import os
@@ -50,7 +51,7 @@ def test_migration_chain_upgrades_to_head_on_scratch_db(tmp_path):
     try:
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()
         assert version is not None
-        assert version[0] == "0022_remove_attendance"
+        assert version[0] == "0023_attendance_standalone"
 
         tables = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -58,8 +59,8 @@ def test_migration_chain_upgrades_to_head_on_scratch_db(tmp_path):
         assert "revoked_tokens" in tables
         assert "daily_task_entries" not in tables
         assert "daily_task_monthly_reviews" not in tables
-        assert "attendance_settings" not in tables
-        assert "attendance_records" not in tables
+        assert "attendance_settings" in tables
+        assert "attendance_records" in tables
     finally:
         conn.close()
 
@@ -71,6 +72,6 @@ def test_migration_chain_upgrades_to_head_on_scratch_db(tmp_path):
     conn = sqlite3.connect(db_path)
     try:
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-        assert version[0] == "0022_remove_attendance"
+        assert version[0] == "0023_attendance_standalone"
     finally:
         conn.close()

@@ -343,9 +343,11 @@ def test_upload_rejects_garbage_xlsx(client, db, dept_admin):
         files={"file": ("fake.xlsx", b"\x00\x01\x02not a workbook", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         headers=auth_headers(admin, tenant),
     )
-    assert r.status_code == 200
-    assert r.json()["ok"] is False
-    assert any("Not a valid Excel" in e["message"] for e in r.json()["errors"])
+    # m9: the upload now sniffs ZIP magic bytes before parsing, so garbage
+    # is rejected up front with a clear 400 instead of a 200 dry-run
+    # carrying a parse error.
+    assert r.status_code == 400
+    assert "not a valid Excel" in r.json()["detail"]
 
 
 def test_template_unauthenticated_401(client):

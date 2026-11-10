@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Navigate, useLocation, useNavigate } from "react-router-dom";
+import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 
 export default function LoginPage() {
@@ -12,9 +12,14 @@ export default function LoginPage() {
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
-  if (user) {
-    return <Navigate to={user.role === "super_admin" ? "/platform/tenants" : "/dashboard"} replace />;
+  // Tenant users are bounced to their dashboard, as before. A platform
+  // super_admin is NOT redirected: their browser session must not make a
+  // shared link to this page useless — they can sign in below as an
+  // organization user (which replaces the session) instead.
+  if (user && user.role !== "super_admin") {
+    return <Navigate to="/dashboard" replace />;
   }
+  const isPlatformAdmin = user?.role === "super_admin";
 
   async function handleSubmit(e) {
     e.preventDefault();
@@ -101,6 +106,20 @@ export default function LoginPage() {
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Welcome back</h1>
           <p className="mt-1.5 text-sm text-slate-500">Sign in to manage your KPI submissions.</p>
 
+          {isPlatformAdmin && (
+            <div className="mt-5 flex items-start gap-2 rounded-lg bg-sky-50 border border-sky-200 px-3.5 py-2.5 text-sm text-sky-700">
+              <svg className="h-4 w-4 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12v-.008Z" />
+              </svg>
+              <span>
+                Signed in as Platform Admin. Sign in below as an organization user, or go to the{" "}
+                <Link to="/platform/tenants" className="font-semibold underline underline-offset-2">
+                  platform dashboard
+                </Link>
+                .
+              </span>
+            </div>
+          )}
           {location.state?.passwordChanged && !error && (
             <div className="mt-5 flex items-start gap-2 rounded-lg bg-emerald-50 border border-emerald-200 px-3.5 py-2.5 text-sm text-emerald-700">
               <svg className="h-4 w-4 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">

@@ -42,6 +42,10 @@ def prune_audit_logs(db, retention_days: int) -> int:
 
 
 def main() -> int:
+    # M20: distinct timestamped START / SUCCESS / FAILURE lines (with a
+    # non-zero exit code on failure) so a dead or failing prune is
+    # visible in the cron log instead of silently not running.
+    logger.info("Audit-log prune job starting.")
     try:
         retention_days = int(os.environ.get("AUDIT_LOG_RETENTION_DAYS", str(DEFAULT_RETENTION_DAYS)))
     except ValueError:
@@ -54,9 +58,15 @@ def main() -> int:
     db = SessionLocal()
     try:
         deleted = prune_audit_logs(db, retention_days)
+    except Exception:
+        logger.exception("Audit-log prune job FAILED.")
+        return 1
     finally:
         db.close()
-    logger.info("Pruned %s audit log rows older than %s days.", deleted, retention_days)
+    logger.info(
+        "Audit-log prune job succeeded: pruned %s audit log rows older than %s days.",
+        deleted, retention_days,
+    )
     return 0
 
 

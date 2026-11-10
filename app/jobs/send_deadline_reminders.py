@@ -18,10 +18,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger("kpi_system.jobs")
 
 
-logger = logging.getLogger("kpi_system.jobs")
-
-
 def main() -> int:
+    # M20: a cron that dies silently is invisible until someone notices
+    # missing reminders — log a distinct timestamped START line, a
+    # SUCCESS line with the counts, and a FAILURE line (with traceback)
+    # plus a non-zero exit code, so a dead/failed run is visible in the
+    # cron log. (Also fixes a latent bug: if the service raised, the
+    # old code fell through to `result....` and raised UnboundLocalError,
+    # masking the real failure.)
+    logger.info("Deadline reminders job starting.")
     db = SessionLocal()
     try:
         # Sync email delivery: the cron process exits right after this
@@ -30,10 +35,13 @@ def main() -> int:
         # marks the user reminded). In sync mode a failed email's row is
         # deleted, so the next run retries it.
         result = deadline_reminder_service.send_deadline_reminders(db, sync_email=True)
+    except Exception:
+        logger.exception("Deadline reminders job FAILED.")
+        return 1
     finally:
         db.close()
     logger.info(
-        "Deadline reminders: window_open=%s year=%s period=%s reminded=%s already_reminded=%s per_tenant=%s errors=%s",
+        "Deadline reminders job succeeded: window_open=%s year=%s period=%s reminded=%s already_reminded=%s per_tenant=%s errors=%s",
         result.window_open,
         result.year,
         result.period,

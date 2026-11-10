@@ -3,7 +3,7 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 from app.core.config import settings
 from app.core.deps import get_current_user, require_dept_admin, require_tenant_admin
@@ -422,6 +422,30 @@ def create_user(
     return target
 
 
+def _is_last_other_admin(db: Session, tenant_id: int, caller_id: int, target: User) -> bool:
+    """True when `target` is an ACTIVE tenant admin and the only other
+    active tenant admin besides the caller (m7 sole-admin guard).
+
+    Self-action is already blocked elsewhere, so this is about the last
+    OTHER admin: disabling, demoting or deleting that account would leave
+    the tenant with a single admin (the caller). Refusing keeps at least
+    two admins — add a third admin first, then remove the departing one.
+    """
+    if target.role != UserRole.TENANT_ADMIN or not target.is_active:
+        return False
+    other_admins = db.scalar(
+        select(func.count())
+        .select_from(User)
+        .where(
+            User.tenant_id == tenant_id,
+            User.role == UserRole.TENANT_ADMIN,
+            User.is_active == True,  # noqa: E712
+            User.id != caller_id,
+        )
+    )
+    return (other_admins or 0) == 1
+
+
 @router.post("/users/{user_id}/toggle-active", response_model=UserOut)
 def toggle_user_active(user_id: int, db: Session = Depends(get_db), user: User = Depends(require_dept_admin)):
     target = get_tenant_scoped_or_404(db, User, user_id, user.tenant_id, "User not found.")
@@ -433,6 +457,12 @@ def toggle_user_active(user_id: int, db: Session = Depends(get_db), user: User =
 
     if target.id == user.id:
         raise HTTPException(400, "You cannot disable your own account.")
+
+    if target.is_active and _is_last_other_admin(db, user.tenant_id, user.id, target):
+        raise HTTPException(
+            400,
+            "Cannot disable the last other tenant admin. Add another tenant admin first.",
+        )
 
     target.is_active = not target.is_active
     db.commit()
@@ -484,6 +514,14 @@ def edit_user(
     if target.id == user.id and payload.role != UserRole.TENANT_ADMIN:
         raise HTTPException(400, "You can't demote your own account while signed in as it.")
 
+    if payload.role != UserRole.TENANT_ADMIN and _is_last_other_admin(
+        db, user.tenant_id, user.id, target
+    ):
+        raise HTTPException(
+            400,
+            "Cannot demote the last other tenant admin. Add another tenant admin first.",
+        )
+
     new_email = payload.email.strip().lower()
     if new_email != target.email:
         # Same duplicate check as create_user: the DB unique constraint would
@@ -517,13 +555,20 @@ def edit_user(
 
 @router.delete("/users/{user_id}")
 def delete_user(user_id: int, db: Session = Depends(get_db), user: User = Depends(require_tenant_admin)):
-    """Tenant Admin can delete any user in their tenant unconditionally — including
-    their KPI history. The only guard left is against deleting your own currently-
+    """Tenant Admin can delete any user in their tenant — including their
+    KPI history — except the last other tenant admin (m7 sole-admin
+    guard: at least two admins must remain) and their own currently-
     signed-in account, since that would lock you out with no way back in."""
     target = get_tenant_scoped_or_404(db, User, user_id, user.tenant_id, "User not found.")
 
     if target.id == user.id:
         raise HTTPException(400, "You can't delete your own account while signed in.")
+
+    if _is_last_other_admin(db, user.tenant_id, user.id, target):
+        raise HTTPException(
+            400,
+            "Cannot delete the last other tenant admin. Add another tenant admin first.",
+        )
 
     kpi_service.force_delete_user(db, user, target)
     return {"status": "ok"}
@@ -975,14 +1020,16 @@ def delete_template(template_id: int, db: Session = Depends(get_db), user: User 
 @router.get("/audit-log", response_model=list[AuditLogOut])
 def list_audit_log(
     limit: int = 200,
+    offset: int = 0,
     db: Session = Depends(get_db),
     user: User = Depends(require_tenant_admin),
 ):
     query = (
         select(AuditLog)
         .where(AuditLog.tenant_id == user.tenant_id)
-        .order_by(AuditLog.created_at.desc())
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
         .limit(min(max(limit, 1), 500))
+        .offset(max(offset, 0))
     )
     entries = db.scalars(query).all()
     return [AuditLogOut.model_validate(e) for e in entries]

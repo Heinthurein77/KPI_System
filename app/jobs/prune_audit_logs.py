@@ -1,4 +1,5 @@
-"""Cron entrypoint: prune audit logs older than the retention window.
+"""Cron entrypoint: prune audit logs older than the retention window, plus
+expired revoked-token rows.
 
 Run monthly from the server's cron (or a scheduler), e.g.::
 
@@ -8,6 +9,10 @@ The retention window defaults to 180 days and can be overridden with the
 AUDIT_LOG_RETENTION_DAYS environment variable. Deletion is batched so a
 large backlog never holds a long lock. Safe to run any time — only rows
 older than the cutoff are touched.
+
+Revoked tokens used to be pruned only lazily on logout (m8): a row is
+only needed until its token's expiry, so this job also deletes
+revoked_tokens rows whose expires_at has passed.
 """
 
 import logging
@@ -19,6 +24,7 @@ from sqlalchemy import delete, select
 
 from app.database import SessionLocal
 from app.models.audit_log import AuditLog
+from app.models.revoked_token import RevokedToken
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("kpi_system.jobs")
@@ -41,6 +47,26 @@ def prune_audit_logs(db, retention_days: int) -> int:
     return total
 
 
+def prune_revoked_tokens(db) -> int:
+    """Delete revoked_tokens rows whose token has expired (m8).
+
+    A revoked row is only needed until its token's expiry — after that
+    the token is dead by expiry anyway. Returns the deleted count.
+    """
+    now = datetime.now(timezone.utc)
+    total = 0
+    while True:
+        ids = db.scalars(
+            select(RevokedToken.jti).where(RevokedToken.expires_at < now).limit(BATCH_SIZE)
+        ).all()
+        if not ids:
+            break
+        db.execute(delete(RevokedToken).where(RevokedToken.jti.in_(ids)))
+        db.commit()
+        total += len(ids)
+    return total
+
+
 def main() -> int:
     # M20: distinct timestamped START / SUCCESS / FAILURE lines (with a
     # non-zero exit code on failure) so a dead or failing prune is
@@ -58,14 +84,16 @@ def main() -> int:
     db = SessionLocal()
     try:
         deleted = prune_audit_logs(db, retention_days)
+        revoked_deleted = prune_revoked_tokens(db)
     except Exception:
         logger.exception("Audit-log prune job FAILED.")
         return 1
     finally:
         db.close()
     logger.info(
-        "Audit-log prune job succeeded: pruned %s audit log rows older than %s days.",
-        deleted, retention_days,
+        "Audit-log prune job succeeded: pruned %s audit log rows older than %s days "
+        "and %s expired revoked-token rows.",
+        deleted, retention_days, revoked_deleted,
     )
     return 0
 

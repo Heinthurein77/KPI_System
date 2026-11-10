@@ -30,9 +30,15 @@ def _bearer_token(request: Request) -> str | None:
 
 
 def _assert_not_revoked(db: Session, claims) -> None:
-    """A logged-out token stays dead even if its cookie/token is replayed."""
+    """A logged-out token stays dead even if its cookie/token is replayed.
+
+    Every token issued since jti was introduced carries one. A token
+    without a jti predates that change and is long expired (24 h
+    lifetime), so it is rejected outright instead of skipping the
+    revocation check on a dead code path.
+    """
     if claims.jti is None:
-        return  # pre-jti token: expires on its own within 24 h
+        raise NotAuthenticated()
     if db.get(RevokedToken, claims.jti) is not None:
         raise NotAuthenticated()
 

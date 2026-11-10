@@ -59,7 +59,10 @@ def update_notification_settings(
 
 @router.get("", response_model=NotificationListOut)
 def list_notifications(
-    limit: int = 50, db: Session = Depends(get_db), user: User = Depends(get_current_user)
+    limit: int = 50,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """The current user's own notifications, newest first, plus the unread count."""
     notifications = db.scalars(
@@ -67,6 +70,7 @@ def list_notifications(
         .where(Notification.user_id == user.id)
         .order_by(Notification.created_at.desc(), Notification.id.desc())
         .limit(min(limit, 200))
+        .offset(max(offset, 0))
     ).all()
     unread_count = db.scalar(
         select(func.count())

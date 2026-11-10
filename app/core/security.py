@@ -52,8 +52,8 @@ class SessionClaims(NamedTuple):
     tenant_id: int | None
     token_version: int
     # Unique token id: logout records it in revoked_tokens so the token
-    # stops working immediately. Tokens issued before jti existed (up to
-    # 24 h before this change) carry None and skip the revocation check.
+    # stops working immediately. Tokens without a jti are rejected by
+    # the auth dependency (every current token carries one).
     jti: str | None = None
     exp: datetime | None = None
 

@@ -685,7 +685,9 @@ export default function AttendancePage() {
           </div>
         )}
 
-        {/* Today */}
+        {/* Today — personal dashboard: only employees and dept admins check in,
+            so tenant admins never see their own (meaningless) Today card. */}
+        {canCheckIn && (
         <section className="mt-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
             <h2 className="text-base font-semibold text-slate-900">Today · ဒီနေ့</h2>
@@ -747,8 +749,11 @@ export default function AttendancePage() {
             </>
           )}
         </section>
+        )}
 
-        {/* Month navigation + summary */}
+        {/* Month navigation + summary — personal dashboard, same gate as Today. */}
+        {canCheckIn && (
+        <>
         <div className="mt-8 flex items-center gap-3">
           <button
             type="button"
@@ -832,6 +837,8 @@ export default function AttendancePage() {
               </div>
             </section>
           </>
+        )}
+        </>
         )}
 
         {/* Admin report */}

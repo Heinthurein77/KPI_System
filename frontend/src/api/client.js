@@ -51,11 +51,15 @@ client.interceptors.response.use(
       // attempt or we're already on a login page, so failed logins still
       // show their error message. Platform admins go to their own login —
       // org credentials don't work there and vice versa.
+      // NOTE: this must depend on the current path ONLY. A logged-out visitor
+      // has no tenant slug either, and the old `|| !tenant_slug` clause sent
+      // every such visitor (e.g. opening /dashboard) to /platform/login
+      // instead of the org /login.
       const url = error.config?.url || "";
       const pathname = window.location.pathname;
       const onLoginPage = /\/login\/?$/.test(pathname);
       const isLoginRequest = /\/auth\/login\/?$/.test(url);
-      const isPlatform = pathname.startsWith("/platform") || !localStorage.getItem("tenant_slug");
+      const isPlatform = pathname.startsWith("/platform");
       if (!onLoginPage && !isLoginRequest) {
         localStorage.removeItem("tenant_slug");
         window.location.href = isPlatform ? "/platform/login" : "/login";

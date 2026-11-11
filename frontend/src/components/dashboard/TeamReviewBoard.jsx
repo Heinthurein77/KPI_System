@@ -71,11 +71,22 @@ export default function TeamReviewBoard({
   const [query, setQuery] = useState("");
   // Status groups the viewer explicitly opened/closed. "pending" starts open;
   // the rest start collapsed so the settled history doesn't push the work
-  // queue off screen.
-  const [openGroups, setOpenGroups] = useState(() => new Set(["pending"]));
+  // queue off screen. "draft" is the exception: drafts are in-progress work
+  // a reviewer needs to SEE (unlike approved/rejected history), so the
+  // Drafts bucket — and its employee rows — start open whenever it has
+  // items. Before this, a saved draft was effectively invisible: the board
+  // opened on "Nothing waiting for you" with Drafts collapsed twice over
+  // (bucket + employee rows), so reviewers could not view a saved draft
+  // without knowing to click through both levels.
+  function defaultOpenGroups(submissions) {
+    const groups = new Set(["pending"]);
+    if (submissions.some((s) => s.status === "draft")) groups.add("draft");
+    return groups;
+  }
+  const [openGroups, setOpenGroups] = useState(() => defaultOpenGroups(data.submissions));
   // Explicit per-employee toggles, keyed `${bucket}:${employeeId}`. Untouched
-  // employees in the pending bucket start open (they need action); everywhere
-  // else they start collapsed.
+  // employees in the pending and draft buckets start open (they need action,
+  // or their saved draft needs viewing); everywhere else they start collapsed.
   const [openEmployees, setOpenEmployees] = useState(() => new Map());
   // Reviewer score inputs per card, keyed by submission id: { dept, final }.
   // Lets Approve-all use what the reviewer actually typed (not just the
@@ -122,8 +133,9 @@ export default function TeamReviewBoard({
   }, [data.submissions, query, pendingStatuses]);
 
   // A new period/filter/department is a new view — drop manual toggles.
+  // Drafts start open again when the new view has any (see above).
   useEffect(() => {
-    setOpenGroups(new Set(["pending"]));
+    setOpenGroups(defaultOpenGroups(data.submissions));
     setOpenEmployees(new Map());
     scoreInputs.current = new Map();
     setBulkOpen(false);
@@ -381,7 +393,7 @@ export default function TeamReviewBoard({
                     <div className="border-t border-slate-100">
                       {emps.map(({ employee, department, items }) => {
                         const empKey = `${bucket}:${employee.id}`;
-                        const isEmpOpen = openEmployees.get(empKey) ?? bucket === "pending";
+                        const isEmpOpen = openEmployees.get(empKey) ?? (bucket === "pending" || bucket === "draft");
                         return (
                           <div key={employee.id} className="border-b border-slate-100 last:border-b-0">
                             <button

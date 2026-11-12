@@ -4,7 +4,16 @@
 # docker-compose.local.yml.
 services:
   web:
-    build: .
+    build:
+      context: .
+      args:
+        # Footer release identity (M3, 2026-11-12): the Docker build has no
+        # .git, so the commit only reaches the bundle when passed as a build
+        # arg. Compose reads it from the environment — deploy with
+        # VITE_APP_COMMIT=$(git rev-parse --short HEAD) in front of the
+        # up/build command (see README "Production"). Defaults to "dev" so a
+        # plain build still works.
+        VITE_APP_COMMIT: ${VITE_APP_COMMIT:-dev}
     container_name: kpi-web
     restart: always
     env_file: .env

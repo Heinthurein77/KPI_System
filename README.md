@@ -115,9 +115,12 @@ external on Neon.tech. There is deliberately no Postgres service in
 2. On the server, copy `.env.example` to `.env` (gitignored — never commit real credentials) and fill in `SECRET_KEY`, `DATABASE_URL` and `DOMAIN` (the site hostname, no `https://`); point the domain's DNS A record at the server.
 3. Deploy (pull + rebuild; Alembic migrations run automatically on startup):
    ```bash
-   cd ~/kpi-app && git pull && docker compose up -d --build
+   cd ~/kpi-app && git pull && VITE_APP_COMMIT=$(git rev-parse --short HEAD) docker compose up -d --build
    curl -s http://localhost:8000/readyz   # expect 200 — SELECT 1 against the DB
    ```
+   The `VITE_APP_COMMIT=…` prefix is what makes the UI footer show the real
+   commit instead of `dev` — without it the Docker build has no `.git` to
+   read the commit from (see `Dockerfile`, M3).
 4. Run the seed script once to bootstrap the Super Admin account (required — there is no other way to create the first login):
    ```bash
    docker compose exec web python -m app.seed

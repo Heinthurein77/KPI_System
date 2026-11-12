@@ -19,6 +19,7 @@ from app.models.user import User, UserRole
 from app.schemas.auth import ChangePasswordRequest, LoginRequest, LoginResponse
 from app.schemas.platform import CreateTenantRequest, TenantOut
 from app.schemas.user import UserOut
+from app.services import audit_service
 
 router = APIRouter(prefix="/api/platform", tags=["platform"])
 
@@ -44,9 +45,27 @@ def platform_login(request: Request, response: Response, payload: LoginRequest, 
     if user is None or not user.is_active or not password_ok:
         if user is not None:
             record_failed_login(account_key)
+            # M7 (PM review 2026-11-12): platform login failures are audit
+            # events, logged platform-scoped (tenant_id NULL — migration
+            # 0024). Flood bound: the per-account lock caps logged failures
+            # at 10/minute per account, and the per-IP slowapi limit caps
+            # it per IP. Unknown emails have no user row to be the actor,
+            # so they are not logged.
+            audit_service.log(
+                db, user, "login_failed", "user", user.id, user.name,
+                "Failed platform login attempt.",
+            )
+            db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password.")
 
     clear_failed_logins(account_key)
+    # M7: platform login success is an audit event. Login performs no other
+    # DB write, so this commit persists only the audit row.
+    audit_service.log(
+        db, user, "login_success", "user", user.id, user.name,
+        f"Successful login as {user.role.value}.",
+    )
+    db.commit()
     token = create_session_token(user.id, tenant_id=None, token_version=user.token_version or 0)
     set_session_cookie(response, token, secure=_request_is_secure(request))
     return LoginResponse(user=user)
@@ -174,6 +193,18 @@ def delete_tenant(
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "Suspend this tenant before deleting it."
         )
+    # M7 (PM review 2026-11-12): tenant delete is an audit event. It is
+    # logged platform-scoped (the acting admin has tenant_id NULL, so the
+    # row's tenant_id is NULL — migration 0024), which is what lets the
+    # record survive the tenant it describes: the FK stays ON DELETE
+    # CASCADE, so a row logged under the tenant's own id would die with
+    # it (pinned by test below). Logged in the same commit as the delete,
+    # so the two never diverge; entity_label is a plain string captured
+    # before the delete, so no expired-ORM-instance issue.
+    audit_service.log(
+        db, _admin, "tenant_deleted", "tenant", tenant.id, tenant.name,
+        f'Tenant "{tenant.name}" (slug={tenant.slug}) deleted by platform admin.',
+    )
     db.delete(tenant)
     db.commit()
     return {"status": "ok"}

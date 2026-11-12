@@ -258,3 +258,101 @@ def test_logout_revokes_token_server_side(db, client):
         headers={"X-Tenant-Slug": tenant.slug, "Cookie": f"access_token={second_token}"},
     )
     assert alive.status_code == 200
+
+
+# ---------- Login audit trail (M7, PM review 2026-11-12) ----------
+
+
+def _audit_entries(client, admin, tenant):
+    resp = client.get("/api/admin/audit-log", headers=auth_headers(admin, tenant))
+    assert resp.status_code == 200
+    return resp.json()
+
+
+def test_login_success_records_audit_entry(db, client):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    user = make_user(db, tenant, UserRole.EMPLOYEE)
+
+    resp = client.post(
+        "/api/auth/login",
+        json={"email": user.email, "password": DEFAULT_PASSWORD},
+        headers={"X-Tenant-Slug": tenant.slug},
+    )
+    assert resp.status_code == 200
+
+    # The login set the employee's session cookie in the client jar; clear
+    # it so the audit-log read below authenticates as the tenant admin via
+    # the Authorization header, not as the employee via the cookie.
+    client.cookies.clear()
+
+    entries = [e for e in _audit_entries(client, admin, tenant) if e["action"] == "login_success"]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["entity_type"] == "user"
+    assert entry["entity_id"] == user.id
+    assert entry["entity_label"] == user.name
+    assert entry["actor_name"] == user.name
+    assert entry["actor_role"] == "employee"
+
+
+def test_login_failure_records_audit_entry(db, client):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    user = make_user(db, tenant, UserRole.EMPLOYEE)
+
+    resp = client.post(
+        "/api/auth/login",
+        json={"email": user.email, "password": "wrong-password"},
+        headers={"X-Tenant-Slug": tenant.slug},
+    )
+    assert resp.status_code == 401
+
+    entries = [e for e in _audit_entries(client, admin, tenant) if e["action"] == "login_failed"]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["entity_type"] == "user"
+    assert entry["entity_id"] == user.id
+    assert entry["actor_name"] == user.name
+
+
+def test_login_failure_for_unknown_email_records_no_audit_entry(db, client):
+    """An unknown email has no user row to be the audit actor, so there is
+    nothing audit_service.log can record — the per-IP rate limit is the
+    only control there, and the attempt must not create a row."""
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+
+    resp = client.post(
+        "/api/auth/login",
+        json={"email": "nobody@example.com", "password": "whatever-password"},
+        headers={"X-Tenant-Slug": tenant.slug},
+    )
+    assert resp.status_code == 401
+
+    assert _audit_entries(client, admin, tenant) == []
+
+
+def test_failed_login_storm_is_bounded_by_lockout(db, client):
+    """A failed-login storm must not fill the audit table: the per-account
+    lockout caps logged failures at 10/minute per account, and the 11th
+    (locked-out, 429) attempt writes no row."""
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    make_user(db, tenant, UserRole.EMPLOYEE, email="limited@example.com")
+
+    headers = {"X-Tenant-Slug": tenant.slug}
+    codes = []
+    for _ in range(11):
+        resp = client.post(
+            "/api/auth/login",
+            json={"email": "limited@example.com", "password": "WrongPassword1!"},
+            headers=headers,
+        )
+        codes.append(resp.status_code)
+
+    assert codes[:10] == [401] * 10
+    assert codes[10] == 429
+
+    entries = [e for e in _audit_entries(client, admin, tenant) if e["action"] == "login_failed"]
+    assert len(entries) == 10

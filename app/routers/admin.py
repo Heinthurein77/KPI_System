@@ -1,3 +1,8 @@
+# MAINTAINABILITY RULE (PM review 2026-11-12, finding m3): this module
+# is a god file (1,197 lines at HEAD a2acb06). Do NOT grow it further —
+# split on next touch: the next router that belongs here goes in a new
+# module under app/routers/ instead of another endpoint inline.
+# Behaviour must stay identical when that split happens.
 from datetime import date
 from decimal import Decimal
 import logging
@@ -128,6 +133,15 @@ def delete_department(department_id: int, db: Session = Depends(get_db), user: U
             f'"{department.name}" still has users or KPI metrics assigned to it. '
             "Reassign or remove those first.",
         )
+
+    # M7 (PM review 2026-11-12): department delete was unaudited. The guard
+    # above guarantees the department is empty, so the audit row is the only
+    # record that it ever existed.
+    audit_service.log(
+        db, user, "department_deleted", "department", department.id, department.name,
+        f'Department "{department.name}" deleted (empty: no users or KPI metrics assigned).',
+        department_id=department.id,
+    )
 
     db.delete(department)
     db.commit()

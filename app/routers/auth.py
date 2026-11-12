@@ -31,6 +31,7 @@ from app.models.tenant import Tenant
 from app.models.user import User
 from app.schemas.auth import ChangePasswordRequest, LoginRequest, LoginResponse
 from app.schemas.user import UserOut
+from app.services import audit_service
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -55,6 +56,9 @@ def login(
     # account with that email.
     account_key = f"tenant:{tenant.id}:{email}"
     if user is not None and is_login_locked(account_key):
+        # Already locked out: the 10 failures that caused the lock are
+        # already audit-logged below, so a locked attempt adds no signal —
+        # and logging it would let a locked account keep growing the log.
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many attempts. Please wait a minute and try again.")
 
     # Always run verify_password exactly once, against the real hash if a user
@@ -67,9 +71,28 @@ def login(
     if user is None or not user.is_active or not password_ok:
         if user is not None:
             record_failed_login(account_key)
+            # M7 (PM review 2026-11-12): login failures are audit events.
+            # Flood bound: the per-account lock above caps this at 10 logged
+            # failures/minute per account, and the per-IP slowapi limit
+            # (LOGIN_RATE_LIMIT, 10/minute) caps it per IP — a failed-login
+            # storm cannot fill the audit table. Unknown emails have no user
+            # row to be the audit actor, so they are not logged (they are
+            # still covered by the per-IP limit).
+            audit_service.log(
+                db, user, "login_failed", "user", user.id, user.name,
+                "Failed login attempt.",
+            )
+            db.commit()
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password.")
 
     clear_failed_logins(account_key)
+    # M7: login success is an audit event. Login performs no other DB write,
+    # so this commit persists only the audit row.
+    audit_service.log(
+        db, user, "login_success", "user", user.id, user.name,
+        f"Successful login as {user.role.value}.",
+    )
+    db.commit()
     token = create_session_token(user.id, tenant_id=tenant.id, token_version=user.token_version or 0)
     set_session_cookie(response, token, secure=_request_is_secure(request))
     return LoginResponse(user=user)

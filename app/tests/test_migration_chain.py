@@ -51,7 +51,7 @@ def test_migration_chain_upgrades_to_head_on_scratch_db(tmp_path):
     try:
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()
         assert version is not None
-        assert version[0] == "0023_attendance_standalone"
+        assert version[0] == "0024_audit_log_platform_scope"
 
         tables = {r[0] for r in conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"
@@ -61,6 +61,10 @@ def test_migration_chain_upgrades_to_head_on_scratch_db(tmp_path):
         assert "daily_task_monthly_reviews" not in tables
         assert "attendance_settings" in tables
         assert "attendance_records" in tables
+        # 0024: audit_logs.tenant_id is nullable (platform scope) —
+        # PRAGMA table_info reports notnull=0 for a nullable column.
+        cols = {r[1]: r[3] for r in conn.execute("PRAGMA table_info(audit_logs)")}
+        assert cols["tenant_id"] == 0
     finally:
         conn.close()
 
@@ -72,6 +76,6 @@ def test_migration_chain_upgrades_to_head_on_scratch_db(tmp_path):
     conn = sqlite3.connect(db_path)
     try:
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()
-        assert version[0] == "0023_attendance_standalone"
+        assert version[0] == "0024_audit_log_platform_scope"
     finally:
         conn.close()

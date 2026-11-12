@@ -115,6 +115,46 @@ def test_delete_department_succeeds_after_dependents_removed(db, client):
     assert resp.json() == {"status": "ok"}
 
 
+# ---------- Delete audit trail (M7, PM review 2026-11-12) ----------
+
+
+def test_delete_department_records_audit_entry(db, client):
+    """Department delete was unaudited: the audit log must record who
+    deleted which department, since the row itself is gone afterwards."""
+    tenant = make_tenant(db)
+    admin = _tenant_admin(db, tenant)
+    dept = make_department(db, tenant, name="Engineering")
+
+    resp = client.delete(f"/api/admin/departments/{dept.id}", headers=auth_headers(admin, tenant))
+    assert resp.status_code == 200
+
+    log_resp = client.get("/api/admin/audit-log", headers=auth_headers(admin, tenant))
+    assert log_resp.status_code == 200
+    entries = [e for e in log_resp.json() if e["action"] == "department_deleted"]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["entity_type"] == "department"
+    assert entry["entity_id"] == dept.id
+    assert entry["entity_label"] == "Engineering"
+    assert entry["actor_name"] == admin.name
+    assert entry["actor_role"] == "tenant_admin"
+
+
+def test_blocked_department_delete_records_no_audit_entry(db, client):
+    """A delete refused by the dependents guard must not leave an audit
+    entry — the audit trail records changes that happened, not attempts."""
+    tenant = make_tenant(db)
+    admin = _tenant_admin(db, tenant)
+    dept = make_department(db, tenant)
+    make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+
+    resp = client.delete(f"/api/admin/departments/{dept.id}", headers=auth_headers(admin, tenant))
+    assert resp.status_code == 400
+
+    log_resp = client.get("/api/admin/audit-log", headers=auth_headers(admin, tenant))
+    assert log_resp.json() == []
+
+
 # ---------- Cross-tenant isolation ----------
 
 

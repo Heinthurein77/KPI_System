@@ -20,8 +20,12 @@ class AuditLog(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
-    tenant_id: Mapped[int] = mapped_column(
-        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True
+    # NULL = platform scope: actions by the platform super-admin (tenant
+    # delete, platform login) have no tenant. Those rows survive a tenant
+    # delete; tenant-scoped rows still cascade with their tenant (FK below),
+    # which is why the tenant delete itself is logged platform-scoped.
+    tenant_id: Mapped[int | None] = mapped_column(
+        ForeignKey("tenants.id", ondelete="CASCADE"), nullable=True, index=True
     )
     tenant: Mapped["Tenant"] = relationship()  # noqa: F821
 

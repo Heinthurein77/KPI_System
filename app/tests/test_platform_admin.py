@@ -250,3 +250,95 @@ def test_platform_login_success_and_failure_write_audit_rows(db, client):
     assert len(succeeded) == 1
     assert succeeded[0].tenant_id is None
     assert succeeded[0].actor_id == admin.id
+
+
+# ---------- Platform audit log (N3, PM follow-up review 2026-11-12) ----------
+
+
+def _seed_platform_and_tenant_rows(db):
+    """3 platform-scoped rows (tenant_id NULL) + 2 tenant-scoped rows.
+    Platform rows are written oldest-first, so the last one written is
+    the newest and must come first in the endpoint's newest-first order."""
+    admin = _platform_admin(db)
+    tenant = make_tenant(db, name="Acme", slug="acme-audit")
+    tenant_admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+
+    audit_service.log(
+        db, admin, "login_success", "user", admin.id, admin.name,
+        "Successful login as super_admin.",
+    )
+    audit_service.log(
+        db, admin, "login_failed", "user", admin.id, admin.name,
+        "Failed platform login attempt.",
+    )
+    audit_service.log(
+        db, admin, "tenant_deleted", "tenant", tenant.id, "Doomed",
+        'Tenant "Doomed" (slug=doomed) deleted by platform admin.',
+    )
+    audit_service.log(
+        db, tenant_admin, "kpi_template_created", "kpi_template", 1, "Sales",
+        "KPI metric created.",
+    )
+    audit_service.log(
+        db, tenant_admin, "kpi_final_approved", "kpi_submission", 2, "Sales",
+        "Final approved.",
+    )
+    db.commit()
+    return admin, tenant_admin, tenant
+
+
+def test_platform_audit_log_returns_only_platform_rows(db, client):
+    """GET /api/platform/audit-log returns the platform-scoped rows
+    (tenant_id IS NULL) newest first — and no tenant-scoped row leaks
+    in, even though tenant rows exist in the same table."""
+    admin, _tenant_admin, _tenant = _seed_platform_and_tenant_rows(db)
+
+    resp = client.get("/api/platform/audit-log", headers=auth_headers(admin))
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 3
+    assert [r["action"] for r in rows] == ["tenant_deleted", "login_failed", "login_success"]
+    assert all(r["actor_name"] == admin.name for r in rows)
+    assert all(r["actor_role"] == "super_admin" for r in rows)
+    assert rows[0]["entity_label"] == "Doomed"
+
+
+def test_platform_audit_log_rejects_tenant_admin(db, client):
+    """A tenant admin must not read the platform log. Platform routes are
+    tenant-exempt, so a tenant-scoped account is rejected at auth time
+    (401, before the role check) — same as /api/platform/auth/me
+    (test_platform_me_rejects_tenant_user)."""
+    _admin, tenant_admin, tenant = _seed_platform_and_tenant_rows(db)
+
+    resp = client.get("/api/platform/audit-log", headers=auth_headers(tenant_admin, tenant))
+    assert resp.status_code == 401
+
+
+def test_platform_audit_log_unauthenticated_401(db, client):
+    assert client.get("/api/platform/audit-log").status_code == 401
+
+
+def test_platform_audit_log_paging_and_limit_clamp(db, client):
+    """Same paging contract as GET /api/admin/audit-log: limit default
+    200 / max 500, newest first, offset skips from the newest end."""
+    admin, _tenant_admin, _tenant = _seed_platform_and_tenant_rows(db)
+    headers = auth_headers(admin)
+
+    page1 = client.get("/api/platform/audit-log", params={"limit": 2}, headers=headers)
+    assert page1.status_code == 200
+    assert [r["action"] for r in page1.json()] == ["tenant_deleted", "login_failed"]
+
+    page2 = client.get("/api/platform/audit-log", params={"limit": 2, "offset": 1}, headers=headers)
+    assert page2.status_code == 200
+    assert [r["action"] for r in page2.json()] == ["login_failed", "login_success"]
+
+    # limit above the 500 cap is clamped, not rejected — all 3 rows come back.
+    over = client.get("/api/platform/audit-log", params={"limit": 999}, headers=headers)
+    assert over.status_code == 200
+    assert len(over.json()) == 3
+
+    # limit below 1 is clamped to 1.
+    under = client.get("/api/platform/audit-log", params={"limit": 0}, headers=headers)
+    assert under.status_code == 200
+    assert len(under.json()) == 1
+    assert under.json()[0]["action"] == "tenant_deleted"

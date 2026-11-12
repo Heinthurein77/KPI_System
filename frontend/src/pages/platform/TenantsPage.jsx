@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { Link } from "react-router-dom";
 import AppShell from "../../components/layout/AppShell";
 import PageLoading from "../../components/ui/PageLoading";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
@@ -108,6 +109,13 @@ export default function TenantsPage() {
 
   return (
     <AppShell title="Tenants">
+      <p className="text-sm text-slate-500 mb-4">
+        Tenant deletions and platform logins are recorded in the{" "}
+        <Link to="/platform/audit-log" className="font-semibold text-brand-700 hover:underline">
+          Platform Audit Log
+        </Link>
+        .
+      </p>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200 shadow-sm overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-100">

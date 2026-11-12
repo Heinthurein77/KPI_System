@@ -14,8 +14,10 @@ from app.core.rate_limit import (
 )
 from app.core.security import DUMMY_PASSWORD_HASH, _request_is_secure, clear_session_cookie, create_session_token, hash_password, set_session_cookie, validate_password_length, verify_password
 from app.database import get_db
+from app.models.audit_log import AuditLog
 from app.models.tenant import Tenant, TenantStatus
 from app.models.user import User, UserRole
+from app.schemas.audit_log import AuditLogOut
 from app.schemas.auth import ChangePasswordRequest, LoginRequest, LoginResponse
 from app.schemas.platform import CreateTenantRequest, TenantOut
 from app.schemas.user import UserOut
@@ -106,6 +108,31 @@ def platform_change_password(
     # The token_version bump invalidates this session — clear the now-dead
     # cookie so the SPA doesn't keep sending it. The admin logs in again.
     clear_session_cookie(response, secure=_request_is_secure(request))
+
+
+@router.get("/audit-log", response_model=list[AuditLogOut])
+def list_platform_audit_log(
+    limit: int = 200,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    _admin: User = Depends(require_platform_super_admin),
+):
+    """Platform-scoped audit log — ONLY rows with tenant_id IS NULL
+    (tenant deletes, platform logins). Same shape and paging as the
+    tenant endpoint (GET /api/admin/audit-log, limit default 200 / max
+    500, newest first), but this endpoint never returns tenant-scoped
+    rows: tenant admins read their own tenant's rows via the tenant
+    endpoint instead. (N3, PM follow-up review 2026-11-12: before this,
+    platform-scoped rows had no reader at all — only a raw SQL query.)"""
+    query = (
+        select(AuditLog)
+        .where(AuditLog.tenant_id.is_(None))
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .limit(min(max(limit, 1), 500))
+        .offset(max(offset, 0))
+    )
+    entries = db.scalars(query).all()
+    return [AuditLogOut.model_validate(e) for e in entries]
 
 
 @router.get("/tenants", response_model=list[TenantOut])

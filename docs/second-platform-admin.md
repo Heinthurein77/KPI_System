@@ -134,5 +134,10 @@ Who does what, in order:
   NULL. A second admin's actions are therefore in `audit_logs` — but
   they do NOT appear in any tenant's audit-log view, because that
   endpoint filters by the caller's tenant_id. To see platform actions,
-  query the database directly (`SELECT * FROM audit_logs WHERE
-  tenant_id IS NULL ORDER BY created_at DESC`).
+  use the Platform Audit Log in the platform portal
+  (`/platform/audit-log`, API `GET /api/platform/audit-log`, newest
+  first, `limit` default 200 / max 500, `offset` paging) — it returns
+  only platform-scoped rows (`tenant_id IS NULL`) and never any
+  tenant's rows. As a fallback, the same rows are visible with
+  `SELECT * FROM audit_logs WHERE tenant_id IS NULL ORDER BY
+  created_at DESC`.

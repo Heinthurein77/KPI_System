@@ -19,3 +19,10 @@ export function activateTenant(id) {
 export function deleteTenant(id) {
   return client.delete(`/api/platform/tenants/${id}`).then((r) => r.data);
 }
+
+export function getPlatformAuditLog(limit, offset) {
+  const params = {};
+  if (limit) params.limit = limit;
+  if (offset) params.offset = offset;
+  return client.get("/api/platform/audit-log", { params }).then((r) => r.data);
+}

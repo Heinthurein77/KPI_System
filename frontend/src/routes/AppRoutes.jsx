@@ -18,6 +18,7 @@ import AnalyticsPage from "../pages/admin/AnalyticsPage";
 import BulkImportPage from "../pages/admin/BulkImportPage";
 import PlatformLoginPage from "../pages/platform/PlatformLoginPage";
 import TenantsPage from "../pages/platform/TenantsPage";
+import PlatformAuditLogPage from "../pages/platform/PlatformAuditLogPage";
 import NotFoundPage from "../pages/NotFoundPage";
 
 function HomeRedirect() {
@@ -163,6 +164,14 @@ export default function AppRoutes() {
         element={
           <ProtectedRoute roles={["super_admin"]}>
             <TenantsPage />
+          </ProtectedRoute>
+        }
+      />
+      <Route
+        path="/platform/audit-log"
+        element={
+          <ProtectedRoute roles={["super_admin"]}>
+            <PlatformAuditLogPage />
           </ProtectedRoute>
         }
       />

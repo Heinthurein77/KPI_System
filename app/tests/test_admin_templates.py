@@ -808,3 +808,160 @@ def test_period_weight_tenant_admin_rejects_tenant_admin_target(db, client):
     other_admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Other Admin")
     resp = _period_weight(client, other_admin.id, admin, tenant)
     assert resp.status_code == 400
+
+
+# ---------- Period weight: applicable totals for a future period ----------
+
+
+def _next_month_from_today():
+    from app.core.months import MONTH_NAMES
+    from app.core.timezone import today as _app_today
+
+    today = _app_today()
+    if today.month == 12:
+        return today.year + 1, MONTH_NAMES[0]
+    return today.year, MONTH_NAMES[today.month]
+
+
+def test_period_weight_applicable_totals_for_future_period(db, client):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    next_year, next_period = _next_month_from_today()
+    # Department templates (always applicable) + a recurring custom
+    # locked to the target month; a one-off locked to the month after
+    # must NOT count toward this period.
+    make_template(db, tenant, metric_name="Sales", weight=40.0, department=dept)
+    make_template(db, tenant, metric_name="Customers", weight=30.0, department=dept)
+    make_template(
+        db, tenant, metric_name="Custom Recurring", weight=30.0, department=dept,
+        employee=employee, locked_year=next_year, locked_period=next_period, is_recurring=True,
+    )
+    # One-off locked to the month after the target: not applicable here.
+    from app.core.months import MONTH_NAMES
+
+    after_idx = MONTH_NAMES.index(next_period) + 1
+    after_year = next_year + (1 if after_idx == 12 else 0)
+    after_period = MONTH_NAMES[after_idx % 12]
+    make_template(
+        db, tenant, metric_name="Later One-Off", weight=50.0, department=dept,
+        employee=employee, locked_year=after_year, locked_period=after_period, is_recurring=False,
+    )
+
+    resp = _period_weight(client, employee.id, admin, tenant, year=next_year, period=next_period)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["is_future_period"] is True
+    assert body["snapshot_total"] == 0.0  # no submissions exist yet
+    assert body["submission_count"] == 0
+    assert body["applicable_template_total"] == 100.0
+    assert {t["metric_name"]: t["weight"] for t in body["applicable_templates"]} == {
+        "Sales": 40.0,
+        "Customers": 30.0,
+        "Custom Recurring": 30.0,
+    }
+    by_name = {t["metric_name"]: t for t in body["applicable_templates"]}
+    assert by_name["Sales"]["is_custom"] is False
+    assert by_name["Sales"]["is_recurring"] is False
+    assert by_name["Custom Recurring"]["is_custom"] is True
+    assert by_name["Custom Recurring"]["is_recurring"] is True
+
+
+def test_period_weight_applicable_totals_for_current_period(db, client):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    t1 = make_template(db, tenant, metric_name="Sales", weight=40.0, department=dept)
+    t2 = make_template(db, tenant, metric_name="Customers", weight=30.0, department=dept)
+    make_submission(db, tenant, employee, t1, year=2026, period="March")
+    make_submission(db, tenant, employee, t2, year=2026, period="March")
+
+    resp = _period_weight(client, employee.id, admin, tenant, year=2026, period="March")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["is_future_period"] is False  # March 2026 is past
+    assert body["snapshot_total"] == 70.0
+    assert body["applicable_template_total"] == 70.0
+    assert {t["metric_name"] for t in body["applicable_templates"]} == {"Sales", "Customers"}
+
+
+# ---------- Rebalance prompt: approved records are never touched ----------
+
+
+def test_rebalance_with_approved_submission_leaves_it_byte_identical(db, client):
+    """The rebalance prompt's promise, proven at the API level: when
+    the current month is fully final-approved, adding a KPI with a
+    rebalance shifts the new KPI to next month, and the approved
+    submission — weight snapshot, scores, status — is byte-identical
+    afterwards, even though its template's weight changed."""
+    from datetime import date
+    from unittest.mock import patch
+
+    from app.models.kpi_submission import KPISubmission
+    from app.routers import dashboard as dashboard_router
+    from app.services import kpi_service
+
+    tenant, dept_admin, employee, existing = _rebalance_setup(db)
+    # The employee's only March submission: final-approved, with a
+    # frozen weight snapshot and all three scores set.
+    approved = make_submission(
+        db, tenant, employee, existing, year=2026, period="March",
+        status=KPIStatus.APPROVED, self_score=85.0, dept_score=90.0, final_score=88.0,
+    )
+    approved.weight_snapshot = 30.0
+    db.commit()
+    before = {
+        "weight_snapshot": approved.weight_snapshot,
+        "self_score": approved.self_score,
+        "dept_score": approved.dept_score,
+        "final_score": approved.final_score,
+        "status": approved.status,
+        "target": approved.target_snapshot,
+        "template_id": approved.kpi_template_id,
+    }
+
+    # M6 gate: pin the clock to March 20 so March is the current month.
+    # Both clocks: kpi_service's (the M6 creation gate) and the dashboard
+    # router's (the approved-month shift reads current_month_period()).
+    with patch.object(kpi_service, "app_today", return_value=date(2026, 3, 20)), \
+         patch.object(dashboard_router, "app_today", return_value=date(2026, 3, 20)):
+        resp = client.post(
+            "/api/admin/templates/custom-with-rebalance",
+            json={
+                **_custom_payload(employee, metric_name="New KPI", weight=20.0),
+                "is_recurring": True,
+                "weight_adjustments": [{"template_id": existing.id, "weight": 40.0}],
+            },
+            headers=auth_headers(dept_admin, tenant),
+        )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    # The new KPI started next month (April), not in approved March.
+    assert body["locked_year"] == 2026
+    assert body["locked_period"] == "April"
+
+    # The template weight changed (future months only) …
+    db.refresh(existing)
+    assert existing.weight == 40.0
+    # … but the approved March submission is byte-identical.
+    db.refresh(approved)
+    after = {
+        "weight_snapshot": approved.weight_snapshot,
+        "self_score": approved.self_score,
+        "dept_score": approved.dept_score,
+        "final_score": approved.final_score,
+        "status": approved.status,
+        "target": approved.target_snapshot,
+        "template_id": approved.kpi_template_id,
+    }
+    assert after == before
+    # And no March submission was created for the new KPI.
+    march_subs = db.query(KPISubmission).filter(
+        KPISubmission.employee_id == employee.id,
+        KPISubmission.year == 2026,
+        KPISubmission.month_or_quarter == "March",
+    ).all()
+    assert len(march_subs) == 1
+    assert march_subs[0].id == approved.id

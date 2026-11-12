@@ -242,7 +242,7 @@ export default function BulkImportPage() {
             <h3 className="text-base font-semibold text-emerald-900">Import complete</h3>
             <p className="mt-1 text-sm text-emerald-800">
               {result.users_created} users and {result.kpis_created} KPIs created for {result.period} {result.year}.
-              KPIs are recurring, so they will carry forward to next months automatically.
+              Each KPI repeats every month unless its row said one-off — those apply to this month only.
             </p>
             <p className="mt-2 text-sm text-emerald-800">
               Each new user got a unique random initial password, emailed to them

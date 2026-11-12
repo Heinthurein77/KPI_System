@@ -3,6 +3,8 @@ GET /api/admin/users, GET/PUT/DELETE /api/admin/users/{id},
 POST /api/admin/users, POST /api/admin/users/{id}/toggle-active.
 """
 
+from contextlib import contextmanager
+
 from app.models.user import UserRole
 from app.tests.factories import auth_headers, make_department, make_tenant, make_user
 def _user_payload(**overrides):
@@ -571,15 +573,34 @@ def test_create_dept_admin_with_department_succeeds(db, client):
     assert resp.json()["department_id"] == dept.id
 
 
+@contextmanager
+def _smtp_on():
+    """Make the real ``settings.smtp_configured`` property True by
+    patching the three plain fields it reads (it is a @property, so
+    patch.object on the property itself fails)."""
+    from unittest.mock import patch
+
+    from app.core.config import settings
+
+    with patch.object(settings, "SMTP_HOST", "smtp.example.com"), \
+         patch.object(settings, "SMTP_USERNAME", "sender@example.com"), \
+         patch.object(settings, "SMTP_PASSWORD", "app-password"):
+        yield
+
+
 def test_create_user_sends_welcome_email(db, client):
     from unittest.mock import patch
+
+    from app.core.config import settings
 
     tenant = make_tenant(db)
     admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
     dept = make_department(db, tenant)
 
-    with patch("app.routers.admin.email_service.send_welcome_email_sync",
-               return_value=True) as mock_welcome:
+    # The welcome email goes out in a background thread (see the timing
+    # test below); the create still queues exactly one send.
+    with _smtp_on(), patch("app.routers.admin.email_service.send_welcome_email",
+               return_value=None) as mock_welcome:
         resp = client.post(
             "/api/admin/users",
             json=_user_payload(email="welcome@example.com", department_id=dept.id, password="InitPass123!"),
@@ -592,3 +613,117 @@ def test_create_user_sends_welcome_email(db, client):
         "welcome@example.com", "New Hire", "InitPass123!", org_name="Acme"
     )
     assert "InitPass123!" not in resp.text
+
+
+def _slow_fake_smtp(sent, delay_s=3.0, fail=False):
+    """Fake smtplib.SMTP: sleeps like a slow mail server, then records
+    the message (or raises, when ``fail``)."""
+    import time
+
+    class FakeSMTP:
+        def __init__(self, *args, **kwargs):
+            if fail:
+                raise OSError("network down")
+
+        def starttls(self):
+            pass
+
+        def login(self, *args):
+            pass
+
+        def send_message(self, msg):
+            time.sleep(delay_s)
+            sent.append(msg)
+
+        def quit(self):
+            pass
+
+    return FakeSMTP
+
+
+def _configured_email_settings():
+    from unittest.mock import MagicMock
+
+    s = MagicMock()
+    s.smtp_configured = True
+    s.SMTP_HOST = "smtp.example.com"
+    s.SMTP_PORT = 587
+    s.SMTP_USERNAME = "sender@example.com"
+    s.SMTP_PASSWORD = "app-password"
+    s.SMTP_USE_TLS = True
+    s.smtp_from = "sender@example.com"
+    s.APP_BASE_URL = "https://kpi.example.com"
+    return s
+
+
+def test_create_user_returns_before_slow_welcome_email(db, client):
+    """Regression: the create-user response waited on the SMTP
+    round-trip — a 3s mail server made the API take ~3.7s. The
+    welcome email now goes out in a background thread: the response
+    returns promptly and the email still arrives."""
+    import time
+    from unittest.mock import patch
+
+    from app.core.config import settings
+    from app.services import email_service
+
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    dept = make_department(db, tenant)
+    sent = []
+
+    with _smtp_on(), \
+         patch.object(email_service, "settings", _configured_email_settings()), \
+         patch("smtplib.SMTP", _slow_fake_smtp(sent, delay_s=3.0)):
+        started = time.monotonic()
+        resp = client.post(
+            "/api/admin/users",
+            json=_user_payload(email="slow@example.com", department_id=dept.id),
+            headers=auth_headers(admin, tenant),
+        )
+        elapsed = time.monotonic() - started
+        # Poll INSIDE the patch context: the background thread must
+        # still see the fake SMTP when it sends (the patch is gone
+        # once this block exits).
+        deadline = time.monotonic() + 8
+        while not sent and time.monotonic() < deadline:
+            time.sleep(0.1)
+    assert resp.status_code == 200
+    assert elapsed < 1.5, f"create-user took {elapsed:.2f}s with a 3s mail server"
+    # The email still goes out — just after the response.
+    assert len(sent) == 1
+    assert sent[0]["To"] == "slow@example.com"
+
+
+def test_create_user_succeeds_when_mail_server_down(db, client):
+    """A dead mail server must never fail (or delay) a user creation:
+    the user is created, the response is 200, and the failure is only
+    logged by the background sender."""
+    import time
+    from unittest.mock import patch
+
+    from app.core.config import settings
+    from app.models.user import User
+    from app.services import email_service
+
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    dept = make_department(db, tenant)
+
+    with _smtp_on(), \
+         patch.object(email_service, "settings", _configured_email_settings()), \
+         patch("smtplib.SMTP", _slow_fake_smtp([], delay_s=0, fail=True)):
+        started = time.monotonic()
+        resp = client.post(
+            "/api/admin/users",
+            json=_user_payload(email="down@example.com", department_id=dept.id),
+            headers=auth_headers(admin, tenant),
+        )
+        elapsed = time.monotonic() - started
+        # Give the background thread a moment to hit the failure path
+        # while the fake SMTP is still patched in (it must not raise
+        # out of the request).
+        time.sleep(0.5)
+    assert resp.status_code == 200
+    assert elapsed < 1.5, f"create-user took {elapsed:.2f}s with the mail server down"
+    assert db.query(User).filter_by(email="down@example.com").one() is not None

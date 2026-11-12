@@ -116,6 +116,18 @@ class PeriodWeightSubmissionOut(BaseModel):
     is_custom: bool
 
 
+class PeriodWeightApplicableOut(BaseModel):
+    """One template that will fill the target period: a recurring custom
+    template active from its locked month, a one-off locked to this
+    period, or one of the employee's department/company templates."""
+
+    template_id: int
+    metric_name: str
+    weight: float
+    is_custom: bool
+    is_recurring: bool
+
+
 class PeriodWeightOut(BaseModel):
     """The true weight budget for adding a KPI in one period.
 
@@ -131,6 +143,13 @@ class PeriodWeightOut(BaseModel):
     and the recurring-custom part of it that the rebalancer can scale.
     The rebalancer only ever changes future months, so its one-tap
     auto-fit budgets against ``future_template_total``, not this period.
+
+    ``applicable_template_total`` / ``applicable_templates`` describe
+    the TARGET period itself as templates: everything that will
+    materialise into it. For a future period there are no submissions
+    yet, so the guard's number is this total — the form budgets a
+    future period against it, and the rebalance prompt's "add from
+    next month" path needs it to know whether next month even has room.
     """
 
     employee_id: int
@@ -141,6 +160,9 @@ class PeriodWeightOut(BaseModel):
     submissions: list[PeriodWeightSubmissionOut]
     future_template_total: float
     future_custom_total: float
+    applicable_template_total: float
+    applicable_templates: list[PeriodWeightApplicableOut]
+    is_future_period: bool
 
 
 class UpdateTemplateWeightRequest(BaseModel):

@@ -29,6 +29,13 @@ function allowedTemplatePeriod(now = new Date()) {
   return { year, period, label: `${period} ${year}`, graceWeek };
 }
 
+// The month after a { year, period } pair (December rolls to January).
+function nextMonthOf({ year, period }) {
+  const idx = MONTH_NAMES_EN.indexOf(period);
+  if (idx === 11) return { year: year + 1, period: MONTH_NAMES_EN[0] };
+  return { year, period: MONTH_NAMES_EN[idx + 1] };
+}
+
 // Scale `values` proportionally so they sum to `target` (0.1 steps),
 // every result >= 0.1 and the sum never above target. Water-filling:
 // items that would floor below 0.1 are pinned at 0.1 and the rest
@@ -168,7 +175,9 @@ function ScopePill({ t }) {
         </svg>
         <span className="break-words">{t.employee?.name}</span>
       </span>
-      {t.is_recurring && <span className="text-[11px] text-violet-400 font-normal">recurring</span>}
+      {t.is_recurring
+        ? <span className="text-[11px] text-violet-400 font-normal">recurring</span>
+        : <span className="text-[11px] text-amber-500 font-normal">One-off</span>}
     </span>
   );
 }
@@ -207,11 +216,14 @@ export default function TemplatesPage() {
   const [showAddCustom, setShowAddCustom] = useState(false);
 
   // ── True period budget (what the backend guard enforces) ──
-  // { total, submissions, futureTemplateTotal, futureCustomTotal } once
+  // { total, submissions, futureTemplateTotal, futureCustomTotal,
+  //   applicableTotal, applicableTemplates, isFuturePeriod } once
   // loaded, plus loading/error flags. Fetched when the Add Custom KPI
   // modal has a person + period; null before the first fetch. While it
   // loads the submit stays disabled — budgeting against stale template
   // weights is exactly what used to mislead (0% claimed, 100% enforced).
+  // For a FUTURE period there are no submissions yet, so the budget is
+  // the applicable-template total instead of the snapshot total.
   const [periodBudget, setPeriodBudget] = useState(null);
 
   useEffect(() => {
@@ -231,6 +243,9 @@ export default function TemplatesPage() {
           submissions: d.submissions || [],
           futureTemplateTotal: Number(d.future_template_total) || 0,
           futureCustomTotal: Number(d.future_custom_total) || 0,
+          applicableTotal: Number(d.applicable_template_total) || 0,
+          applicableTemplates: d.applicable_templates || [],
+          isFuturePeriod: !!d.is_future_period,
         });
       })
       .catch(() => {
@@ -337,13 +352,47 @@ export default function TemplatesPage() {
     return existingEmployeeKpis.reduce((sum, t) => sum + Number(t.weight), 0);
   }, [existingEmployeeKpis]);
 
+  // ── The rebalance prompt's "add from next month" path ──
+  // The period the M6 gate allows right now (recomputed when the modal
+  // opens); the form's target starts here. When the target period is
+  // full, the prompt offers to start the KPI one month later instead:
+  // `onNextMonthPath` is true once the user takes that offer. During
+  // grace week (days 1–7) the next month is the CURRENT month, which
+  // M6 blocks until day 8 — so the offer is hidden then, with a plain
+  // explanation, instead of offering a month the backend would reject.
+  const allowedPeriod = useMemo(() => allowedTemplatePeriod(), [showAddCustom]);
+  const nextPeriod = useMemo(() => {
+    const n = nextMonthOf(allowedPeriod);
+    return { ...n, label: `${n.period} ${n.year}` };
+  }, [allowedPeriod]);
+  const onNextMonthPath =
+    customPeriod.year !== allowedPeriod.year || customPeriod.period !== allowedPeriod.period;
+  // The month the rebalance math must fit: the target period itself on
+  // the next-month path, the month after the target otherwise.
+  const fitMonthLabel = onNextMonthPath
+    ? customPeriod.label
+    : (() => {
+        const n = nextMonthOf(customPeriod);
+        return `${n.period} ${n.year}`;
+      })();
+
   // The rebalancer only ever touches RECURRING custom templates: a
   // one-off locked to another period has no future months to rebalance
   // (the backend rejects rebalancing one-offs), so listing one here
   // invited edits that could never help this create.
   const rebalancerTemplates = useMemo(() => {
-    return existingEmployeeKpis.filter((t) => t.is_recurring);
-  }, [existingEmployeeKpis]);
+    const recurring = existingEmployeeKpis.filter((t) => t.is_recurring);
+    if (!onNextMonthPath) return recurring;
+    // On the next-month path the fit month IS the target period, so
+    // only recurring customs that will actually apply there can free
+    // room — a template locked to a later month cannot. While the
+    // budget is still loading, fall back to the full list.
+    if (!periodBudget || periodBudget.loading || periodBudget.error) return recurring;
+    const applicableIds = new Set(
+      (periodBudget.applicableTemplates || []).map((t) => t.template_id)
+    );
+    return recurring.filter((t) => applicableIds.has(t.id));
+  }, [existingEmployeeKpis, onNextMonthPath, periodBudget]);
 
   // Future-months custom subtotal after the in-form rebalancer edits
   // (rebalancer footer only — the rebalancer changes future months,
@@ -356,32 +405,70 @@ export default function TemplatesPage() {
   }, [rebalancerTemplates, adjustedWeights]);
 
   // Create-time budget: the TRUE period total from the backend when
-  // loaded, the template sum only as a labelled fallback.
+  // loaded, the template sum only as a labelled fallback. For a future
+  // period there are no submissions yet, so the budget is the
+  // applicable-template total (what will materialise there), not the
+  // snapshot total.
   const budgetTotal =
     periodBudget && !periodBudget.error && !periodBudget.loading
-      ? periodBudget.total
+      ? (periodBudget.isFuturePeriod ? periodBudget.applicableTotal : periodBudget.total)
       : existingSum;
   const budgetIsSnapshot = !!(periodBudget && !periodBudget.error && !periodBudget.loading);
-  const budgetRemaining = 100 - budgetTotal;
-  // "Name 40% · Name 30%" — names what is actually filling the period.
-  const budgetBreakdown = (periodBudget?.submissions || [])
+  // "Name 40% · Name 30%" — names what is actually filling the period:
+  // frozen submissions for the current period, applicable templates
+  // for a future one.
+  const budgetBreakdown = (
+    (periodBudget?.isFuturePeriod ? periodBudget?.applicableTemplates : periodBudget?.submissions) || []
+  )
     .map((s) => `${s.metric_name} ${Number(s.weight).toFixed(1)}%`)
     .join(" + ");
 
   // Future-months fit (rebalancer math): everything that will carry
-  // into next month and cannot be rebalanced (department templates +
-  // one-offs locked to next month) comes from the backend's future
-  // totals; the new KPI counts only if it repeats every month.
+  // into the fit month and cannot be rebalanced (department templates +
+  // one-offs locked to it) comes from the backend's totals; the new KPI
+  // counts only if it repeats every month — except on the next-month
+  // path, where the fit month IS the create month, so the new KPI
+  // counts in full, recurring or not.
   const futureFixedTotal =
     periodBudget && !periodBudget.error && !periodBudget.loading
       ? periodBudget.futureTemplateTotal - periodBudget.futureCustomTotal
       : null;
-  const futureNewWeight = customRecurring ? Number(customWeight) || 0 : 0;
-  const futureTotal =
-    adjustedExistingSum + futureNewWeight + (futureFixedTotal ?? 0);
+  const applicableCustomTotal =
+    periodBudget && !periodBudget.error && !periodBudget.loading
+      ? (periodBudget.applicableTemplates || []).reduce(
+          (sum, t) => sum + (t.is_custom && t.is_recurring ? Number(t.weight) || 0 : 0),
+          0
+        )
+      : null;
+  const fitFixedTotal = onNextMonthPath
+    ? (periodBudget && !periodBudget.error && !periodBudget.loading
+        ? periodBudget.applicableTotal - (applicableCustomTotal ?? 0)
+        : null)
+    : futureFixedTotal;
+  const fitNewWeight = onNextMonthPath
+    ? Number(customWeight) || 0
+    : customRecurring
+      ? Number(customWeight) || 0
+      : 0;
+  const fitTotal =
+    adjustedExistingSum + fitNewWeight + (fitFixedTotal ?? 0);
 
-  // Live projected total = true period total + new KPI weight.
-  const projectedTotal = budgetTotal + (Number(customWeight) || 0);
+  // The submit gate's budget. On the next-month path the rebalancer
+  // edits DO free room for this create — the fit month is the target
+  // month, and the template weights being edited are the ones that
+  // will fill it. So the gate (and the indicator) budget against the
+  // ADJUSTED applicable total: saved applicable total, minus the
+  // rebalancable customs' saved weights, plus their adjusted weights.
+  // On the normal path the rebalancer only touches future months, so
+  // the create-month budget is unchanged by it.
+  const effectiveBudgetTotal =
+    onNextMonthPath && budgetIsSnapshot
+      ? periodBudget.applicableTotal - (applicableCustomTotal ?? 0) + adjustedExistingSum
+      : budgetTotal;
+  const budgetRemaining = 100 - effectiveBudgetTotal;
+
+  // Live projected total = effective period total + new KPI weight.
+  const projectedTotal = effectiveBudgetTotal + (Number(customWeight) || 0);
 
   // Which existing templates have been changed from their current weight?
   const changedTemplates = useMemo(() => {
@@ -391,27 +478,27 @@ export default function TemplatesPage() {
     });
   }, [rebalancerTemplates, adjustedWeights]);
 
-  // One-tap auto-fit for FUTURE months: scale the recurring custom
-  // weights proportionally so they + the new KPI + the fixed future
-  // total land exactly on 100%. Offered only when the future months
-  // don't fit yet and a fit is actually possible (every scaled weight
+  // One-tap auto-fit for the FIT month: scale the recurring custom
+  // weights proportionally so they + the new KPI + the fixed fit-month
+  // total land exactly on 100%. Offered only when the fit month
+  // doesn't fit yet and a fit is actually possible (every scaled weight
   // must stay >= 0.1%). It never changes this period's create — the
   // snapshot budget above is what the backend enforces for that.
   const fitTarget =
-    futureFixedTotal !== null ? 100 - futureNewWeight - futureFixedTotal : null;
+    fitFixedTotal !== null ? 100 - fitNewWeight - fitFixedTotal : null;
   const canAutoFit =
     rebalancerTemplates.length > 0 &&
     (Number(customWeight) || 0) > 0 &&
     fitTarget !== null &&
-    futureTotal > 100.001 &&
+    fitTotal > 100.001 &&
     fitTarget >= 0.1 * rebalancerTemplates.length;
   const autoFitBlocked =
     rebalancerTemplates.length > 0 &&
     (Number(customWeight) || 0) > 0 &&
     fitTarget !== null &&
-    futureTotal > 100.001 &&
+    fitTotal > 100.001 &&
     !canAutoFit
-      ? `Department KPIs already fill ${futureFixedTotal.toFixed(1)}% of future months — rebalancing custom KPIs can't make room for a ${Number(customWeight).toFixed(1)}% KPI.`
+      ? `Department KPIs already fill ${fitFixedTotal.toFixed(1)}% of ${fitMonthLabel} — rebalancing custom KPIs can't make room for a ${Number(customWeight).toFixed(1)}% KPI.`
       : null;
 
   function autoFitWeights() {
@@ -434,10 +521,25 @@ export default function TemplatesPage() {
     setCustomTarget("");
     setCustomWeight("");
     setCustomRecurring(true);
+    setCustomPeriod(allowedTemplatePeriod());
     setWeightError(null);
     setFormError(null);
     setAdjustedWeights({});
     setPeriodBudget(null);
+  }
+
+  // The rebalance prompt's "add from next month" path: move the target
+  // one month past the allowed period. The budget effect refetches for
+  // the new period, and the create then targets it — the original
+  // period's approved scores and weights are never touched. Going back
+  // restores the allowed period.
+  function switchToNextMonth() {
+    setCustomPeriod({ ...nextPeriod, graceWeek: false });
+    setWeightError(null);
+  }
+  function switchBackToAllowed() {
+    setCustomPeriod({ ...allowedPeriod });
+    setWeightError(null);
   }
 
   async function handleCreateCustom(e) {
@@ -445,11 +547,13 @@ export default function TemplatesPage() {
 
     // Block submission only if total would EXCEED 100% — under-allocation is valid.
     if (projectedTotal > 100) {
-      // The rebalancer below only changes FUTURE months, so it cannot free
-      // room for this create — the only fix here is a smaller new weight
-      // (the "Use X%" button fills the exact remaining budget), or, when
-      // the period is already full, removing an existing KPI first.
-      // (The "Use X%" button fills the exact remaining budget.)
+      // The rebalancer below only changes the FIT month (future months
+      // on the normal path, the target month itself on the next-month
+      // path), so it cannot free room for THIS create — the only fix
+      // here is a smaller new weight (the "Use X%" button fills the
+      // exact remaining budget), removing an existing KPI first, or —
+      // outside grace week — starting the KPI next month via the prompt
+      // panel above.
       const periodLabel = `${customPeriod.period} ${customPeriod.year}`;
       setWeightError(
         budgetRemaining > 0
@@ -458,7 +562,9 @@ export default function TemplatesPage() {
           : `Weight total would be ${projectedTotal.toFixed(1)}% — ${periodLabel} is already at ${budgetTotal.toFixed(1)}%` +
             (budgetBreakdown ? ` (${budgetBreakdown})` : "") +
             `. No new KPI fits this month, and the rebalancer below only changes future months. ` +
-            `To add a KPI this month, remove an existing KPI from the Templates list first, or wait for next month.`
+            (onNextMonthPath
+              ? `To add a KPI, remove an existing KPI from the Templates list first, or lower the new weight.`
+              : `To add a KPI this month, remove an existing KPI from the Templates list first, or use "Add from ${nextPeriod.label} instead" above to start it next month.`)
       );
       return;
     }
@@ -488,10 +594,13 @@ export default function TemplatesPage() {
         changedTemplates.length > 0
           ? ` Rebalanced ${changedTemplates.length} existing KPI weight${changedTemplates.length > 1 ? "s" : ""} (future months only).`
           : "";
+      const startNote = onNextMonthPath
+        ? `starts ${customPeriod.label}.`
+        : customRecurring
+          ? "will auto-carry to future months."
+          : "one-off for this month only.";
       toast.success(
-        `Custom KPI "${customMetricName.trim()}" added — ${
-          customRecurring ? "will auto-carry to future months." : "one-off for this month only."
-        }${rebalanceNote}`
+        `Custom KPI "${customMetricName.trim()}" added — ${startNote}${rebalanceNote}`
       );
       resetForm();
       setShowAddCustom(false);
@@ -886,10 +995,58 @@ export default function TemplatesPage() {
                     <option value={`${customPeriod.year}|${customPeriod.period}`}>{customPeriod.label}</option>
                   </select>
                   <span className="text-xs text-slate-500">
-                    {customPeriod.graceWeek
-                      ? "Days 1–7 (grace week): new KPIs target the previous month. The current month opens on day 8."
-                      : "New KPIs target the current month. The previous month's grace window has closed."}
+                    {onNextMonthPath
+                      ? `Starts ${customPeriod.label} — ${allowedPeriod.label}'s approved scores and weights are untouched.`
+                      : customPeriod.graceWeek
+                        ? "Days 1–7 (grace week): new KPIs target the previous month. The current month opens on day 8."
+                        : "New KPIs target the current month. The previous month's grace window has closed."}
                   </span>
+                </div>
+              </div>
+
+              {/* How long — the choice the user asked for, asked where the
+                  decision is made (right after Period, before the KPI
+                  details), not as a checkbox buried above the submit
+                  button. One month only = the selected period and no
+                  further; repeat = auto-carries forward each month.
+                  Default is repeat, the long-standing behaviour. */}
+              <div>
+                <span className="mb-1 block text-xs font-semibold text-slate-600">
+                  How long should this KPI run? <span className="text-red-500">*</span>
+                </span>
+                <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="KPI duration">
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={!customRecurring}
+                    onClick={() => setCustomRecurring(false)}
+                    className={`rounded-lg border px-3 py-2 text-left transition ${
+                      !customRecurring
+                        ? "border-brand-600 bg-brand-50 ring-1 ring-brand-600"
+                        : "border-slate-300 bg-white hover:border-slate-400"
+                    }`}
+                  >
+                    <span className="block text-sm font-semibold text-slate-800">One month only</span>
+                    <span className="mt-0.5 block text-xs text-slate-500">
+                      Applies to {customPeriod.label} only. It will not carry forward.
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={customRecurring}
+                    onClick={() => setCustomRecurring(true)}
+                    className={`rounded-lg border px-3 py-2 text-left transition ${
+                      customRecurring
+                        ? "border-brand-600 bg-brand-50 ring-1 ring-brand-600"
+                        : "border-slate-300 bg-white hover:border-slate-400"
+                    }`}
+                  >
+                    <span className="block text-sm font-semibold text-slate-800">Repeat every month</span>
+                    <span className="mt-0.5 block text-xs text-slate-500">
+                      Carries forward automatically each month.
+                    </span>
+                  </button>
                 </div>
               </div>
 
@@ -974,7 +1131,7 @@ export default function TemplatesPage() {
                         : "bg-emerald-50 text-emerald-700 border border-emerald-200"
                     }`}>
                       <span>
-                        Existing: <strong>{budgetTotal.toFixed(1)}%</strong>
+                        Existing: <strong>{effectiveBudgetTotal.toFixed(1)}%</strong>
                         {customWeight ? (
                           <>
                             {" + New: "}
@@ -1011,6 +1168,60 @@ export default function TemplatesPage() {
                 </div>
               )}
 
+              {/* ── Rebalance prompt ──
+                  Shown live when the target period is full: instead of a
+                  dead-end error at submit, the form ASKS what to do.
+                  Approved scores are never changed — rebalancing only
+                  ever touches future months, and the "add from next
+                  month" path starts the KPI one month later, leaving
+                  this period byte-identical. */}
+              {customEmployeeId && budgetIsSnapshot && projectedTotal > 100 && (Number(customWeight) || 0) > 0 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5">
+                  <p className="text-xs font-semibold text-amber-800">
+                    {customPeriod.label} is full at {budgetTotal.toFixed(1)}% — a {(Number(customWeight) || 0).toFixed(1)}% KPI doesn’t fit.
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-amber-700">
+                    {onNextMonthPath
+                      ? `${customPeriod.label} is full too, so this KPI can’t start there either. To add it, remove an existing KPI from the Templates list first, or lower the new weight. Approved scores and weights in ${allowedPeriod.label} stay exactly as they are.`
+                      : `Approved scores are never changed — weights can only be adjusted from ${fitMonthLabel} onward. Pick how to proceed:`}
+                  </p>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {!onNextMonthPath && !customPeriod.graceWeek && (
+                      <button
+                        type="button"
+                        onClick={switchToNextMonth}
+                        className="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-amber-700 transition"
+                      >
+                        Add from {nextPeriod.label} instead
+                      </button>
+                    )}
+                    {!onNextMonthPath && customPeriod.graceWeek && (
+                      <span className="text-xs text-amber-700">
+                        During grace week (days 1–7) new KPIs target last month — next month opens on day 8.
+                      </span>
+                    )}
+                    {onNextMonthPath && (
+                      <button
+                        type="button"
+                        onClick={switchBackToAllowed}
+                        className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 transition"
+                      >
+                        Back to {allowedPeriod.label}
+                      </button>
+                    )}
+                    {budgetRemaining > 0 && (
+                      <button
+                        type="button"
+                        onClick={suggestRemainingWeight}
+                        className="rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-xs font-semibold text-amber-800 hover:bg-amber-100 transition"
+                      >
+                        Use {budgetRemaining.toFixed(1)}% instead
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
               {/* ── Inline Weight Rebalancer ──
                   Shows whenever the selected employee has RECURRING custom
                   KPIs. One-offs are excluded: they have no future months
@@ -1033,7 +1244,7 @@ export default function TemplatesPage() {
                       <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                         <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75 11.25 15 15 9.75m-3-7.036A11.959 11.959 0 0 1 3.598 6 11.99 11.99 0 0 0 3 9.749c0 5.592 3.824 10.29 9 11.623 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.248-8.25-3.285Z" />
                       </svg>
-                      Future months only · approved records untouched
+                      {onNextMonthPath ? `${fitMonthLabel} onward · approved records untouched` : "Future months only · approved records untouched"}
                     </span>
                   </div>
 
@@ -1100,7 +1311,7 @@ export default function TemplatesPage() {
 
                   {/* Running total bar inside the rebalancer */}
                   <div className={`px-3 py-1.5 border-t flex items-center justify-between gap-2 text-xs font-medium ${
-                    futureFixedTotal !== null && Math.round(futureTotal * 10) === 1000
+                    fitFixedTotal !== null && Math.round(fitTotal * 10) === 1000
                       ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                       : "bg-slate-50 text-slate-500 border-slate-200"
                   }`}>
@@ -1115,10 +1326,10 @@ export default function TemplatesPage() {
                         <button
                           type="button"
                           onClick={autoFitWeights}
-                          title="Scale these weights down proportionally so the new KPI fits future months at exactly 100%"
+                          title={`Scale these weights down proportionally so the new KPI fits ${fitMonthLabel} at exactly 100%`}
                           className="font-semibold text-brand-600 hover:text-brand-700 underline underline-offset-2 transition"
                         >
-                          Auto-fit future months to 100%
+                          {onNextMonthPath ? `Auto-fit ${fitMonthLabel} to 100%` : "Auto-fit future months to 100%"}
                         </button>
                       )}
                       {changedTemplates.length > 0 && (
@@ -1154,23 +1365,9 @@ export default function TemplatesPage() {
                 </p>
               )}
 
-              {/* Submit */}
-              <label className="flex items-center gap-2.5 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={customRecurring}
-                  onChange={(e) => setCustomRecurring(e.target.checked)}
-                  className="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500"
-                />
-                <span className="text-xs text-slate-600">
-                  <span className="font-semibold text-slate-700">Repeat every month</span>
-                  <span className="block text-xs text-slate-400">
-                    {customRecurring
-                      ? "Auto-carries forward each month."
-                      : "One-off — only for the selected month."}
-                  </span>
-                </span>
-              </label>
+              {/* Submit — the duration choice now lives in the segmented
+                  control above (the old bottom checkbox was the same
+                  state, duplicated). */}
               <button
                 type="submit"
                 disabled={submitting || !!weightError || periodBudget?.loading}

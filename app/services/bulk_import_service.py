@@ -69,6 +69,14 @@ SHEET_IMPORT = "Import"
 
 IMPORT_HEADERS = ("name", "email", "position", "metric", "target", "weight")
 
+#: Optional 7th column: whether the KPI repeats every month. Accepts
+#: yes/no, true/false, recurring/one-off (case-insensitive); empty means
+#: recurring, the long-standing default. An unrecognised value is a
+#: per-row error — it is never silently defaulted.
+RECURRING_HEADER = "recurring"
+_RECURRING_TRUE = {"yes", "true", "recurring", "every month", "monthly"}
+_RECURRING_FALSE = {"no", "false", "one-off", "one off", "once", "one month only"}
+
 # DB column limits (users.name/position String(120), users.email
 # String(255)). Postgres rejects longer values with
 # StringDataRightTruncation at INSERT time — i.e. a generic 500 at
@@ -113,6 +121,9 @@ class ImportKpi:
     metric_name: str
     target: float
     weight: float
+    # False = one month only (the import period); True = repeats every
+    # month. True is the default, matching the old import behaviour.
+    is_recurring: bool = True
 
 
 @dataclass
@@ -157,6 +168,27 @@ def _as_number(value, what: str, err: ImportRowError | None = None):
         raise ValueError(f"{what} must be a number, got {value!r}")
 
 
+def _parse_recurring(value) -> bool:
+    """Parse the optional ``recurring`` cell. Empty = recurring (the
+    default). Anything unrecognised raises — a bad value is a per-row
+    error, never silently defaulted (the caller attaches the row)."""
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if not text:
+        return True
+    if text in _RECURRING_TRUE:
+        return True
+    if text in _RECURRING_FALSE:
+        return False
+    raise ValueError(
+        f"'recurring' must be yes/no, true/false or recurring/one-off "
+        f"(got {value!r}); empty means recurring."
+    )
+
+
 def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImport:
     """Parse and fully validate an uploaded workbook. No database writes."""
     parsed = ParsedImport()
@@ -191,6 +223,17 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
             )
         )
         return parsed
+    # An optional 7th column, "recurring", may follow — nothing else.
+    extra = [h for h in header[6:] if h]
+    if extra and extra != [RECURRING_HEADER]:
+        parsed.errors.append(
+            ImportRowError(
+                sheet=sheet, row=1,
+                message=f'Only an optional "recurring" column may follow "weight", got {extra}.',
+            )
+        )
+        return parsed
+    has_recurring = RECURRING_HEADER in header[6:7]
 
     existing_emails = {
         e.lower()
@@ -274,9 +317,15 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
                 ImportRowError(sheet, idx, f'Duplicate metric "{metric}" for {email}.')
             )
             continue
+        try:
+            is_recurring = _parse_recurring(row[6] if has_recurring else None)
+        except ValueError as exc:
+            parsed.errors.append(ImportRowError(sheet, idx, str(exc)))
+            continue
         users_by_email.setdefault(email, ImportUser(name=name, email=email, position=position))
         seen_metrics.add((email, metric.lower()))
-        parsed.kpis.append(ImportKpi(email=email, metric_name=metric, target=target, weight=weight))
+        parsed.kpis.append(ImportKpi(email=email, metric_name=metric, target=target, weight=weight,
+                                     is_recurring=is_recurring))
 
     parsed.users = list(users_by_email.values())
 
@@ -308,7 +357,10 @@ def execute_import(
     period: str | None = None,
     today: date | None = None,
 ) -> ImportResult:
-    """Create users + recurring KPI templates + draft submissions.
+    """Create users + KPI templates + draft submissions.
+
+    Templates are recurring unless the row's ``recurring`` column said
+    one-off — one-off templates apply to the import period only.
 
     ``parsed`` must have no errors. The whole import runs in a single
     transaction: users, templates, submissions and the audit entry are
@@ -376,7 +428,7 @@ def execute_import(
                 kpi.weight,
                 year,
                 period,
-                is_recurring=True,
+                is_recurring=kpi.is_recurring,
                 commit=False,
                 # The target period (current month by default, previous
                 # month when the caller selects it during grace week)
@@ -435,11 +487,11 @@ def build_import_template() -> BytesIO:
 
     ws = wb.active
     ws.title = SHEET_IMPORT
-    ws.append(["name", "email", "position", "metric", "target", "weight"])
-    ws.append(["Aung Aung", "aung.aung@example.com", "Sales Executive", "Monthly Sales", 100, 60])
-    ws.append(["Aung Aung", "aung.aung@example.com", "Sales Executive", "Customer Visits", 40, 40])
-    ws.append(["May May", "may.may@example.com", "Sales Executive", "Monthly Sales", 100, 100])
-    for col, width in zip("ABCDEF", (20, 30, 20, 24, 12, 12)):
+    ws.append(["name", "email", "position", "metric", "target", "weight", "recurring"])
+    ws.append(["Aung Aung", "aung.aung@example.com", "Sales Executive", "Monthly Sales", 100, 60, "yes"])
+    ws.append(["Aung Aung", "aung.aung@example.com", "Sales Executive", "Customer Visits", 40, 40, "no"])
+    ws.append(["May May", "may.may@example.com", "Sales Executive", "Monthly Sales", 100, 100, ""])
+    for col, width in zip("ABCDEFG", (20, 30, 20, 24, 12, 12, 12)):
         ws.column_dimensions[col].width = width
 
     help_ws = wb.create_sheet("Read me")
@@ -454,10 +506,13 @@ def build_import_template() -> BytesIO:
         "   random initial password, emailed to them together with the login",
         "   link. They must change it on first login.",
         "3. Each employee's weights must total exactly 100.",
-        "4. Every KPI becomes a recurring monthly template for the period you",
-        "   select (previous month during days 1–7, current month from day 8),",
-        "   and a draft submission is created right away so employees can",
-        "   start filling scores.",
+        "4. Every KPI repeats every month by default. The optional",
+        "   'recurring' column changes that per KPI: yes / true /",
+        "   recurring (or empty) = repeats every month; no / false /",
+        "   one-off = applies to the import period only (previous",
+        "   month during days 1–7, current month from day 8). A draft",
+        "   submission is created right away so employees can start",
+        "   filling scores. An unrecognised value is rejected.",
         "5. If any row has an error, nothing is imported - fix the rows and upload",
         "   again. Use the Validate button to check before importing.",
         "6. Delete the example rows before uploading your real data.",

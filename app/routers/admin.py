@@ -34,6 +34,7 @@ from app.schemas.kpi_template import (
     CreateCustomTemplateWithRebalanceRequest,
     CreateTemplateRequest,
     KPITemplateOut,
+    PeriodWeightApplicableOut,
     PeriodWeightOut,
     PeriodWeightSubmissionOut,
     RunRecurringKpisRequest,
@@ -431,15 +432,24 @@ def create_user(
     db.add(target)
     db.commit()
     # Welcome email with the admin-chosen password and the login link
-    # (user-requested). Sent AFTER the commit; a delivery failure is
-    # logged but never rolls the user back — the admin chose this
-    # password, so they can still hand it to the user out of band.
+    # (user-requested). It is sent AFTER the commit, in a background
+    # thread — NOT awaited on the request path. The old synchronous
+    # call made every user creation wait on the SMTP round-trip (a
+    # slow mail server delayed the response by seconds, and an
+    # unreachable one by the 15s SMTP timeout). The email still goes
+    # out and a delivery failure is still logged by the background
+    # sender — it just never delays or fails the create.
     tenant = db.get(Tenant, user.tenant_id)
-    sent = email_service.send_welcome_email_sync(
-        email, target.name, payload.password, org_name=tenant.name if tenant else None
-    )
-    if not sent:
-        logger.warning("Welcome email to %s failed to send (user %s created anyway)", email, target.id)
+    if settings.smtp_configured:
+        email_service.send_welcome_email(
+            email, target.name, payload.password, org_name=tenant.name if tenant else None
+        )
+        logger.info("Welcome email queued in background for %s (user %s)", email, target.id)
+    else:
+        logger.warning(
+            "Welcome email to %s skipped: SMTP is not configured (user %s created anyway)",
+            email, target.id,
+        )
     return target
 
 
@@ -675,6 +685,11 @@ def get_employee_period_weight(
     rebalancer can scale. The rebalancer only ever changes future
     months, so its one-tap auto-fit budgets against those, never
     against this period.
+
+    ``applicable_*`` totals describe the TARGET period itself as
+    templates. For a future period there are no submissions yet, so
+    the applicable total is the number the guard will enforce there —
+    the form budgets a future period against it.
     """
     if not (2000 <= year <= 2100) or period not in MONTH_NAMES:
         raise HTTPException(422, "year must be between 2000 and 2100 and period a month name.")
@@ -712,6 +727,20 @@ def get_employee_period_weight(
         Decimal("0"),
     )
 
+    # The TARGET period itself, as templates: everything that will
+    # materialise into it. For a future period there are no submissions
+    # yet, so this total — not snapshot_total — is the number the guard
+    # will enforce. The form budgets a future period against it, and
+    # the rebalance prompt's "add from next month" path needs it to
+    # know whether next month even has room.
+    applicable_templates = kpi_service.applicable_templates(
+        db, employee, year, period, apply_rollover_gate=False
+    )
+    cur_year, cur_period = current_month_period()
+    is_future_period = (year, MONTH_NAMES.index(period)) > (
+        cur_year, MONTH_NAMES.index(cur_period),
+    )
+
     return PeriodWeightOut(
         employee_id=employee.id,
         year=year,
@@ -731,6 +760,20 @@ def get_employee_period_weight(
         ],
         future_template_total=float(future_template_total),
         future_custom_total=float(future_custom_total),
+        applicable_template_total=float(
+            sum((Decimal(str(t.weight)) for t in applicable_templates), Decimal("0"))
+        ),
+        applicable_templates=[
+            PeriodWeightApplicableOut(
+                template_id=t.id,
+                metric_name=t.metric_name,
+                weight=float(t.weight),
+                is_custom=t.employee_id is not None,
+                is_recurring=bool(t.is_recurring),
+            )
+            for t in applicable_templates
+        ],
+        is_future_period=is_future_period,
     )
 
 

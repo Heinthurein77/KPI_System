@@ -555,3 +555,127 @@ def test_upload_period_params_validated(client, db, dept_admin):
     assert r.status_code == 400
     r = _upload(client, tenant, admin, dry_run=True, year=2026)
     assert r.status_code == 400
+
+
+def _workbook_recurring(rows):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Import"
+    ws.append(["name", "email", "position", "metric", "target", "weight", "recurring"])
+    for r in rows:
+        ws.append(r)
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def _mixed_recurring_contents():
+    return _workbook_recurring(
+        [
+            ["Aung Aung", "aung@example.com", "Sales Executive", "Sales", 100, 60, "yes"],
+            ["Aung Aung", "aung@example.com", "Sales Executive", "Visits", 40, 40, "no"],
+            ["May May", "may@example.com", "Senior Sales", "Sales", 100, 60, "ONE-OFF"],
+            ["May May", "may@example.com", "Senior Sales", "Visits", 40, 40, ""],
+        ]
+    )
+
+
+def test_parse_recurring_column_mixed(db, dept_admin):
+    tenant, _, _ = dept_admin
+    parsed = bulk_import_service.parse_import_file(_mixed_recurring_contents(), db, tenant.id)
+    assert parsed.ok, parsed.errors
+    assert [k.is_recurring for k in parsed.kpis] == [True, False, False, True]
+
+
+def test_parse_recurring_bad_value_is_per_row_error(db, dept_admin):
+    tenant, _, _ = dept_admin
+    contents = _workbook_recurring(
+        [["Aung", "aung@example.com", "Exec", "Sales", 100, 100, "maybe"]]
+    )
+    parsed = bulk_import_service.parse_import_file(contents, db, tenant.id)
+    assert not parsed.ok
+    assert any("recurring" in e.message for e in parsed.errors)
+    # The bad value is rejected, never silently defaulted to recurring.
+    assert parsed.kpis == []
+
+
+def test_parse_recurring_accepts_booleans_and_case(db, dept_admin):
+    tenant, _, _ = dept_admin
+    contents = _workbook_recurring(
+        [
+            ["Aung", "aung@example.com", "Exec", "Sales", 100, 50, True],
+            ["Aung", "aung@example.com", "Exec", "Visits", 40, 50, "FALSE"],
+        ]
+    )
+    parsed = bulk_import_service.parse_import_file(contents, db, tenant.id)
+    assert parsed.ok, parsed.errors
+    assert [k.is_recurring for k in parsed.kpis] == [True, False]
+
+
+def test_parse_six_column_file_still_defaults_recurring(db, dept_admin):
+    tenant, _, _ = dept_admin
+    parsed = bulk_import_service.parse_import_file(_valid_contents(), db, tenant.id)
+    assert parsed.ok, parsed.errors
+    assert all(k.is_recurring for k in parsed.kpis)
+
+
+def test_execute_mixed_recurring_one_off_lands_correctly(db, dept_admin):
+    """One-off rows land as one-off templates (import month only) and
+    recurring rows carry forward: the next month's recurring run
+    materialises only the recurring ones."""
+    from app.services import recurring_service
+
+    tenant, _, admin = dept_admin
+    parsed = bulk_import_service.parse_import_file(_mixed_recurring_contents(), db, tenant.id)
+    assert parsed.ok, parsed.errors
+    result = bulk_import_service.execute_import(db, admin, parsed)
+    assert result.kpis_created == 4
+
+    templates = db.query(KPITemplate).filter(KPITemplate.tenant_id == tenant.id).all()
+    assert len(templates) == 4
+    # Aung and May share metric names, so check per employee:
+    users = {u.email: u for u in db.query(User).filter(User.tenant_id == tenant.id,
+                                                      User.role == UserRole.EMPLOYEE).all()}
+    aung_templates = [t for t in templates if t.employee_id == users["aung@example.com"].id]
+    assert {t.metric_name: t.is_recurring for t in aung_templates} == {
+        "Sales": True,  # "yes"
+        "Visits": False,  # "no"
+    }
+    may_templates = [t for t in templates if t.employee_id == users["may@example.com"].id]
+    assert {t.metric_name: t.is_recurring for t in may_templates} == {
+        "Sales": False,  # "ONE-OFF"
+        "Visits": True,  # empty = recurring
+    }
+
+    from app.core.timezone import today as _app_today
+
+    today = _app_today()
+    next_month = MONTH_NAMES[today.month % 12]
+    next_year = today.year + (1 if today.month == 12 else 0)
+    result = recurring_service.materialise_recurring_for_period(db, next_year, next_month, tenant.id)
+    assert result.created_count == 2  # only the two recurring templates
+    carried = db.query(KPISubmission).filter(
+        KPISubmission.tenant_id == tenant.id,
+        KPISubmission.year == next_year,
+        KPISubmission.month_or_quarter == next_month,
+    ).all()
+    assert len(carried) == 2
+    assert {db.get(KPITemplate, s.kpi_template_id).metric_name for s in carried} == {"Sales", "Visits"}
+    assert {s.employee_id for s in carried} == {
+        users["aung@example.com"].id, users["may@example.com"].id,
+    }
+
+
+def test_template_has_recurring_column(client, db, dept_admin):
+    from openpyxl import load_workbook
+
+    tenant, _, admin = dept_admin
+    r = client.get("/api/admin/import/template", headers=auth_headers(admin, tenant))
+    assert r.status_code == 200
+    wb = load_workbook(BytesIO(r.content), read_only=True, data_only=True)
+    ws = wb["Import"]
+    headers = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    assert headers == ["name", "email", "position", "metric", "target", "weight", "recurring"]
+    readme = " ".join(c.value or "" for row in wb["Read me"].iter_rows() for c in row)
+    assert "one-off" in readme.lower()

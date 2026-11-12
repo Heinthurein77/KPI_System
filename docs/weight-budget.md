@@ -54,7 +54,7 @@ form never has to guess:
   template totals, for the rebalancer (recurring custom templates only in
   the custom subtotal; one-offs are excluded — they have no future months).
 
-## Open edge case — decision needed from the user (NOT resolved here)
+## Resolved edge case — user decision 2026-11-12: keep the conservative form behaviour
 
 The `a2acb06` builder deliberately chose to budget a future month against
 applicable templates **even when that month already has submissions**. In
@@ -63,7 +63,7 @@ enforces, so the form can **block a create the backend would allow**
 (a false "no room" when the snapshots total less than the applicable
 templates do).
 
-Options, pick one:
+Options considered:
 
 1. **Keep the conservative form behaviour** (current): the form may say no
    when the server would say yes. Safe, occasionally annoying.
@@ -73,9 +73,10 @@ Options, pick one:
    then agrees with the backend in every case, but the number it shows can
    change as submissions appear.
 
-Until the user picks, option 1 stands — this record does not change the
-behaviour, it only states it plainly so the next person working in this area
-does not re-discover it as a bug.
+**Decision (user, 2026-11-12): option 1 — keep the conservative form
+behaviour.** No code change was needed; this record now states the decided
+behaviour plainly so the next person working in this area does not
+re-discover it as a bug.
 
 ## Rules for future work in this area
 

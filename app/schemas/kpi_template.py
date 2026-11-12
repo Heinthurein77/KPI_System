@@ -105,6 +105,44 @@ class RunRecurringKpisRequest(BaseModel):
     period: str
 
 
+class PeriodWeightSubmissionOut(BaseModel):
+    """One submission filling the target period, with its frozen weight."""
+
+    submission_id: int
+    template_id: int
+    metric_name: str
+    weight: float
+    status: str
+    is_custom: bool
+
+
+class PeriodWeightOut(BaseModel):
+    """The true weight budget for adding a KPI in one period.
+
+    ``snapshot_total`` is the number the period-total guard enforces: the
+    sum of the period's submissions' frozen weights. It is deliberately
+    NOT the sum of the employee's template weights — templates locked to
+    other periods, templates rebalanced after materialisation, and
+    department-template submissions the form never counted all make those
+    two numbers disagree. The Add Custom KPI form budgets against this.
+
+    ``future_template_total`` / ``future_custom_total`` describe the NEXT
+    month (template weights as saved): everything that will carry forward,
+    and the recurring-custom part of it that the rebalancer can scale.
+    The rebalancer only ever changes future months, so its one-tap
+    auto-fit budgets against ``future_template_total``, not this period.
+    """
+
+    employee_id: int
+    year: int
+    period: str
+    snapshot_total: float
+    submission_count: int
+    submissions: list[PeriodWeightSubmissionOut]
+    future_template_total: float
+    future_custom_total: float
+
+
 class UpdateTemplateWeightRequest(BaseModel):
     """Narrow weight-only update for a recurring custom KPI template.
 

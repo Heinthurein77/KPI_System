@@ -135,6 +135,42 @@ def own_submissions_query(user: User):
     ).where(KPISubmission.employee_id == user.id, KPISubmission.tenant_id == user.tenant_id)
 
 
+def period_submission_snapshots(
+    db: Session, employee: User, year: int, period: str
+) -> list[KPISubmission]:
+    """The period's submissions whose frozen weights the total-weight guard sums.
+
+    Single source of truth for "what fills this period": the guard below and
+    the period-weight endpoint both read through here, so the form's budget
+    can never drift from what the backend enforces. A submission counts
+    with its frozen ``weight_snapshot`` (``effective_weight``), never with
+    the live template weight — a template edit after materialisation does
+    not change this period.
+    """
+    return (
+        db.scalars(
+            select(KPISubmission)
+            .options(joinedload(KPISubmission.kpi_template))
+            .where(
+                KPISubmission.employee_id == employee.id,
+                KPISubmission.year == year,
+                KPISubmission.month_or_quarter == period,
+                KPISubmission.tenant_id == employee.tenant_id,
+            )
+        )
+        .unique()
+        .all()
+    )
+
+
+def period_snapshot_total(db: Session, employee: User, year: int, period: str) -> Decimal:
+    """Sum of the period's frozen submission weights (the guard's number)."""
+    return sum(
+        (Decimal(str(s.effective_weight)) for s in period_submission_snapshots(db, employee, year, period)),
+        Decimal("0"),
+    )
+
+
 def validate_period_total_weight(db: Session, employee: User, year: int, period: str) -> None:
     """Block save/submit if the period's KPI weights total more than 100.
 
@@ -146,16 +182,7 @@ def validate_period_total_weight(db: Session, employee: User, year: int, period:
     This guard only reads existing submissions and their templates; it does
     not modify any data, scores, or workflow state.
     """
-    submissions = db.scalars(
-        select(KPISubmission)
-        .options(joinedload(KPISubmission.kpi_template))
-        .where(
-            KPISubmission.employee_id == employee.id,
-            KPISubmission.year == year,
-            KPISubmission.month_or_quarter == period,
-            KPISubmission.tenant_id == employee.tenant_id,
-        )
-    ).unique().all()
+    submissions = period_submission_snapshots(db, employee, year, period)
 
     # Preserve the existing no-submission behavior of the save/submit flows.
     if not submissions:

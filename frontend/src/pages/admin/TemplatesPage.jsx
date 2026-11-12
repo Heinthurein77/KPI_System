@@ -5,7 +5,7 @@ import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import Modal from "../../components/ui/Modal";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
-import { createCustomTemplateWithRebalance, deleteTemplate, listTemplates, renameTemplate } from "../../api/admin";
+import { createCustomTemplateWithRebalance, deleteTemplate, getPeriodWeight, listTemplates, renameTemplate } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
 import { MONTH_NAMES_EN } from "../../utils/months";
 
@@ -27,6 +27,49 @@ function allowedTemplatePeriod(now = new Date()) {
   }
   const period = MONTH_NAMES_EN[month - 1];
   return { year, period, label: `${period} ${year}`, graceWeek };
+}
+
+// Scale `values` proportionally so they sum to `target` (0.1 steps),
+// every result >= 0.1 and the sum never above target. Water-filling:
+// items that would floor below 0.1 are pinned at 0.1 and the rest
+// rescale; the flooring leftover is handed back to the largest values.
+// Returns null when the target cannot hold every item at >= 0.1.
+function scaleWeightsTo(values, target) {
+  const n = values.length;
+  if (n === 0 || target < 0.1 * n) return null;
+  const out = new Array(n).fill(0);
+  let remaining = Math.round(target * 10) / 10;
+  let pool = values.map((_, i) => i);
+  while (pool.length > 0) {
+    const poolSum = pool.reduce((s, i) => s + values[i], 0);
+    const pinned = [];
+    for (const i of pool) {
+      const v = poolSum > 0 ? (values[i] * remaining) / poolSum : remaining / pool.length;
+      if (Math.floor(v * 10) / 10 < 0.1) pinned.push(i);
+    }
+    if (pinned.length === 0) {
+      for (const i of pool) {
+        const v = poolSum > 0 ? (values[i] * remaining) / poolSum : remaining / pool.length;
+        out[i] = Math.floor(v * 10) / 10;
+      }
+      break;
+    }
+    for (const i of pinned) {
+      out[i] = 0.1;
+      remaining = Math.round((remaining - 0.1) * 10) / 10;
+    }
+    pool = pool.filter((i) => !pinned.includes(i));
+    if (remaining < 0.1 * pool.length) return null;
+  }
+  let leftover = Math.round((target - out.reduce((a, b) => a + b, 0)) * 10) / 10;
+  const order = [...out.keys()].sort((a, b) => out[b] - out[a]);
+  let k = 0;
+  while (leftover >= 0.1 - 1e-9 && order.length > 0 && k < order.length) {
+    out[order[k]] = Math.round((out[order[k]] + 0.1) * 10) / 10;
+    leftover = Math.round((leftover - 0.1) * 10) / 10;
+    k++;
+  }
+  return out;
 }
 
 // Shown when the initial data load fails (instead of an endless spinner).
@@ -163,6 +206,43 @@ export default function TemplatesPage() {
   const [deleting, setDeleting] = useState(false);
   const [showAddCustom, setShowAddCustom] = useState(false);
 
+  // ── True period budget (what the backend guard enforces) ──
+  // { total, submissions, futureTemplateTotal, futureCustomTotal } once
+  // loaded, plus loading/error flags. Fetched when the Add Custom KPI
+  // modal has a person + period; null before the first fetch. While it
+  // loads the submit stays disabled — budgeting against stale template
+  // weights is exactly what used to mislead (0% claimed, 100% enforced).
+  const [periodBudget, setPeriodBudget] = useState(null);
+
+  useEffect(() => {
+    if (!showAddCustom || !customEmployeeId) {
+      setPeriodBudget(null);
+      return;
+    }
+    let cancelled = false;
+    setPeriodBudget({ loading: true });
+    getPeriodWeight(Number(customEmployeeId), customPeriod.year, customPeriod.period)
+      .then((d) => {
+        if (cancelled) return;
+        setPeriodBudget({
+          loading: false,
+          error: null,
+          total: Number(d.snapshot_total) || 0,
+          submissions: d.submissions || [],
+          futureTemplateTotal: Number(d.future_template_total) || 0,
+          futureCustomTotal: Number(d.future_custom_total) || 0,
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setPeriodBudget({ loading: false, error: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAddCustom, customEmployeeId, customPeriod]);
+
   // ── List filters: by person (custom KPIs of that person) and by
   // department (department templates of that department + custom KPIs
   // whose owner belongs to it — custom templates carry the owner's
@@ -246,37 +326,107 @@ export default function TemplatesPage() {
     setFilterDept("");
   }
 
-  // Create-time budget (what the backend enforces): the employee's custom
-  // template weights AS SAVED — never the in-form rebalancer adjustments.
-  // The backend guard sums the target period's submission snapshots, and a
-  // template-weight edit only affects FUTURE submissions, so an adjustment
-  // never frees room for THIS create. Crediting adjustments here previously
-  // showed 60 + 30 = 90 while the backend enforced 90 + 30 = 120 and
-  // rejected the create — and the error text sent the user to the
-  // rebalancer, which cannot help this period.
+  // Template weights AS SAVED — the FALLBACK budget only. The real
+  // budget is the period's submission snapshots (periodBudget.total,
+  // fetched from the backend). Template weights disagree with the guard
+  // whenever a template is locked to another period, was rebalanced
+  // after this period materialised, or when department-template
+  // submissions fill the period — so the template sum is used only
+  // when the budget fetch fails, with a warning shown next to it.
   const existingSum = useMemo(() => {
     return existingEmployeeKpis.reduce((sum, t) => sum + Number(t.weight), 0);
   }, [existingEmployeeKpis]);
 
-  // Future-months sum after the in-form rebalancer edits (rebalancer
-  // footer only — the rebalancer changes future months, not this create).
+  // The rebalancer only ever touches RECURRING custom templates: a
+  // one-off locked to another period has no future months to rebalance
+  // (the backend rejects rebalancing one-offs), so listing one here
+  // invited edits that could never help this create.
+  const rebalancerTemplates = useMemo(() => {
+    return existingEmployeeKpis.filter((t) => t.is_recurring);
+  }, [existingEmployeeKpis]);
+
+  // Future-months custom subtotal after the in-form rebalancer edits
+  // (rebalancer footer only — the rebalancer changes future months,
+  // not this create).
   const adjustedExistingSum = useMemo(() => {
-    return existingEmployeeKpis.reduce((sum, t) => {
+    return rebalancerTemplates.reduce((sum, t) => {
       const adj = adjustedWeights[t.id];
       return sum + (adj !== undefined ? Number(adj) || 0 : Number(t.weight));
     }, 0);
-  }, [existingEmployeeKpis, adjustedWeights]);
+  }, [rebalancerTemplates, adjustedWeights]);
 
-  // Live projected total = existing (as saved) + new KPI weight.
-  const projectedTotal = existingSum + (Number(customWeight) || 0);
+  // Create-time budget: the TRUE period total from the backend when
+  // loaded, the template sum only as a labelled fallback.
+  const budgetTotal =
+    periodBudget && !periodBudget.error && !periodBudget.loading
+      ? periodBudget.total
+      : existingSum;
+  const budgetIsSnapshot = !!(periodBudget && !periodBudget.error && !periodBudget.loading);
+  const budgetRemaining = 100 - budgetTotal;
+  // "Name 40% · Name 30%" — names what is actually filling the period.
+  const budgetBreakdown = (periodBudget?.submissions || [])
+    .map((s) => `${s.metric_name} ${Number(s.weight).toFixed(1)}%`)
+    .join(" + ");
+
+  // Future-months fit (rebalancer math): everything that will carry
+  // into next month and cannot be rebalanced (department templates +
+  // one-offs locked to next month) comes from the backend's future
+  // totals; the new KPI counts only if it repeats every month.
+  const futureFixedTotal =
+    periodBudget && !periodBudget.error && !periodBudget.loading
+      ? periodBudget.futureTemplateTotal - periodBudget.futureCustomTotal
+      : null;
+  const futureNewWeight = customRecurring ? Number(customWeight) || 0 : 0;
+  const futureTotal =
+    adjustedExistingSum + futureNewWeight + (futureFixedTotal ?? 0);
+
+  // Live projected total = true period total + new KPI weight.
+  const projectedTotal = budgetTotal + (Number(customWeight) || 0);
 
   // Which existing templates have been changed from their current weight?
   const changedTemplates = useMemo(() => {
-    return existingEmployeeKpis.filter((t) => {
+    return rebalancerTemplates.filter((t) => {
       const adj = adjustedWeights[t.id];
       return adj !== undefined && Math.abs(Number(adj) - Number(t.weight)) > 0.001;
     });
-  }, [existingEmployeeKpis, adjustedWeights]);
+  }, [rebalancerTemplates, adjustedWeights]);
+
+  // One-tap auto-fit for FUTURE months: scale the recurring custom
+  // weights proportionally so they + the new KPI + the fixed future
+  // total land exactly on 100%. Offered only when the future months
+  // don't fit yet and a fit is actually possible (every scaled weight
+  // must stay >= 0.1%). It never changes this period's create — the
+  // snapshot budget above is what the backend enforces for that.
+  const fitTarget =
+    futureFixedTotal !== null ? 100 - futureNewWeight - futureFixedTotal : null;
+  const canAutoFit =
+    rebalancerTemplates.length > 0 &&
+    (Number(customWeight) || 0) > 0 &&
+    fitTarget !== null &&
+    futureTotal > 100.001 &&
+    fitTarget >= 0.1 * rebalancerTemplates.length;
+  const autoFitBlocked =
+    rebalancerTemplates.length > 0 &&
+    (Number(customWeight) || 0) > 0 &&
+    fitTarget !== null &&
+    futureTotal > 100.001 &&
+    !canAutoFit
+      ? `Department KPIs already fill ${futureFixedTotal.toFixed(1)}% of future months — rebalancing custom KPIs can't make room for a ${Number(customWeight).toFixed(1)}% KPI.`
+      : null;
+
+  function autoFitWeights() {
+    const scaled = scaleWeightsTo(
+      rebalancerTemplates.map((t) => Number(adjustedWeights[t.id] ?? t.weight) || 0),
+      fitTarget
+    );
+    if (!scaled) return;
+    const next = {};
+    rebalancerTemplates.forEach((t, i) => {
+      next[t.id] = String(scaled[i]);
+    });
+    setAdjustedWeights((prev) => ({ ...prev, ...next }));
+    setWeightError(null);
+  }
 
   function resetForm() {
     setCustomEmployeeId("");
@@ -287,6 +437,7 @@ export default function TemplatesPage() {
     setWeightError(null);
     setFormError(null);
     setAdjustedWeights({});
+    setPeriodBudget(null);
   }
 
   async function handleCreateCustom(e) {
@@ -295,15 +446,19 @@ export default function TemplatesPage() {
     // Block submission only if total would EXCEED 100% — under-allocation is valid.
     if (projectedTotal > 100) {
       // The rebalancer below only changes FUTURE months, so it cannot free
-      // room for this create — the only fix here is a smaller new weight.
+      // room for this create — the only fix here is a smaller new weight
+      // (the "Use X%" button fills the exact remaining budget), or, when
+      // the period is already full, removing an existing KPI first.
       // (The "Use X%" button fills the exact remaining budget.)
-      const remaining = 100 - existingSum;
+      const periodLabel = `${customPeriod.period} ${customPeriod.year}`;
       setWeightError(
-        remaining > 0
+        budgetRemaining > 0
           ? `Weight total would be ${projectedTotal.toFixed(1)}% — the combined total must not exceed 100%. ` +
-            `Lower the new weight to ${remaining.toFixed(1)}% or less.`
-          : `Weight total would be ${projectedTotal.toFixed(1)}% — this person is already at 100% for this period, so no new KPI fits this month. ` +
-            `Use the rebalancer below to free room for future months.`
+            `Lower the new weight to ${budgetRemaining.toFixed(1)}% or less.`
+          : `Weight total would be ${projectedTotal.toFixed(1)}% — ${periodLabel} is already at ${budgetTotal.toFixed(1)}%` +
+            (budgetBreakdown ? ` (${budgetBreakdown})` : "") +
+            `. No new KPI fits this month, and the rebalancer below only changes future months. ` +
+            `To add a KPI this month, remove an existing KPI from the Templates list first, or wait for next month.`
       );
       return;
     }
@@ -350,10 +505,10 @@ export default function TemplatesPage() {
   }
 
   // Fill the new weight with the exact remaining budget for this create
-  // (100 - existing sum, as saved). The rebalancer cannot change this
+  // (100 - true period total). The rebalancer cannot change this
   // number — it only affects future months.
   function suggestRemainingWeight() {
-    const needed = 100 - existingSum;
+    const needed = budgetRemaining;
     if (needed > 0) {
       setCustomWeight(String(Math.round(needed * 10) / 10));
       setWeightError(null);
@@ -801,43 +956,70 @@ export default function TemplatesPage() {
                 </div>
               </div>
 
-              {/* ── Weight sum indicator ── */}
+              {/* ── Weight sum indicator ──
+                  Budgets against the TRUE period total (the backend guard's
+                  number), not the template weights: department-template
+                  submissions and stale snapshots are counted here, and
+                  one-offs locked to other periods are not. */}
               {customEmployeeId && (
-                <div className={`rounded-lg px-3 py-2 text-xs flex items-center justify-between gap-2 ${
-                  projectedTotal > 100
-                    ? "bg-red-50 text-red-700 border border-red-200"
-                    : "bg-emerald-50 text-emerald-700 border border-emerald-200"
-                }`}>
-                  <span>
-                    Existing: <strong>{existingSum.toFixed(1)}%</strong>
-                    {customWeight ? (
-                      <>
-                        {" + New: "}
-                        <strong>{(Number(customWeight) || 0).toFixed(1)}%</strong>
-                        {" = "}
-                        <strong>{projectedTotal.toFixed(1)}% / 100%</strong>
-                      </>
-                    ) : (
-                      <> · <strong>{(100 - existingSum).toFixed(1)}%</strong> remaining</>
-                    )}
-                  </span>
-                  {Math.round(projectedTotal * 10) !== 1000 && (100 - existingSum) > 0 && (
-                    <button
-                      type="button"
-                      onClick={suggestRemainingWeight}
-                      className="shrink-0 underline underline-offset-2 text-xs font-semibold hover:opacity-75 transition"
-                    >
-                      Use {(100 - existingSum).toFixed(1)}%
-                    </button>
+                <div>
+                  {periodBudget?.loading ? (
+                    <div className="rounded-lg px-3 py-2 text-xs bg-slate-50 text-slate-500 border border-slate-200">
+                      Checking {customPeriod.label} budget…
+                    </div>
+                  ) : (
+                    <div className={`rounded-lg px-3 py-2 text-xs flex items-center justify-between gap-2 ${
+                      projectedTotal > 100
+                        ? "bg-red-50 text-red-700 border border-red-200"
+                        : "bg-emerald-50 text-emerald-700 border border-emerald-200"
+                    }`}>
+                      <span>
+                        Existing: <strong>{budgetTotal.toFixed(1)}%</strong>
+                        {customWeight ? (
+                          <>
+                            {" + New: "}
+                            <strong>{(Number(customWeight) || 0).toFixed(1)}%</strong>
+                            {" = "}
+                            <strong>{projectedTotal.toFixed(1)}% / 100%</strong>
+                          </>
+                        ) : (
+                          <> · <strong>{budgetRemaining.toFixed(1)}%</strong> remaining</>
+                        )}
+                      </span>
+                      {Math.round(projectedTotal * 10) !== 1000 && budgetRemaining > 0 && (
+                        <button
+                          type="button"
+                          onClick={suggestRemainingWeight}
+                          className="shrink-0 underline underline-offset-2 text-xs font-semibold hover:opacity-75 transition"
+                        >
+                          Use {budgetRemaining.toFixed(1)}%
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  {/* What is actually filling the period (frozen weights). */}
+                  {budgetIsSnapshot && budgetBreakdown && (
+                    <p className="mt-1.5 px-1 text-[11px] leading-relaxed text-slate-500">
+                      {customPeriod.label}: {budgetBreakdown}
+                    </p>
+                  )}
+                  {periodBudget?.error && (
+                    <p className="mt-1.5 px-1 text-[11px] leading-relaxed text-amber-600">
+                      Period budget couldn’t be loaded — showing template weights instead; the server checks the total when you save.
+                    </p>
                   )}
                 </div>
               )}
 
               {/* ── Inline Weight Rebalancer ──
-                  Shows whenever the selected employee has existing KPIs.
-                  All edits here ONLY update KPITemplate.weight (future months).
-                  Approved submission records are strictly immutable.          */}
-              {existingEmployeeKpis.length > 0 && (
+                  Shows whenever the selected employee has RECURRING custom
+                  KPIs. One-offs are excluded: they have no future months
+                  to rebalance and the backend rejects rebalancing them.
+                  All edits here ONLY update KPITemplate.weight (future
+                  months). Approved submission records are strictly
+                  immutable — and this period's frozen weights never move,
+                  so rebalancing can never free room for THIS create. */}
+              {rebalancerTemplates.length > 0 && (
                 <div className="rounded-lg border border-slate-200 overflow-hidden">
                   {/* Header */}
                   <div className="bg-slate-50 px-3 py-2 flex items-center justify-between gap-2 border-b border-slate-200">
@@ -857,7 +1039,7 @@ export default function TemplatesPage() {
 
                   {/* Existing KPI rows with editable weights */}
                   <div className="divide-y divide-slate-100">
-                    {existingEmployeeKpis.map((t) => {
+                    {rebalancerTemplates.map((t) => {
                       const currentVal = adjustedWeights[t.id] !== undefined
                         ? adjustedWeights[t.id]
                         : t.weight;
@@ -917,8 +1099,8 @@ export default function TemplatesPage() {
                   </div>
 
                   {/* Running total bar inside the rebalancer */}
-                  <div className={`px-3 py-1.5 border-t flex items-center justify-between text-xs font-medium ${
-                    Math.round(existingSum * 10) + Math.round((Number(customWeight) || 0) * 10) === 1000
+                  <div className={`px-3 py-1.5 border-t flex items-center justify-between gap-2 text-xs font-medium ${
+                    futureFixedTotal !== null && Math.round(futureTotal * 10) === 1000
                       ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                       : "bg-slate-50 text-slate-500 border-slate-200"
                   }`}>
@@ -928,16 +1110,33 @@ export default function TemplatesPage() {
                         <span className="ml-1 text-blue-500">({changedTemplates.length} pending save)</span>
                       )}
                     </span>
-                    {changedTemplates.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setAdjustedWeights({})}
-                        className="text-slate-400 hover:text-slate-600 underline underline-offset-1 transition"
-                      >
-                        Reset all
-                      </button>
-                    )}
+                    <span className="flex items-center gap-2 shrink-0">
+                      {canAutoFit && (
+                        <button
+                          type="button"
+                          onClick={autoFitWeights}
+                          title="Scale these weights down proportionally so the new KPI fits future months at exactly 100%"
+                          className="font-semibold text-brand-600 hover:text-brand-700 underline underline-offset-2 transition"
+                        >
+                          Auto-fit future months to 100%
+                        </button>
+                      )}
+                      {changedTemplates.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => setAdjustedWeights({})}
+                          className="text-slate-400 hover:text-slate-600 underline underline-offset-1 transition"
+                        >
+                          Reset all
+                        </button>
+                      )}
+                    </span>
                   </div>
+                  {autoFitBlocked && (
+                    <p className="px-3 py-1.5 border-t border-slate-200 bg-amber-50 text-[11px] leading-relaxed text-amber-700">
+                      {autoFitBlocked}
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -974,7 +1173,7 @@ export default function TemplatesPage() {
               </label>
               <button
                 type="submit"
-                disabled={submitting || !!weightError}
+                disabled={submitting || !!weightError || periodBudget?.loading}
                 className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition disabled:opacity-60"
               >
                 {submitting ? (

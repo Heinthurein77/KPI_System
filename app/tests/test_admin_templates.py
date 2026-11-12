@@ -654,3 +654,157 @@ def test_rename_template_cross_tenant_returns_404(client, db):
     tpl = make_template(db, other_tenant, metric_name="Elsewhere")
     resp = _rename(client, tpl.id, "Renamed", admin, tenant)
     assert resp.status_code == 404, resp.text
+
+
+# ---------- Period weight budget (true budget for Add Custom KPI) ----------
+
+
+def _period_weight(client, employee_id, user, tenant, year=2026, period="March"):
+    return client.get(
+        f"/api/admin/employees/{employee_id}/period-weight?year={year}&period={period}",
+        headers=auth_headers(user, tenant),
+    )
+
+
+def test_period_weight_counts_department_template_submissions(db, client):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    # Department templates fill the period even though the form only ever
+    # counted custom templates — this is the headline mismatch.
+    t1 = make_template(db, tenant, metric_name="Sales", weight=40.0, department=dept)
+    t2 = make_template(db, tenant, metric_name="Customers", weight=30.0, department=dept)
+    make_submission(db, tenant, employee, t1, year=2026, period="March")
+    make_submission(db, tenant, employee, t2, year=2026, period="March")
+
+    resp = _period_weight(client, employee.id, admin, tenant)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["snapshot_total"] == 70.0
+    assert body["submission_count"] == 2
+    assert {s["metric_name"]: s["weight"] for s in body["submissions"]} == {
+        "Sales": 40.0,
+        "Customers": 30.0,
+    }
+    assert all(s["is_custom"] is False for s in body["submissions"])
+
+
+def test_period_weight_ignores_other_period_one_off(db, client):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    # A one-off locked to April has an April submission — it must not
+    # count toward March's budget (the form used to count it).
+    one_off = make_template(
+        db, tenant, metric_name="April One-Off", weight=20.0, department=dept,
+        employee=employee, locked_year=2026, locked_period="April", is_recurring=False,
+    )
+    make_submission(db, tenant, employee, one_off, year=2026, period="April")
+    dept_tpl = make_template(db, tenant, metric_name="Sales", weight=30.0, department=dept)
+    make_submission(db, tenant, employee, dept_tpl, year=2026, period="March")
+
+    resp = _period_weight(client, employee.id, admin, tenant)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["snapshot_total"] == 30.0
+    assert body["submission_count"] == 1
+    assert body["submissions"][0]["metric_name"] == "Sales"
+
+
+def test_period_weight_uses_snapshot_not_live_template_weight(db, client):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    # Template rebalanced 30 -> 20 AFTER March materialised: the frozen
+    # snapshot (40, set at creation) is what the guard enforces.
+    tpl = make_template(
+        db, tenant, metric_name="Custom", weight=30.0, department=dept,
+        employee=employee, locked_year=2026, locked_period="March", is_recurring=True,
+    )
+    sub = make_submission(db, tenant, employee, tpl, year=2026, period="March")
+    sub.weight_snapshot = 40.0
+    db.commit()
+    tpl.weight = 20.0
+    db.commit()
+
+    resp = _period_weight(client, employee.id, admin, tenant)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["snapshot_total"] == 40.0
+
+
+def test_period_weight_empty_period_is_zero(db, client):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE)
+    resp = _period_weight(client, employee.id, admin, tenant)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["snapshot_total"] == 0.0
+    assert body["submission_count"] == 0
+    assert body["submissions"] == []
+
+
+def test_period_weight_future_totals(db, client):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
+    # Department template (always applicable) + recurring custom template
+    # locked to March, so both carry into April (the next month).
+    make_template(db, tenant, metric_name="Sales", weight=40.0, department=dept)
+    make_template(
+        db, tenant, metric_name="Custom", weight=30.0, department=dept,
+        employee=employee, locked_year=2026, locked_period="March", is_recurring=True,
+    )
+    resp = _period_weight(client, employee.id, admin, tenant)
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["future_template_total"] == 70.0
+    assert body["future_custom_total"] == 30.0
+
+
+def test_period_weight_dept_admin_forbidden_other_department(db, client):
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant, name="Mine")
+    other_dept = make_department(db, tenant, name="Theirs")
+    dept_admin = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
+    other_employee = make_user(db, tenant, UserRole.EMPLOYEE, department=other_dept)
+    resp = _period_weight(client, other_employee.id, dept_admin, tenant)
+    assert resp.status_code == 403
+
+
+def test_period_weight_cross_tenant_returns_404(db, client):
+    tenant = make_tenant(db)
+    other_tenant = make_tenant(db, name="Other", slug="other")
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    outsider = make_user(db, other_tenant, UserRole.EMPLOYEE)
+    resp = _period_weight(client, outsider.id, admin, tenant)
+    assert resp.status_code == 404
+
+
+def test_period_weight_rejects_invalid_period_and_year(db, client):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE)
+    assert _period_weight(client, employee.id, admin, tenant, period="Someday").status_code == 422
+    assert _period_weight(client, employee.id, admin, tenant, year=1999).status_code == 422
+
+
+def test_period_weight_forbidden_for_employee(db, client):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE)
+    other = make_user(db, tenant, UserRole.EMPLOYEE, name="Other Emp")
+    resp = _period_weight(client, other.id, employee, tenant)
+    assert resp.status_code == 403
+
+
+def test_period_weight_tenant_admin_rejects_tenant_admin_target(db, client):
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    other_admin = make_user(db, tenant, UserRole.TENANT_ADMIN, name="Other Admin")
+    resp = _period_weight(client, other_admin.id, admin, tenant)
+    assert resp.status_code == 400

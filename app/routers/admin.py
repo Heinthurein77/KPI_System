@@ -1,4 +1,5 @@
 from datetime import date
+from decimal import Decimal
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -33,6 +34,8 @@ from app.schemas.kpi_template import (
     CreateCustomTemplateWithRebalanceRequest,
     CreateTemplateRequest,
     KPITemplateOut,
+    PeriodWeightOut,
+    PeriodWeightSubmissionOut,
     RunRecurringKpisRequest,
     UpdateTemplateNameRequest,
     UpdateTemplateWeightRequest,
@@ -645,6 +648,90 @@ def list_templates(db: Session = Depends(get_db), user: User = Depends(require_d
         "default_year": default_year,
         "default_period": default_period,
     }
+
+
+@router.get("/employees/{employee_id}/period-weight", response_model=PeriodWeightOut)
+def get_employee_period_weight(
+    employee_id: int,
+    year: int,
+    period: str,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_dept_admin),
+):
+    """True weight budget for adding a KPI to one employee in one period.
+
+    Read-only. ``snapshot_total`` is the exact number the period-total
+    guard enforces (the period's submissions' frozen weights, via the
+    same query the guard uses) — the Add Custom KPI form budgets against
+    this instead of summing the employee's template weights, which
+    disagree with the guard whenever a template is locked to another
+    period, was rebalanced after this period materialised, or when
+    department-template submissions fill the period. The per-submission
+    breakdown lets the form name what is actually filling the period.
+
+    ``future_*`` totals describe the NEXT month from the saved template
+    weights (via ``applicable_templates`` with the rollover gate off):
+    everything that will carry forward, and the recurring-custom part the
+    rebalancer can scale. The rebalancer only ever changes future
+    months, so its one-tap auto-fit budgets against those, never
+    against this period.
+    """
+    if not (2000 <= year <= 2100) or period not in MONTH_NAMES:
+        raise HTTPException(422, "year must be between 2000 and 2100 and period a month name.")
+    employee = get_tenant_scoped_or_404(db, User, employee_id, user.tenant_id, "User not found.")
+
+    # Access rules mirror create_custom_template.
+    if user.role == UserRole.DEPT_ADMIN:
+        # Dept Admins may only view their own Employees.
+        if employee.role != UserRole.EMPLOYEE or employee.department_id != user.department_id:
+            raise HTTPException(403, "Cannot view period weights for an employee outside your department.")
+    else:
+        # Tenant Admin may target any Employee or Dept Admin, but not another
+        # Tenant Admin (Tenant Admins aren't reviewed by anyone in this workflow).
+        if employee.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN):
+            raise HTTPException(400, "Period weights are only available for Employees or Department Admins.")
+
+    submissions = kpi_service.period_submission_snapshots(db, employee, year, period)
+    snapshot_total = sum(
+        (Decimal(str(s.effective_weight)) for s in submissions), Decimal("0")
+    )
+
+    # Next month's template totals (weights as saved) for the rebalancer.
+    if period == MONTH_NAMES[11]:  # December → January next year
+        next_year, next_period = year + 1, MONTH_NAMES[0]
+    else:
+        next_year, next_period = year, MONTH_NAMES[MONTH_NAMES.index(period) + 1]
+    future_templates = kpi_service.applicable_templates(
+        db, employee, next_year, next_period, apply_rollover_gate=False
+    )
+    future_template_total = sum(
+        (Decimal(str(t.weight)) for t in future_templates), Decimal("0")
+    )
+    future_custom_total = sum(
+        (Decimal(str(t.weight)) for t in future_templates if t.is_custom and t.is_recurring),
+        Decimal("0"),
+    )
+
+    return PeriodWeightOut(
+        employee_id=employee.id,
+        year=year,
+        period=period,
+        snapshot_total=float(snapshot_total),
+        submission_count=len(submissions),
+        submissions=[
+            PeriodWeightSubmissionOut(
+                submission_id=s.id,
+                template_id=s.kpi_template_id,
+                metric_name=s.kpi_template.metric_name if s.kpi_template else "",
+                weight=float(s.effective_weight),
+                status=s.status.value,
+                is_custom=bool(s.kpi_template and s.kpi_template.is_custom),
+            )
+            for s in submissions
+        ],
+        future_template_total=float(future_template_total),
+        future_custom_total=float(future_custom_total),
+    )
 
 
 @router.post("/templates", response_model=KPITemplateOut)

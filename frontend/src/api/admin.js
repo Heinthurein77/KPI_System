@@ -93,6 +93,15 @@ export function createCustomTemplateWithRebalance(payload) {
   return client.post("/api/admin/templates/custom-with-rebalance", payload).then((r) => r.data);
 }
 
+// True weight budget for adding a KPI to one employee in one period:
+// the period's submission-snapshot total the backend guard enforces,
+// plus next month's template totals for the rebalancer's future fit.
+export function getPeriodWeight(employeeId, year, period) {
+  return client
+    .get(`/api/admin/employees/${employeeId}/period-weight`, { params: { year, period } })
+    .then((r) => r.data);
+}
+
 export function deleteTemplate(id) {
   return client.delete(`/api/admin/templates/${id}`).then((r) => r.data);
 }

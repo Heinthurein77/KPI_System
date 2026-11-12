@@ -12,6 +12,16 @@ COPY frontend/ .
 ARG VITE_API_BASE_URL=""
 ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 
+# M3 (2026-11-12 PM review): release identity for the UI footer. The build
+# context has no .git, so the commit must arrive as a build arg at deploy
+# time (see CHANGELOG.md): `docker compose build
+# --build-arg VITE_APP_COMMIT="$(git rev-parse --short HEAD)" web`.
+# Defaults keep the build working when the args are not passed.
+ARG VITE_APP_VERSION="0.0.0"
+ARG VITE_APP_COMMIT="dev"
+ENV VITE_APP_VERSION=$VITE_APP_VERSION
+ENV VITE_APP_COMMIT=$VITE_APP_COMMIT
+
 RUN npm run build
 
 # ---- Backend stage ----

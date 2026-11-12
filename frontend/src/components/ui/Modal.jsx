@@ -10,6 +10,17 @@ import { createPortal } from "react-dom";
 export default function Modal({ open, title, onClose, children, wide = false }) {
   const dialogRef = useRef(null);
 
+  // `onClose` is normally an inline arrow (`() => setShowX(false)`), so its
+  // identity changes on every parent render — including every keystroke in a
+  // form inside the dialog. The focus effect below must NOT depend on it:
+  // with `onClose` in the dep list the effect re-ran (and re-focused the
+  // first control, the Close button) after every keystroke, stealing focus
+  // out of the field being typed in — and a following Space/Enter then
+  // activated that Close button and dismissed the dialog. Keep the latest
+  // callback in a ref and depend on `open` only.
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
     if (!open) return;
     const dialog = dialogRef.current;
@@ -20,10 +31,15 @@ export default function Modal({ open, title, onClose, children, wide = false }) 
       )].filter((el) => !el.disabled);
     }
     const first = focusableItems()[0];
-    if (first) first.focus();
+    // Land keyboard users where the work is: the first form control when
+    // the dialog has a form (name field, person select, …), otherwise the
+    // first focusable element (e.g. the Close button on content dialogs).
+    const firstControl = dialog.querySelector("input, select, textarea");
+    const target = firstControl && !firstControl.disabled ? firstControl : first;
+    if (target) target.focus();
     function handleKey(e) {
       if (e.key === "Escape") {
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab") return;
@@ -41,7 +57,7 @@ export default function Modal({ open, title, onClose, children, wide = false }) 
     }
     document.addEventListener("keydown", handleKey);
     return () => document.removeEventListener("keydown", handleKey);
-  }, [open, onClose]);
+  }, [open]);
 
   if (!open) return null;
 

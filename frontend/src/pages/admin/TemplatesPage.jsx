@@ -149,6 +149,10 @@ export default function TemplatesPage() {
   // previous month; from day 8 it is the current month.
   const [customPeriod, setCustomPeriod] = useState(() => allowedTemplatePeriod());
   const [weightError, setWeightError] = useState(null);
+  // Backend/submit errors other than the weight total (shown inline above
+  // Submit, alongside the toast) so a failed submit says which field failed
+  // and keeps the typed values.
+  const [formError, setFormError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
 
   // ── Inline rebalancer: tracks per-template weight overrides ──
@@ -242,16 +246,29 @@ export default function TemplatesPage() {
     setFilterDept("");
   }
 
-  // Sum of weights using admin's in-form adjustments (falls back to template.weight).
-  const effectiveExistingSum = useMemo(() => {
+  // Create-time budget (what the backend enforces): the employee's custom
+  // template weights AS SAVED — never the in-form rebalancer adjustments.
+  // The backend guard sums the target period's submission snapshots, and a
+  // template-weight edit only affects FUTURE submissions, so an adjustment
+  // never frees room for THIS create. Crediting adjustments here previously
+  // showed 60 + 30 = 90 while the backend enforced 90 + 30 = 120 and
+  // rejected the create — and the error text sent the user to the
+  // rebalancer, which cannot help this period.
+  const existingSum = useMemo(() => {
+    return existingEmployeeKpis.reduce((sum, t) => sum + Number(t.weight), 0);
+  }, [existingEmployeeKpis]);
+
+  // Future-months sum after the in-form rebalancer edits (rebalancer
+  // footer only — the rebalancer changes future months, not this create).
+  const adjustedExistingSum = useMemo(() => {
     return existingEmployeeKpis.reduce((sum, t) => {
       const adj = adjustedWeights[t.id];
       return sum + (adj !== undefined ? Number(adj) || 0 : Number(t.weight));
     }, 0);
   }, [existingEmployeeKpis, adjustedWeights]);
 
-  // Live projected total = existing (maybe adjusted) + new KPI weight.
-  const projectedTotal = effectiveExistingSum + (Number(customWeight) || 0);
+  // Live projected total = existing (as saved) + new KPI weight.
+  const projectedTotal = existingSum + (Number(customWeight) || 0);
 
   // Which existing templates have been changed from their current weight?
   const changedTemplates = useMemo(() => {
@@ -268,6 +285,7 @@ export default function TemplatesPage() {
     setCustomWeight("");
     setCustomRecurring(true);
     setWeightError(null);
+    setFormError(null);
     setAdjustedWeights({});
   }
 
@@ -276,13 +294,21 @@ export default function TemplatesPage() {
 
     // Block submission only if total would EXCEED 100% — under-allocation is valid.
     if (projectedTotal > 100) {
+      // The rebalancer below only changes FUTURE months, so it cannot free
+      // room for this create — the only fix here is a smaller new weight.
+      // (The "Use X%" button fills the exact remaining budget.)
+      const remaining = 100 - existingSum;
       setWeightError(
-        `Weight total would be ${projectedTotal.toFixed(1)}% — the combined total must not exceed 100%. ` +
-        `Use the rebalancer below to reduce existing KPI weights.`
+        remaining > 0
+          ? `Weight total would be ${projectedTotal.toFixed(1)}% — the combined total must not exceed 100%. ` +
+            `Lower the new weight to ${remaining.toFixed(1)}% or less.`
+          : `Weight total would be ${projectedTotal.toFixed(1)}% — this person is already at 100% for this period, so no new KPI fits this month. ` +
+            `Use the rebalancer below to free room for future months.`
       );
       return;
     }
     setWeightError(null);
+    setFormError(null);
     setSubmitting(true);
 
     try {
@@ -316,15 +342,18 @@ export default function TemplatesPage() {
       setShowAddCustom(false);
       load();
     } catch (err) {
+      setFormError(getErrorMessage(err));
       toast.error(getErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
   }
 
-  // Suggest the exact weight needed to fill remaining budget (100 - existing sum).
-  function suggestRebalancedWeight() {
-    const needed = 100 - effectiveExistingSum;
+  // Fill the new weight with the exact remaining budget for this create
+  // (100 - existing sum, as saved). The rebalancer cannot change this
+  // number — it only affects future months.
+  function suggestRemainingWeight() {
+    const needed = 100 - existingSum;
     if (needed > 0) {
       setCustomWeight(String(Math.round(needed * 10) / 10));
       setWeightError(null);
@@ -332,15 +361,19 @@ export default function TemplatesPage() {
   }
 
 
-  // Update a single existing template's in-form weight override.
+  // Update a single existing template's in-form weight override. The raw
+  // text is kept while typing — clamping happens on blur (clampWeight),
+  // never mid-keystroke, so typing "150" is not rewritten to "100" under
+  // the user's fingers.
   function handleAdjustWeight(templateId, value) {
-    setAdjustedWeights((prev) => ({ ...prev, [templateId]: clampWeight(value) }));
+    setAdjustedWeights((prev) => ({ ...prev, [templateId]: value }));
     setWeightError(null);
   }
 
-  // Weights can never exceed 100%: clamp at input time (the max attribute
-  // alone does not stop typing a bigger number) instead of failing at save.
-  // Empty stays empty so clearing the field still works.
+  // Weights can never exceed 100%. Clamp ONLY on blur (or when a suggested
+  // value is applied) — never while typing: clamping at input time rewrote
+  // "150" to "100" mid-keystroke, and "100.5" lost its ".5". Empty stays
+  // empty so clearing the field still works.
   function clampWeight(value) {
     if (value === "" || value === null || value === undefined) return value;
     return Number.isNaN(Number(value)) || Number(value) <= 100 ? value : "100";
@@ -649,85 +682,123 @@ export default function TemplatesPage() {
 
             <form onSubmit={handleCreateCustom} className="space-y-3">
               {/* Employee selector */}
-              <select
-                required
-                value={customEmployeeId}
-                onChange={(e) => {
-                  setCustomEmployeeId(e.target.value);
-                  setWeightError(null);
-                  setAdjustedWeights({});
-                }}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-              >
-                <option value="" disabled>
-                  {isDeptAdmin ? "Select employee…" : "Select person…"}
-                </option>
-                {data.team.map((member) => (
-                  <option key={member.id} value={member.id}>
-                    {member.name}
-                    {!isDeptAdmin && ` — ${member.role === "dept_admin" ? "Dept Admin" : "Employee"}`}
+              <div>
+                <label htmlFor="custom-person" className="mb-1 block text-xs font-semibold text-slate-600">
+                  {isDeptAdmin ? "Employee" : "Person"} <span className="text-red-500">*</span>
+                </label>
+                <select
+                  id="custom-person"
+                  required
+                  value={customEmployeeId}
+                  onChange={(e) => {
+                    setCustomEmployeeId(e.target.value);
+                    setWeightError(null);
+                    setFormError(null);
+                    setAdjustedWeights({});
+                  }}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                >
+                  <option value="" disabled>
+                    {isDeptAdmin ? "Select employee…" : "Select person…"}
                   </option>
-                ))}
-              </select>
+                  {data.team.map((member) => (
+                    <option key={member.id} value={member.id}>
+                      {member.name}
+                      {!isDeptAdmin && ` — ${member.role === "dept_admin" ? "Dept Admin" : "Employee"}`}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
               {/* Target period — only the period the M6 gate allows is offered:
                   previous month during days 1–7 (grace week), current month
                   from day 8. Anything else the backend rejects with a clear
                   message, shown in the error toast. */}
-              <div className="flex flex-wrap items-center gap-3">
-                <select
-                  value={`${customPeriod.year}-${customPeriod.period}`}
-                  onChange={(e) => {
-                    const [y, p] = e.target.value.split("|");
-                    setCustomPeriod({ year: Number(y), period: p, label: `${p} ${y}`, graceWeek: customPeriod.graceWeek });
-                  }}
-                  className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-                >
-                  <option value={`${customPeriod.year}|${customPeriod.period}`}>{customPeriod.label}</option>
-                </select>
-                <span className="text-xs text-slate-500">
-                  {customPeriod.graceWeek
-                    ? "Days 1–7 (grace week): new KPIs target the previous month. The current month opens on day 8."
-                    : "New KPIs target the current month. The previous month's grace window has closed."}
-                </span>
+              <div>
+                <label htmlFor="custom-period" className="mb-1 block text-xs font-semibold text-slate-600">
+                  Period
+                </label>
+                <div className="flex flex-wrap items-center gap-3">
+                  <select
+                    id="custom-period"
+                    value={`${customPeriod.year}|${customPeriod.period}`}
+                    onChange={(e) => {
+                      const [y, p] = e.target.value.split("|");
+                      setCustomPeriod({ year: Number(y), period: p, label: `${p} ${y}`, graceWeek: customPeriod.graceWeek });
+                    }}
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                  >
+                    <option value={`${customPeriod.year}|${customPeriod.period}`}>{customPeriod.label}</option>
+                  </select>
+                  <span className="text-xs text-slate-500">
+                    {customPeriod.graceWeek
+                      ? "Days 1–7 (grace week): new KPIs target the previous month. The current month opens on day 8."
+                      : "New KPIs target the current month. The previous month's grace window has closed."}
+                  </span>
+                </div>
               </div>
 
-              {/* New KPI name */}
-              <input
-                type="text"
-                required
-                placeholder="e.g. Q3 Product Launch Readiness"
-                value={customMetricName}
-                onChange={(e) => setCustomMetricName(e.target.value)}
-                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-              />
+              {/* New KPI name — a textarea, not a single-line input: metric
+                  names are long by the user's own rule, and a one-line field
+                  hid the typed name behind horizontal scrolling. */}
+              <div>
+                <label htmlFor="custom-metric-name" className="mb-1 block text-xs font-semibold text-slate-600">
+                  Metric name <span className="text-red-500">*</span>
+                </label>
+                <textarea
+                  id="custom-metric-name"
+                  rows={3}
+                  required
+                  placeholder="e.g. Q3 Product Launch Readiness"
+                  value={customMetricName}
+                  onChange={(e) => setCustomMetricName(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition resize-y"
+                />
+                <p className="mt-1 text-[11px] text-slate-400">Long names are fine — enter the full metric name as-is.</p>
+              </div>
 
               {/* Target + Weight */}
               <div className="grid grid-cols-2 gap-3">
-                <input
-                  type="number"
-                  step="0.1"
-                  required
-                  placeholder="Target"
-                  value={customTarget}
-                  onChange={(e) => setCustomTarget(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-                />
-                <input
-                  type="number"
-                  step="0.1"
-                  min="0.1"
-                  max="100"
-                  required
-                  placeholder="Weight %"
-                  value={customWeight}
-                  onChange={(e) => { setCustomWeight(clampWeight(e.target.value)); setWeightError(null); }}
-                  className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 transition ${
-                    weightError
-                      ? "border-red-400 focus:ring-red-400"
-                      : "border-slate-300 focus:ring-brand-500 focus:border-brand-500"
-                  }`}
-                />
+                <div>
+                  <label htmlFor="custom-target" className="mb-1 block text-xs font-semibold text-slate-600">
+                    Target <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    id="custom-target"
+                    type="number"
+                    step="0.1"
+                    inputMode="decimal"
+                    required
+                    placeholder="Target"
+                    value={customTarget}
+                    onChange={(e) => setCustomTarget(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="custom-weight" className="mb-1 block text-xs font-semibold text-slate-600">
+                    Weight % <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    id="custom-weight"
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    max="100"
+                    inputMode="decimal"
+                    required
+                    placeholder="Weight %"
+                    value={customWeight}
+                    onChange={(e) => { setCustomWeight(e.target.value); setWeightError(null); }}
+                    onBlur={(e) => setCustomWeight(clampWeight(e.target.value))}
+                    aria-invalid={!!weightError}
+                    className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 transition ${
+                      weightError
+                        ? "border-red-400 focus:ring-red-400"
+                        : "border-slate-300 focus:ring-brand-500 focus:border-brand-500"
+                    }`}
+                  />
+                </div>
               </div>
 
               {/* ── Weight sum indicator ── */}
@@ -738,7 +809,7 @@ export default function TemplatesPage() {
                     : "bg-emerald-50 text-emerald-700 border border-emerald-200"
                 }`}>
                   <span>
-                    Existing: <strong>{effectiveExistingSum.toFixed(1)}%</strong>
+                    Existing: <strong>{existingSum.toFixed(1)}%</strong>
                     {customWeight ? (
                       <>
                         {" + New: "}
@@ -747,16 +818,16 @@ export default function TemplatesPage() {
                         <strong>{projectedTotal.toFixed(1)}% / 100%</strong>
                       </>
                     ) : (
-                      <> · <strong>{(100 - effectiveExistingSum).toFixed(1)}%</strong> remaining</>
+                      <> · <strong>{(100 - existingSum).toFixed(1)}%</strong> remaining</>
                     )}
                   </span>
-                  {Math.round(projectedTotal * 10) !== 1000 && (100 - effectiveExistingSum) > 0 && (
+                  {Math.round(projectedTotal * 10) !== 1000 && (100 - existingSum) > 0 && (
                     <button
                       type="button"
-                      onClick={suggestRebalancedWeight}
+                      onClick={suggestRemainingWeight}
                       className="shrink-0 underline underline-offset-2 text-xs font-semibold hover:opacity-75 transition"
                     >
-                      Use {(100 - effectiveExistingSum).toFixed(1)}%
+                      Use {(100 - existingSum).toFixed(1)}%
                     </button>
                   )}
                 </div>
@@ -807,14 +878,16 @@ export default function TemplatesPage() {
                             </span>
                           )}
 
-                          {/* Weight input */}
+                          {/* Weight input — raw while typing, clamped on blur */}
                           <input
                             type="number"
                             step="0.1"
                             min="0.1"
                             max="100"
+                            inputMode="decimal"
                             value={currentVal}
                             onChange={(e) => handleAdjustWeight(t.id, e.target.value)}
+                            onBlur={(e) => handleAdjustWeight(t.id, clampWeight(e.target.value))}
                             className={`w-16 rounded border px-2 py-1 text-xs text-right tabular-nums focus:outline-none focus:ring-1 transition ${
                               isEdited
                                 ? "border-blue-300 focus:ring-blue-400 bg-blue-50"
@@ -845,12 +918,12 @@ export default function TemplatesPage() {
 
                   {/* Running total bar inside the rebalancer */}
                   <div className={`px-3 py-1.5 border-t flex items-center justify-between text-xs font-medium ${
-                    Math.round(effectiveExistingSum * 10) + Math.round((Number(customWeight) || 0) * 10) === 1000
+                    Math.round(existingSum * 10) + Math.round((Number(customWeight) || 0) * 10) === 1000
                       ? "bg-emerald-50 text-emerald-700 border-emerald-200"
                       : "bg-slate-50 text-slate-500 border-slate-200"
                   }`}>
                     <span>
-                      Existing subtotal: <strong>{effectiveExistingSum.toFixed(1)}%</strong>
+                      Existing subtotal: <strong>{adjustedExistingSum.toFixed(1)}%</strong>
                       {changedTemplates.length > 0 && (
                         <span className="ml-1 text-blue-500">({changedTemplates.length} pending save)</span>
                       )}
@@ -872,6 +945,13 @@ export default function TemplatesPage() {
               {weightError && (
                 <p className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
                   {weightError}
+                </p>
+              )}
+
+              {/* Submit error (e.g. backend validation) */}
+              {formError && (
+                <p role="alert" className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+                  {formError}
                 </p>
               )}
 

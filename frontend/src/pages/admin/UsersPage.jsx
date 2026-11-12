@@ -41,9 +41,15 @@ export default function UsersPage() {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [role, setRole] = useState("employee");
   const [departmentId, setDepartmentId] = useState("");
   const [position, setPosition] = useState("");
+  // Inline form errors (shown next to the field / above Submit, alongside
+  // the toast): a failed submit must not leave the user guessing which
+  // field is wrong, and typed values are kept so nothing has to be retyped.
+  const [formError, setFormError] = useState(null);
+  const [deptError, setDeptError] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
   const [pendingToggle, setPendingToggle] = useState(null);
@@ -75,8 +81,27 @@ export default function UsersPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(load, []);
 
+  // Close the Add dialog and clear its transient state (errors, password
+  // visibility) so a reopened form starts clean — typed values are kept
+  // only across a failed submit, never across closes.
+  function closeAdd() {
+    setShowAdd(false);
+    setFormError(null);
+    setDeptError(null);
+    setShowPassword(false);
+  }
+
   async function handleCreate(e) {
     e.preventDefault();
+    setFormError(null);
+    setDeptError(null);
+    // Client-side pre-check for the backend rule (dept admins must belong
+    // to a department): fail inline, without a round trip, next to the
+    // department field.
+    if (!isDeptAdmin && role === "dept_admin" && !departmentId) {
+      setDeptError("Department Admins must belong to a department.");
+      return;
+    }
     try {
       await createUser({
         name: name.trim(),
@@ -90,10 +115,12 @@ export default function UsersPage() {
       setEmail("");
       setPassword("");
       setPosition("");
+      setShowPassword(false);
       toast.success(isDeptAdmin ? "Employee added." : "User created.");
-      setShowAdd(false);
+      closeAdd();
       load();
     } catch (err) {
+      setFormError(getErrorMessage(err));
       toast.error(getErrorMessage(err));
     }
   }
@@ -498,40 +525,93 @@ export default function UsersPage() {
       <Modal
         open={showAdd}
         title={isDeptAdmin ? "Add Employee" : "Add User"}
-        onClose={() => setShowAdd(false)}
+        onClose={closeAdd}
       >
           <form onSubmit={handleCreate} className="space-y-3">
-            <input
-              type="text"
-              required
-              placeholder="Full name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-            />
-            <input
-              type="email"
-              required
-              placeholder="Email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-            />
-            <input
-              type="password"
-              required
-              placeholder="Temporary password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-            />
-            <input
-              type="text"
-              placeholder="Position (e.g. Accountant, HR Manager)"
-              value={position}
-              onChange={(e) => setPosition(e.target.value)}
-              className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-            />
+            <div>
+              <label htmlFor="add-user-name" className="mb-1 block text-xs font-semibold text-slate-600">
+                Full name <span className="text-red-500">*</span>
+              </label>
+              <input
+                id="add-user-name"
+                type="text"
+                required
+                autoComplete="name"
+                autoCapitalize="words"
+                placeholder="e.g. Aung Khant"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+              />
+            </div>
+            <div>
+              <label htmlFor="add-user-email" className="mb-1 block text-xs font-semibold text-slate-600">
+                Email <span className="text-red-500">*</span>
+              </label>
+              <input
+                id="add-user-email"
+                type="email"
+                required
+                autoComplete="email"
+                autoCapitalize="none"
+                inputMode="email"
+                spellCheck={false}
+                placeholder="e.g. aung@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+              />
+            </div>
+            <div>
+              <label htmlFor="add-user-password" className="mb-1 block text-xs font-semibold text-slate-600">
+                Temporary password <span className="text-red-500">*</span>
+              </label>
+              <div className="relative">
+                <input
+                  id="add-user-password"
+                  type={showPassword ? "text" : "password"}
+                  required
+                  autoComplete="new-password"
+                  placeholder="At least 8 characters"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 pr-11 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  aria-label={showPassword ? "Hide password" : "Show password"}
+                  title={showPassword ? "Hide password" : "Show password"}
+                  className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-400 hover:text-slate-600 transition"
+                >
+                  {showPassword ? (
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M3.98 8.223A10.477 10.477 0 0 0 1.934 12C3.226 16.338 7.244 19.5 12 19.5c.993 0 1.953-.138 2.863-.395M6.228 6.228A10.451 10.451 0 0 1 12 4.5c4.756 0 8.773 3.162 10.065 7.498a10.522 10.522 0 0 1-4.293 5.774M6.228 6.228 3 3m3.228 3.228 3.65 3.65m7.894 7.894L21 21m-3.228-3.228-3.65-3.65m0 0a3 3 0 1 0-4.243-4.243m4.242 4.242L9.88 9.88" />
+                    </svg>
+                  ) : (
+                    <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                    </svg>
+                  )}
+                </button>
+              </div>
+            </div>
+            <div>
+              <label htmlFor="add-user-position" className="mb-1 block text-xs font-semibold text-slate-600">
+                Position <span className="font-normal text-slate-400">(optional)</span>
+              </label>
+              <input
+                id="add-user-position"
+                type="text"
+                autoComplete="organization-title"
+                autoCapitalize="words"
+                placeholder="e.g. Accountant, HR Manager"
+                value={position}
+                onChange={(e) => setPosition(e.target.value)}
+                className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+              />
+            </div>
 
             {isDeptAdmin ? (
               <p className="text-xs text-slate-500 bg-slate-50 rounded-lg px-3 py-2">
@@ -540,32 +620,54 @@ export default function UsersPage() {
               </p>
             ) : (
               <>
-                <select
-                  value={role}
-                  onChange={(e) => setRole(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-                >
-                  {data.roles.map((r) => (
-                    <option key={r} value={r}>
-                      {titleCase(r)}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={departmentId}
-                  onChange={(e) => setDepartmentId(e.target.value)}
-                  required={role === "dept_admin"}
-                  title={role === "dept_admin" ? "Department Admins must belong to a department" : undefined}
-                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
-                >
-                  <option value="">No department (Tenant Admin)</option>
-                  {data.departments.map((d) => (
-                    <option key={d.id} value={d.id}>
-                      {d.name}
-                    </option>
-                  ))}
-                </select>
+                <div>
+                  <label htmlFor="add-user-role" className="mb-1 block text-xs font-semibold text-slate-600">
+                    Role
+                  </label>
+                  <select
+                    id="add-user-role"
+                    value={role}
+                    onChange={(e) => { setRole(e.target.value); setDeptError(null); }}
+                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                  >
+                    {data.roles.map((r) => (
+                      <option key={r} value={r}>
+                        {titleCase(r)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="add-user-department" className="mb-1 block text-xs font-semibold text-slate-600">
+                    Department {role === "dept_admin" && <span className="text-red-500">*</span>}
+                  </label>
+                  <select
+                    id="add-user-department"
+                    value={departmentId}
+                    onChange={(e) => { setDepartmentId(e.target.value); setDeptError(null); }}
+                    title={role === "dept_admin" ? "Department Admins must belong to a department" : undefined}
+                    aria-invalid={!!deptError}
+                    aria-describedby={deptError ? "add-user-department-error" : undefined}
+                    className={`w-full rounded-lg border px-3 py-2 text-sm focus:outline-none focus:ring-2 transition ${deptError ? "border-red-400 focus:ring-red-400" : "border-slate-300 focus:ring-brand-500 focus:border-brand-500"}`}
+                  >
+                    <option value="">No department (Tenant Admin)</option>
+                    {data.departments.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                      </option>
+                    ))}
+                  </select>
+                  {deptError && (
+                    <p id="add-user-department-error" className="mt-1 text-xs text-red-600">{deptError}</p>
+                  )}
+                </div>
               </>
+            )}
+
+            {formError && (
+              <p role="alert" className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-xs text-red-700">
+                {formError}
+              </p>
             )}
 
             <button

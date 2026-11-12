@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from "react";
+import { MONTHS } from "../../utils/months";
 
 const STATUS_COLOR = {
   good: "#10b981", // emerald-500
@@ -23,10 +24,10 @@ function toTierKey(status) {
   return null;
 }
 
-const MONTH_ABBR = {
-  January: "Jan", February: "Feb", March: "Mar", April: "Apr", May: "May", June: "Jun",
-  July: "Jul", August: "Aug", September: "Sep", October: "Oct", November: "Nov", December: "Dec",
-};
+// Abbreviations derived from the one shared month list (utils/months):
+// every full name abbreviates to its first three letters, so this map
+// can never drift from MONTHS. Do not hand-maintain a second list.
+const MONTH_ABBR = Object.fromEntries(MONTHS.map((m) => [m, m.slice(0, 3)]));
 
 const WIDTH = 760;
 const HEIGHT = 280;

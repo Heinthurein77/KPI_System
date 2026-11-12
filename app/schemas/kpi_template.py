@@ -1,15 +1,14 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.months import MONTH_NAMES
 from app.schemas.user import DepartmentOut, UserSummaryOut
 
 
 # Periods are calendar month names everywhere in the app (the routers also
 # enforce this with manual 422 checks). Validate at the schema boundary so
-# direct API callers cannot persist corrupt year/period rows.
-VALID_PERIODS = (
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-)
+# direct API callers cannot persist corrupt year/period rows. One shared
+# copy (app.core.months) — never a second local list.
+VALID_PERIODS = tuple(MONTH_NAMES)
 MIN_YEAR, MAX_YEAR = 2000, 2100
 
 

@@ -12,15 +12,10 @@ from app.models.department import Department
 from app.models.kpi_submission import KPISubmission, KPIStatus
 from app.models.kpi_template import KPITemplate
 from app.models.tenant import Tenant, TenantStatus
+from app.core.months import MONTH_NAMES
 from app.models.user import User, UserRole
 
 DEFAULT_PASSWORD = "Password123!"
-
-
-MONTH_NAMES = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-]
 
 
 def open_fillable_period(today=None) -> tuple[int, str]:

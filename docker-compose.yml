@@ -30,10 +30,6 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-    # Uploaded files live here. Without this named volume the
-    # files would live in the container filesystem and vanish on rebuild.
-    volumes:
-      - kpi_uploads:/app/uploads
 
   caddy:
     image: caddy:2-alpine
@@ -64,4 +60,3 @@ services:
 volumes:
   caddy_data:
   caddy_config:
-  kpi_uploads:

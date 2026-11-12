@@ -6,6 +6,7 @@ from io import BytesIO
 import pytest
 from openpyxl import Workbook
 
+from app.core.months import MONTH_NAMES
 from app.core.security import verify_password
 from app.models.kpi_submission import KPISubmission
 from app.models.kpi_template import KPITemplate
@@ -16,11 +17,6 @@ from app.tests.factories import (
     make_department,
     make_tenant,
     make_user,
-)
-
-MONTH_NAMES = (
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
 )
 
 

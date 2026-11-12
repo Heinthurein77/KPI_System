@@ -8,6 +8,7 @@ import PageLoading from "../ui/PageLoading";
 import { STYLES as STATUS_STYLES, LABELS as STATUS_LABELS } from "../ui/statusMeta";
 import { employeeSaveScores, employeeSubmit } from "../../api/kpi";
 import { getErrorMessage } from "../../api/errors";
+import { MONTHS } from "../../utils/months";
 
 // How often every dashboard re-checks its current period in the
 // background. Shared cadence with the admin boards in DashboardPage.jsx:
@@ -262,11 +263,9 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   // day 7 — but nothing on this empty view says so. Offer a one-click jump
   // to it instead of stranding the employee on the empty current month.
   // data.months comes from the backend (full English month names).
-  const MONTH_FALLBACK = [
-    "January", "February", "March", "April", "May", "June",
-    "July", "August", "September", "October", "November", "December",
-  ];
-  const monthList = data.months && data.months.length > 0 ? data.months : MONTH_FALLBACK;
+  // Fall back to the one shared frontend copy (utils/months) if the
+  // backend ever omits it — never a second local copy of the list.
+  const monthList = data.months && data.months.length > 0 ? data.months : MONTHS;
   const activeIdx = monthList.indexOf(data.active_period);
   const prevIdx = activeIdx > 0 ? activeIdx - 1 : 11;
   const gracePrevYear = activeIdx === 0 ? data.active_year - 1 : data.active_year;

@@ -1,3 +1,8 @@
+// MAINTAINABILITY RULE (PM review 2026-11-12, finding m3): this file is
+// a god file (1,417 lines at HEAD a2acb06). Do NOT grow it further —
+// split on next touch: the next feature that belongs here goes in a new
+// module/component imported from this page instead of another block
+// inline. Behaviour must stay identical when that split happens.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import AppShell from "../../components/layout/AppShell";
 import PageLoading from "../../components/ui/PageLoading";

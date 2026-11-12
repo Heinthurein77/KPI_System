@@ -7,7 +7,8 @@
 #
 #   ./scripts/backup-db.sh
 #
-# Suggested cron (daily 2 AM) — `crontab -e` on the server:
+# Required cron (daily 2 AM) — `crontab -e` on the server (N2, 2026-11-12):
+# this is one of the three required cron jobs; see README "Server cron jobs".
 #
 #   0 2 * * * cd ~/kpi-app && ./scripts/backup-db.sh >> ./backups/backup.log 2>&1
 #
@@ -20,9 +21,22 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.." # ~/kpi-app on the server
 
-DATABASE_URL=$(grep -E '^DATABASE_URL=' .env | cut -d= -f2- | tr -d '"' | tr -d "'")
+# N1 (2026-11-12): same START / SUCCESS / FAILURE contract as the other
+# cron jobs (app/jobs/send_deadline_reminders.py, app/jobs/prune_audit_logs.py
+# — M20, 2026-11-10), so scripts/check-cron-logs.sh can watch this job too.
+# Lines are timestamped "YYYY-MM-DD HH:MM:SS" to match the Python jobs'
+# logging format, which is what the watcher greps for ("job starting",
+# "job succeeded", "job FAILED"). The ERR trap covers any unexpected
+# failure (e.g. pg_dump failing); known checks print FAILURE explicitly.
+log_line() { echo "$(date '+%F %T') $1"; }
+trap 'log_line "ERROR Database backup job FAILED."' ERR
+log_line "INFO Database backup job starting."
+
+DATABASE_URL=$(grep -E '^DATABASE_URL=' .env 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'" || true)
+# (The `|| true` matters: with pipefail a missing .env would otherwise
+# trip the ERR trap above before this check can print its FAILURE line.)
 if [ -z "${DATABASE_URL:-}" ]; then
-  echo "backup-db: DATABASE_URL not found in .env" >&2
+  log_line "ERROR Database backup job FAILED: DATABASE_URL not found in .env" >&2
   exit 1
 fi
 # pg_dump wants a plain postgres:// URL, not SQLAlchemy's postgresql+psycopg://
@@ -41,4 +55,4 @@ docker run --rm \
 # Keep the newest 14 backups (~2 weeks at one per day).
 ls -t "$BACKUP_DIR"/kpi-backup-*.dump 2>/dev/null | tail -n +15 | xargs -r rm --
 
-echo "backup-db: wrote $FILE ($(du -h "$FILE" | cut -f1))"
+log_line "INFO Database backup job succeeded: wrote $FILE ($(du -h "$FILE" | cut -f1))"

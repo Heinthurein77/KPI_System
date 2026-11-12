@@ -89,7 +89,10 @@ commit real credentials), fill in `SECRET_KEY`, `DATABASE_URL` and `DOMAIN`, poi
 domain's DNS A record at the server, then:
 
 ```bash
-docker compose up -d --build
+# Canonical deploy command (N5, 2026-11-12): the VITE_APP_COMMIT=… prefix
+# is what makes the UI footer show the real commit instead of `dev`
+# (see "Production" step 3 and CHANGELOG.md "Release process").
+VITE_APP_COMMIT=$(git rev-parse --short HEAD) docker compose up -d --build
 docker compose exec web python -m app.seed
 ```
 
@@ -120,7 +123,12 @@ external on Neon.tech. There is deliberately no Postgres service in
    ```
    The `VITE_APP_COMMIT=…` prefix is what makes the UI footer show the real
    commit instead of `dev` — without it the Docker build has no `.git` to
-   read the commit from (see `Dockerfile`, M3).
+   read the commit from (see `Dockerfile`, M3). This is the one canonical
+   deploy command (N5, 2026-11-12): the same command is printed in
+   `CHANGELOG.md` and `docs/incident-runbook.md` — do not invent a variant.
+   Release cadence: one release train per day — batch the day's commits,
+   verify once, push once, deploy once (see `CHANGELOG.md`, "Release
+   process", N6).
 4. Run the seed script once to bootstrap the Super Admin account (required — there is no other way to create the first login):
    ```bash
    docker compose exec web python -m app.seed
@@ -137,7 +145,7 @@ A standalone module inside the KPI system (same login, no KPI linkage, no KPI wr
 
 ## Grace period & rollover (7-day grace + day-8 rollover)
 
-`SUBMISSION_GRACE_DAYS = 7` (`app/core/config.py`). A past month stays fillable until 7 days after month-end (drafts only — a rejected submission may still be corrected and resubmitted after grace, since the delay was the reviewer's). The next month's whole KPI set only starts on day 8 (`recurring_rollover_open`, `app/services/submission_grace.py`); days 1–7 belong to closing the previous month. During days 1–7, tenant admins and dept admins (own department only) may add the previous month's KPI; the current month before day 8 and past-grace months are blocked. The dashboard returns `rollover_on` and shows a grace banner; "no metrics" before day 8 is normal, not an error.
+`SUBMISSION_GRACE_DAYS = 7` (`app/core/config.py`). A past month stays fillable until 7 days after month-end (drafts only — a rejected submission may still be corrected and resubmitted after grace, since the delay was the reviewer's). The next month's whole KPI set only starts on day 8 (`recurring_rollover_open`, `app/services/submission_grace.py`); days 1–7 belong to closing the previous month. During days 1–7, tenant admins and dept admins (own department only) may add the previous month's KPI; the current month before day 8 and past-grace months are blocked. The dashboard returns `rollover_on` and shows a grace banner; "no metrics" before day 8 is normal, not an error. The board shows one month at a time — use the Month selector + Apply to see another month. A KPI created for a future month appears in that month right away; the recurring set for that month only materialises from day 8.
 
 ## One-off vs recurring KPIs
 
@@ -155,12 +163,17 @@ Every custom KPI is either **Repeat every month** (recurring, the default) or **
 
 ## Server cron jobs (required)
 
-On the production server (`~/kpi-app`), these two jobs must exist in the
-server user's crontab. Install with `crontab -e` — **do not paste a cron
+On the production server (`~/kpi-app`), these three jobs must exist in the
+server user's crontab — all three are required, including the DB backup
+(N2, 2026-11-12: the backup is the highest-stakes job, so it is not
+"suggested"). Install with `crontab -e` — **do not paste a cron
 line directly into the shell** (the shell will try to run it as a
 command and fail with `0: command not found`). Verify with `crontab -l`.
-Both are idempotent, so running them more often than scheduled is
-safe; missing them silently stops reminders and lets audit logs grow.
+All are idempotent, so running them more often than scheduled is
+safe; missing them silently stops reminders, lets audit logs grow, and
+leaves no backups to restore from. `scripts/check-cron-logs.sh` watches
+all three (see `docs/monitoring.md` §2); the full backup/restore story is
+in `docs/backup-and-restore.md`.
 
 ```cron
 # KPI deadline reminders — daily (the job itself only sends inside the
@@ -172,4 +185,7 @@ safe; missing them silently stops reminders and lets audit logs grow.
 
 # Audit-log pruning — monthly (keeps 180 days; see app/jobs/prune_audit_logs.py).
 0 3 1 * * cd ~/kpi-app && docker compose exec -T web python -m app.jobs.prune_audit_logs >> ~/kpi-app/prune-audit.log 2>&1
+
+# Database backup — daily 02:00 (see scripts/backup-db.sh).
+0 2 * * * cd ~/kpi-app && ./scripts/backup-db.sh >> ./backups/backup.log 2>&1
 ```

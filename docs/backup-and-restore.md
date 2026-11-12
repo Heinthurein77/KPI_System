@@ -11,7 +11,10 @@ until the restore drill in §3 has actually been done and its time recorded.
 - **Database:** `scripts/backup-db.sh` — `pg_dump` of the Neon database
   through a throwaway `postgres:16-alpine` container, into
   `~/kpi-app/backups/kpi-backup-<date>_<time>.dump`, keeps the newest 14
-  (about 2 weeks at one per day). Suggested cron: daily 02:00.
+  (about 2 weeks at one per day). Required cron: daily 02:00. The script
+  emits timestamped START / SUCCESS / FAILURE lines into
+  `backups/backup.log`, and `scripts/check-cron-logs.sh` watches it
+  alongside the other two jobs (N1, 2026-11-12).
 - **Neon itself:** Free-tier point-in-time recovery ("Instant restore")
   covers only the **last 6 hours**. Anything older needs the nightly dump.
 
@@ -32,8 +35,9 @@ crontab -l
 
 All three jobs must be listed. Install any missing one with `crontab -e`
 — **do not paste a cron line directly into the shell** (it will try to run
-it as a command and fail). The two reminder/prune jobs are required by the
-README; the backup job is what makes recovery possible.
+it as a command and fail). All three are required (N2, 2026-11-12) — the
+backup job included: it is the highest-stakes job, and without it there
+is nothing to restore from.
 
 ```cron
 # KPI deadline reminders — daily 08:00

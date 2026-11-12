@@ -61,16 +61,19 @@ pricing page before signing up, they change):
 
 ## 2. Cron-log watch — `scripts/check-cron-logs.sh`
 
-The two required cron jobs log to `~/kpi-app/deadline-reminders.log` and
-`~/kpi-app/prune-audit.log` on the server, with distinct timestamped
-START / SUCCESS / FAILURE lines (M20 fix, 2026-11-10). The script prints
-one summary line per job and exits non-zero if any FAILURE line is found,
-or if a log is missing/empty (job never ran / cron never installed):
+The three required cron jobs log to `~/kpi-app/deadline-reminders.log`,
+`~/kpi-app/prune-audit.log`, and `~/kpi-app/backups/backup.log` on the
+server, with distinct timestamped START / SUCCESS / FAILURE lines (M20
+fix, 2026-11-10; the backup script got the same contract with N1,
+2026-11-12). The script prints one summary line per job and exits
+non-zero if any FAILURE line is found, or if a log is missing/empty (job
+never ran / cron never installed):
 
 ```text
 $ ./scripts/check-cron-logs.sh
 deadline-reminders: OK — 14 run(s), 14 succeeded, 0 failed (last run 2026-11-12 08:00:01)
 prune-audit: OK — 1 run(s), 1 succeeded, 0 failed (last run 2026-11-01 03:00:02)
+db-backup: OK — 14 run(s), 14 succeeded, 0 failed (last run 2026-11-12 02:00:01)
 ```
 
 Suggested daily cron on the server (after the 08:00 reminders run):
@@ -85,18 +88,22 @@ traceback is in the job's log file. A FAILURE on `deadline-reminders`
 means reminders did not go out that day — re-run the job by hand after
 fixing the cause (`docker compose exec -T web python -m
 app.jobs.send_deadline_reminders`); it is idempotent, so a re-run does not
-double-send.
+double-send. A FAILURE on `db-backup` means the nightly dump did not run
+— fix the cause (usually `DATABASE_URL` changed or Docker cannot reach
+Neon) and re-run `./scripts/backup-db.sh` by hand; a failed backup is
+invisible until a restore is needed, so do not leave it for later (see
+`docs/backup-and-restore.md`).
 
 ## 3. What is NOT monitored (yet)
 
 - Neon free-tier usage (1 GB storage, 100 CU-hours/month, 6 h PITR) —
   no usage check exists; see finding m7. Check the Neon console monthly.
-- The backup script (`scripts/backup-db.sh`) has no FAILURE marker in its
-  log yet — a failed backup only shows as a missing new file in the
-  backup directory. Worth adding to the log-watch when the backup cron is
-  confirmed running (M5). (There is no uploads backup script anymore:
-  the `kpi_uploads` volume was removed with finding m1 — nothing writes
-  to `/app/uploads` — so there is nothing to back up there.)
+- The DB backup job IS watched now (N1, 2026-11-12): `scripts/backup-db.sh`
+  emits START / SUCCESS / FAILURE lines and `scripts/check-cron-logs.sh`
+  covers `db-backup` alongside the other two jobs. (There is no uploads
+  backup script anymore: the `kpi_uploads` volume was removed with
+  finding m1 — nothing writes to `/app/uploads` — so there is nothing
+  to back up there.)
 - Application errors beyond the cron jobs: container logs are `json-file`
   rotation (10 MB × 3) via `docker compose logs web`. No Sentry or
   Prometheus is wired up.

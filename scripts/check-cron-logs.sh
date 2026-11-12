@@ -2,8 +2,8 @@
 # Daily cron-log watch (M4, 2026-11-12 PM review).
 #
 # The cron jobs already emit distinct timestamped START / SUCCESS / FAILURE
-# lines into their logs (M20 fix, 2026-11-10). Nobody reads those logs unless
-# someone logs in and looks — this script is the glance: one summary line per
+# lines into their logs (M20 fix, 2026-11-10; backup-db.sh got the same
+# contract with N1, 2026-11-12). Nobody reads those logs unless someone logs in and looks — this script is the glance: one summary line per
 # job, exit code 1 if anything failed (or a log is missing, which means the
 # job has never run / the cron was never installed).
 #
@@ -23,9 +23,12 @@ set -uo pipefail
 
 LOG_DIR="${1:-${KPI_APP_DIR:-$HOME/kpi-app}}"
 
-# job-name -> log file, in the order they are reported.
+# job-name -> log file, in the order they are reported. All three required
+# cron jobs (N1/N2, 2026-11-12) — the DB backup log lives under backups/
+# because the backup cron redirects there (see scripts/backup-db.sh).
 JOBS="deadline-reminders:$LOG_DIR/deadline-reminders.log
-prune-audit:$LOG_DIR/prune-audit.log"
+prune-audit:$LOG_DIR/prune-audit.log
+db-backup:$LOG_DIR/backups/backup.log"
 
 overall=0
 

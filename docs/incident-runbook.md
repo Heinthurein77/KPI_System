@@ -33,8 +33,10 @@ docker compose logs --tail 100 caddy    # container name: kpi-caddy
 ```bash
 # 3. Restart the stack (safe: restart: always, no data loss)
 docker compose restart web
-# If that does not help, rebuild from the current checkout:
-docker compose up -d --build
+# If that does not help, rebuild from the current checkout — use the one
+# canonical deploy command (N5, 2026-11-12; same as README + CHANGELOG):
+# a plain `docker compose up -d --build` would bake `dev` into the footer.
+VITE_APP_COMMIT=$(git rev-parse --short HEAD) docker compose up -d --build
 ```
 
 ## 2. Bad deploy — roll back to the previous commit
@@ -43,7 +45,10 @@ docker compose up -d --build
 cd ~/kpi-app
 git log --oneline -5            # find the last known-good commit
 git checkout <previous-commit>  # e.g. the commit before the bad one
-docker compose up -d --build   # migrations run automatically on startup
+# Canonical deploy command (N5, 2026-11-12; same as README + CHANGELOG):
+# the prefix passes the rolled-back commit through, so the footer shows
+# the commit that is actually live instead of `dev`.
+VITE_APP_COMMIT=$(git rev-parse --short HEAD) docker compose up -d --build   # migrations run automatically on startup
 curl -s http://localhost:8000/readyz   # expect 200 (or {"status":"ok"})
 ```
 
@@ -69,6 +74,7 @@ commit is fixed or reverted in the repo.
 crontab -l                                  # all three jobs must be listed (see docs/backup-and-restore.md)
 tail -20 ~/kpi-app/deadline-reminders.log
 tail -20 ~/kpi-app/prune-audit.log
+tail -20 ~/kpi-app/backups/backup.log       # DB backup job (watched by scripts/check-cron-logs.sh)
 ls -lt ~/kpi-app/backups | head             # DB dumps, newest first
 ```
 

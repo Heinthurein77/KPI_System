@@ -14,17 +14,40 @@ an answer without asking in chat:
 2026-11-12 12:31 a2acb06 Hein Thu Rein  one-off/recurring + fast add-user
 ```
 
-The deploy itself records the version in the footer at build time:
+The deploy itself records the version in the footer at build time. This
+is the one canonical deploy command (N5, 2026-11-12) — the same command
+is printed in the README ("Production", step 3) and in
+`docs/incident-runbook.md` (§1–2). Do not use a variant: a plain
+`docker compose up -d --build` bakes `dev` into the footer, and a
+separate `docker compose build --build-arg …` step is the same deploy
+done in two commands.
 
 ```sh
-docker compose build --build-arg VITE_APP_COMMIT="$(git rev-parse --short HEAD)" web \
-  && docker compose up -d \
+cd ~/kpi-app && git pull && VITE_APP_COMMIT=$(git rev-parse --short HEAD) docker compose up -d --build \
   && printf '%s %s %s\n' "$(date '+%F %T')" "$(git rev-parse --short HEAD)" "$USER" \
        >> ~/kpi-app/DEPLOY_LOG.md
 ```
 
+## Release process — one release train per day (N6, 2026-11-12)
+
+Batch the day's commits, verify once, push once, deploy once.
+
+- **Batch:** the day's fixes land as local commits through the day; they
+  ship together in one push, not one push per fix.
+- **Verify once:** run the full backend suite (plus the frontend build,
+  and the e2e suite where the UI changed) against the batched commits
+  before pushing — one green run covers the whole train.
+- **Push once, deploy once:** one `git push`, then one deploy with the
+  canonical command above and one line in the deploy log. A second push
+  or deploy the same day means the train left early — the next batch
+  waits for the next day unless it is a production-down hotfix.
+
 ## [Unreleased]
 
+- Backup job watched: `scripts/backup-db.sh` now emits the same timestamped START / SUCCESS / FAILURE lines as the other cron jobs, and `scripts/check-cron-logs.sh` watches all three jobs (N1). New tests: `app/tests/test_check_cron_logs.py`.
+- One canonical cron list: all three jobs (deadline reminders 08:00 daily, audit prune monthly, DB backup daily 02:00) are required everywhere — README, `docs/backup-and-restore.md`, `docs/incident-runbook.md`, `docs/monitoring.md` (N2).
+- One canonical deploy command (env-prefix form) in README, CHANGELOG deploy log, and the incident runbook (N5).
+- Release process written down: one release train per day — batch the day's commits, verify once, push once, deploy once (N6).
 - CI gate: GitHub Actions runs backend pytest + `vite build` + `oxlint` on every push (M1).
 - Pre-deploy smoke test: `scripts/smoke-test.sh` boots the stack against a scratch DB and checks `/readyz` + `/login` (M2).
 - Release record: this CHANGELOG, commit hash + version in the UI footer, deploy-log format above (M3).

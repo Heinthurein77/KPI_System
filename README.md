@@ -8,8 +8,8 @@ separately-deployed React (Vite) single-page frontend.
 - **Backend:** FastAPI (Python 3.11+), APIRouter-based modular layout, JSON API only
 - **Frontend:** React (Vite, JavaScript) + Tailwind CSS, in `frontend/` — deployed independently
 - **Database:** SQLAlchemy ORM — SQLite locally, PostgreSQL (Neon.tech) in production, selected automatically via `DATABASE_URL`
-- **Auth:** Bearer-token session (signed JWT, sent via `Authorization` header, stored client-side), bcrypt password hashing, role-based access control
-- **Deployment:** Docker, Railway-ready (`railway.json` at repo root for the backend, `frontend/railway.json` for the frontend)
+- **Auth:** httpOnly cookie session (signed JWT in an `access_token` cookie, `Secure` flag on HTTPS), bcrypt password hashing, role-based access control, logout revocation via token version. The JWT is readable by JS nowhere — only the `tenant_slug` (which org's login form to show) lives in `localStorage`.
+- **Deployment:** Docker Compose + Caddy on a VPS (single container serving API + frontend, external Neon Postgres); see "Production (VPS + Docker Compose + Caddy)" below
 
 ## Project Layout
 
@@ -17,7 +17,7 @@ separately-deployed React (Vite) single-page frontend.
 app/
   core/          # settings, security (hashing/JWT), auth & RBAC dependencies
   models/        # SQLAlchemy models: User, Department, KPITemplate, KPISubmission
-  routers/       # auth, dashboard, kpi (workflow actions), admin (CRUD) — all under /api
+  routers/       # auth, dashboard, kpi (workflow actions), admin (CRUD), attendance, importer (bulk import), platform (multi-tenant admin) — all under /api
   services/      # kpi_service.py — all workflow/business logic
   schemas/       # Pydantic request/response schemas
   database.py    # engine/session setup, SQLite <-> Postgres switch
@@ -35,8 +35,8 @@ frontend/
 ## Roles & Workflow
 
 1. **Employee** self-assesses KPI metrics for the current month (draft, editable) → submits → status `pending_dept_approval` (now read-only for the employee).
-2. **Department Admin** reviews submissions scoped to their own department only, can edit the score, then **Approve & Forward** → status `pending_final_approval`. Can also **Reject**. A Dept Admin's own custom KPI skips this stage and goes straight to the Super Admin.
-3. **Super Admin** gives final approval (optionally adjusting the score) → status `approved`. Super Admin can also **override** the score and force-approve at any stage, and has visibility across all departments.
+2. **Department Admin** reviews submissions scoped to their own department only, can edit the score, then **Approve & Forward** → status `pending_final_approval`. Can also **Reject**. A Dept Admin's own custom KPI skips this stage and goes straight to the Tenant Admin.
+3. **Tenant Admin** gives final approval (optionally adjusting the score) → status `approved`. Tenant Admin can also **override** the score and force-approve at any stage, and has visibility across all departments. The platform Super Admin never approves KPIs — platform administration (tenants only) is a separate layer, reachable only by direct URL at `/platform/login` (unlinked from the user login page).
 
 ## Local Setup
 
@@ -102,32 +102,53 @@ Note: since `.env` is auto-loaded by `pydantic-settings`, once it contains a rea
 outside Docker) will also connect to that database, not local SQLite. Remove or comment
 out `DATABASE_URL` in `.env` to go back to local SQLite for casual dev.
 
-## Production (Railway + Neon.tech)
+## Production (VPS + Docker Compose + Caddy)
 
-This is a **two-service** deploy — the backend and frontend are separate Railway
-services (each with its own Dockerfile and public URL).
+Production is a **single Docker Compose stack on a VPS** (`~/kpi-app` on the
+server, `http://167.172.80.99` until a domain + TLS lands — see C1 in the
+project reviews): one `web` container serving the API and the built frontend,
+behind Caddy (automatic HTTPS once `DOMAIN` is set), with the database
+external on Neon.tech. There is deliberately no Postgres service in
+`docker-compose.yml`.
 
 1. Create a Postgres database on [Neon.tech](https://neon.tech) and copy its connection string.
-2. **Backend service** — new Railway service from this repo, root directory `/` (repo root). Railway auto-detects `railway.json` + `Dockerfile`. Set env vars:
-   - `DATABASE_URL` — your Neon connection string (`postgresql://...`)
-   - `SECRET_KEY` — a long random string
-   - `ENVIRONMENT=production`
-   - `CORS_ORIGINS` — the frontend service's public URL once you have it (e.g. `https://kpi-frontend-production.up.railway.app`); comma-separate multiple origins if needed
-3. **Frontend service** — new Railway service from the same repo, root directory `frontend`. Railway auto-detects `frontend/railway.json` + `frontend/Dockerfile`. Set a **build** variable:
-   - `VITE_API_BASE_URL` — the backend service's public URL (e.g. `https://kpi-backend-production.up.railway.app`). This is baked into the JS bundle at build time, so it must be set *before* the first deploy, and the frontend must be redeployed if the backend's URL ever changes.
-4. Deploy both services. Once the backend is up, run the seed script once via Railway's shell to bootstrap the Super Admin account — required, since there's no other way to create the first login:
+2. On the server, copy `.env.example` to `.env` (gitignored — never commit real credentials) and fill in `SECRET_KEY`, `DATABASE_URL` and `DOMAIN` (the site hostname, no `https://`); point the domain's DNS A record at the server.
+3. Deploy (pull + rebuild; Alembic migrations run automatically on startup):
    ```bash
-   python -m app.seed
+   cd ~/kpi-app && git pull && docker compose up -d --build
+   curl -s http://localhost:8000/readyz   # expect 200 — SELECT 1 against the DB
    ```
-   Set `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD` / `SUPER_ADMIN_NAME` as backend env
-   vars first if you don't want the default demo credentials.
-5. Update the backend's `CORS_ORIGINS` with the frontend's actual Railway domain (and redeploy the backend) if you set it before the frontend had a domain assigned.
+4. Run the seed script once to bootstrap the Super Admin account (required — there is no other way to create the first login):
+   ```bash
+   docker compose exec web python -m app.seed
+   ```
+   Set `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD` / `SUPER_ADMIN_NAME` as env vars first if you don't want the default demo credentials (`admin@kpi.com` / `Password123!` — change the password after first login regardless).
+
+Only Caddy is exposed (ports 80/443); the app container is reachable only through it. Because the stack forces `ENVIRONMENT=production`, it refuses to start without a real `SECRET_KEY` and a `DATABASE_URL`.
+
+> Note: `railway.json` files still exist at the repo root and in `frontend/`, but Railway is **not** the production path anymore — they are legacy and unused by the current deploy. Do not follow them to set up a deployment.
+
+## Attendance
+
+A standalone module inside the KPI system (same login, no KPI linkage, no KPI writes — a guard test asserts no KPI imports). Office-WiFi-only check-in/out via a per-tenant public-IP whitelist; office hours 09:00–17:00, working days Mon–Fri (per-tenant settings, midday = midpoint of office hours, 13:00 by default). Late is recorded but never displayed and never deducts — only present/absent counts. Half-day = 0.5 day (check-in at/after midday, or check-out before midday). Approved leave counts as absent. Tenant admins see the monthly report + settings only — no personal Attendance dashboard. Holidays can be entered in bulk, including date ranges. See `docs/polling.md` for the Attendance `/today` refresh cadence.
+
+## Grace period & rollover (7-day grace + day-8 rollover)
+
+`SUBMISSION_GRACE_DAYS = 7` (`app/core/config.py`). A past month stays fillable until 7 days after month-end (drafts only — a rejected submission may still be corrected and resubmitted after grace, since the delay was the reviewer's). The next month's whole KPI set only starts on day 8 (`recurring_rollover_open`, `app/services/submission_grace.py`); days 1–7 belong to closing the previous month. During days 1–7, tenant admins and dept admins (own department only) may add the previous month's KPI; the current month before day 8 and past-grace months are blocked. The dashboard returns `rollover_on` and shows a grace banner; "no metrics" before day 8 is normal, not an error.
+
+## One-off vs recurring KPIs
+
+Every custom KPI is either **Repeat every month** (recurring, the default) or **One month only** (one-off, locked to one year/period). The Add Custom KPI form has a segmented control for the choice, and bulk import takes an optional 7th `recurring` column (`yes`/`true`/`recurring` = recurring; empty = recurring; a bad value is a per-row error). One-offs are excluded from the rebalancer and labelled with an amber "One-off" pill in the list. Recurring custom templates can be rebalanced (future months only — approved submissions are untouched).
+
+## Period-weight endpoint
+
+`GET /api/admin/employees/{employee_id}/period-weight?year=YYYY&period=Month` — the true weight budget for adding a KPI to one employee in one period (dept admin or tenant admin; dept admins only their own department's employees). `snapshot_total` is the frozen submission weights the backend guard enforces for the current period; `applicable_total` is the template total for a future period; `future_*` totals feed the rebalancer. The full rule — which number is the source of truth per period type, and the one open edge case — is in `docs/weight-budget.md`.
 
 ## Notes
 
 - `KPISubmission` rows are per employee, per metric (`KPITemplate`), per period (`year` + `month_or_quarter`, e.g. `January`) — an employee's monthly KPI is the set of submissions for that period.
 - Data isolation is enforced in `app/services/kpi_service.py` (`visible_submissions_query`, `get_submission_scoped`) and `app/core/deps.py` (`RoleChecker`), not just in the UI.
-- Auth is a signed JWT sent as `Authorization: Bearer <token>`, stored client-side (`localStorage`) by the React app — not a cookie, since the frontend and backend are separate origins.
+- Auth is a signed JWT in an httpOnly `access_token` cookie (`app/core/security.py:61-82`), set with `Secure` only over HTTPS and `SameSite=Lax`. Login moved from `localStorage` Bearer tokens to httpOnly cookies on 2026-10-15 — the frontend no longer stores any token. Sessions are revoked by bumping the account's token version (password change / logout).
 
 ## Server cron jobs (required)
 
@@ -148,28 +169,4 @@ safe; missing them silently stops reminders and lets audit logs grow.
 
 # Audit-log pruning — monthly (keeps 180 days; see app/jobs/prune_audit_logs.py).
 0 3 1 * * cd ~/kpi-app && docker compose exec -T web python -m app.jobs.prune_audit_logs >> ~/kpi-app/prune-audit.log 2>&1
-```
-
-## Evidence-file backups (kpi_uploads volume)
-
-Uploaded files live **only** in the Docker volume `kpi_uploads`
-(`/app/uploads` in the container) — not in the Neon database. If the
-VPS disk or the volume is lost without a backup, the uploaded files are
-gone. Back up the volume regularly:
-
-```bash
-# From the server (~/kpi-app), or anywhere with docker access:
-./scripts/backup-uploads.sh            # tar.gz into ~/kpi-backups, keeps 14 days
-BACKUP_DIR=/mnt/backups/kpi ./scripts/backup-uploads.sh
-```
-
-Restore (see also the header of `scripts/backup-uploads.sh`):
-
-```bash
-cd ~/kpi-app && docker compose down
-docker run --rm -v kpi_uploads:/data -v ~/kpi-backups:/backup alpine \
-  sh -c "tar xzf /backup/kpi_uploads-<timestamp>.tar.gz -C /data"
-docker compose up -d
-# If the restored files show as root-owned and uploads 500, fix ownership once:
-docker compose exec -T web chown -R appuser:appuser /app/uploads
 ```

@@ -46,8 +46,9 @@ is nothing to restore from.
 # Audit-log pruning — monthly, keeps 180 days
 0 3 1 * * cd ~/kpi-app && docker compose exec -T web python -m app.jobs.prune_audit_logs >> ~/kpi-app/prune-audit.log 2>&1
 
-# Database backup — daily 02:00 (see scripts/backup-db.sh header)
-0 2 * * * cd ~/kpi-app && ./scripts/backup-db.sh >> ./backups/backup.log 2>&1
+# Database backup — daily 02:00 (see scripts/backup-db.sh header). The
+# script redirects itself into backups/backup.log, so no redirect is needed.
+0 2 * * * cd ~/kpi-app && ./scripts/backup-db.sh
 ```
 
 Then verify the backups are actually being written (not just scheduled):

@@ -66,14 +66,18 @@ The three required cron jobs log to `~/kpi-app/deadline-reminders.log`,
 server, with distinct timestamped START / SUCCESS / FAILURE lines (M20
 fix, 2026-11-10; the backup script got the same contract with N1,
 2026-11-12). The script prints one summary line per job and exits
-non-zero if any FAILURE line is found, or if a log is missing/empty (job
-never ran / cron never installed):
+non-zero on a recent FAILURE, a STALE run/schedule, or a missing/empty
+log (job never ran / cron never installed). Since N8 (2026-11-13) only
+failures in the last 24h — and after the most recent SUCCESS — fail the
+watch; a START with no outcome older than 2h is STALE, a recent one is
+RUNNING (exit 0); and a job with no run inside its max age (daily jobs
+36h, monthly prune 35 days) is STALE:
 
 ```text
 $ ./scripts/check-cron-logs.sh
-deadline-reminders: OK — 14 run(s), 14 succeeded, 0 failed (last run 2026-11-12 08:00:01)
-prune-audit: OK — 1 run(s), 1 succeeded, 0 failed (last run 2026-11-01 03:00:02)
-db-backup: OK — 14 run(s), 14 succeeded, 0 failed (last run 2026-11-12 02:00:01)
+deadline-reminders: OK — 1 run(s) in the last 24h, 1 succeeded, 0 failed (last run 2026-11-12 08:00:01)
+prune-audit: OK — 0 run(s) in the last 24h, 0 succeeded, 0 failed (last run 2026-11-01 03:00:02)
+db-backup: OK — 1 run(s) in the last 24h, 1 succeeded, 0 failed (last run 2026-11-12 02:00:01)
 ```
 
 Suggested daily cron on the server (after the 08:00 reminders run):

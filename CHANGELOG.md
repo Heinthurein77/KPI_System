@@ -44,7 +44,16 @@ Batch the day's commits, verify once, push once, deploy once.
 
 ## [Unreleased]
 
+> **Status (2026-11-13): local only — the commits in this section
+> (`dfec917`, `1a0e732`) are not yet pushed, have had no CI run (N13),
+> and are not deployed. They become a release only after the push +
+> deploy (see the release process above). Do not read done-tense entries
+> here as "live" — that is the N14 fix, and it stays in place until the
+> push lands, when this note comes off and the section gets a dated
+> release heading.
+
 - Backup job watched: `scripts/backup-db.sh` now emits the same timestamped START / SUCCESS / FAILURE lines as the other cron jobs, and `scripts/check-cron-logs.sh` watches all three jobs (N1). New tests: `app/tests/test_check_cron_logs.py`.
+- Platform audit-log reader: new `GET /api/platform/audit-log` endpoint (super_admin-only, platform-scoped rows only) + `/platform/audit-log` page in the platform portal, linked from the sidebar and the Tenants page (N3).
 - One canonical cron list: all three jobs (deadline reminders 08:00 daily, audit prune monthly, DB backup daily 02:00) are required everywhere — README, `docs/backup-and-restore.md`, `docs/incident-runbook.md`, `docs/monitoring.md` (N2).
 - One canonical deploy command (env-prefix form) in README, CHANGELOG deploy log, and the incident runbook (N5).
 - Release process written down: one release train per day — batch the day's commits, verify once, push once, deploy once (N6).

@@ -48,7 +48,12 @@ from app.core.rate_limit import (
     limiter,
 )
 from app.database import get_db
-from app.models.attendance import AttendanceRecord, AttendanceSettings
+from app.models.attendance import (
+    AttendanceRecord,
+    AttendanceSettings,
+    normalize_holiday,
+    normalize_holidays,
+)
 from app.models.department import Department
 from app.models.user import User, UserRole
 from app.schemas.attendance import (
@@ -60,7 +65,7 @@ from app.schemas.attendance import (
     LeaveCreate,
     LeaveUpdate,
 )
-from app.services import audit_service
+from app.services import audit_service, notification_service
 from app.services.attendance_export_service import build_attendance_detail_report
 from app.services.attendance_service import (
     DEFAULT_END,
@@ -195,11 +200,77 @@ def _serialize(
 def _holidays_set(cfg: dict) -> set[date_type]:
     holidays = set()
     for raw in cfg["holidays"]:
+        # cfg holidays are normalised {"date", "name"} dicts; a legacy
+        # plain-string entry is tolerated too (defensive — _settings_dict
+        # already normalises via the model property).
+        entry = raw.get("date") if isinstance(raw, dict) else raw
         try:
-            holidays.add(date_type.fromisoformat(raw))
-        except ValueError:
+            holidays.add(date_type.fromisoformat(entry))
+        except (ValueError, TypeError):
             continue
     return holidays
+
+
+def _upcoming_holidays(cfg: dict, today: date_type) -> list[dict]:
+    """Holidays from today through today+7 days, sorted by date — what
+    the Attendance page banner shows. Corrupt entries are skipped."""
+    end = today + timedelta(days=7)
+    out = []
+    for raw in cfg["holidays"]:
+        item = normalize_holiday(raw)
+        if item is None:
+            continue
+        day = date_type.fromisoformat(item["date"])
+        if today <= day <= end:
+            out.append(item)
+    return sorted(out, key=lambda h: h["date"])
+
+
+def _format_holiday(date_iso: str, name: str) -> str:
+    """'Thingyan — Monday, 23 Nov 2026' (or just the date when unnamed)."""
+    pretty = date_type.fromisoformat(date_iso).strftime("%A, %d %b %Y")
+    return f"{name} — {pretty}" if name else pretty
+
+
+def _holiday_change_text(old: list[dict], new: list[dict]) -> tuple[str, str] | None:
+    """(title, message) announcing a holidays change, or None when the
+    list is unchanged. One notification per save, not per holiday."""
+    old_by_date = {h["date"]: h["name"] for h in old}
+    new_by_date = {h["date"]: h["name"] for h in new}
+    added = sorted(d for d in new_by_date if d not in old_by_date)
+    removed = sorted(d for d in old_by_date if d not in new_by_date)
+    renamed = sorted(
+        d for d in new_by_date
+        if d in old_by_date and new_by_date[d] != old_by_date[d]
+    )
+    if not added and not removed and not renamed:
+        return None
+    if added:
+        def _short(d: str) -> str:
+            return new_by_date[d] or date_type.fromisoformat(d).strftime("%A, %d %b %Y")
+
+        labels = [_short(d) for d in added[:2]]
+        if len(added) > 2:
+            labels.append(f"+{len(added) - 2} more")
+        title = (
+            f"Holiday announced: {labels[0]}" if len(added) == 1
+            else f"Holidays announced: {', '.join(labels)}"
+        )
+    else:
+        title = "Holiday schedule updated"
+    lines: list[str] = []
+    if added:
+        lines.append("New holidays:")
+        lines.extend(f"• {_format_holiday(d, new_by_date[d])}" for d in added)
+    if removed:
+        lines.append("Removed holidays:")
+        lines.extend(f"• {_format_holiday(d, old_by_date[d])}" for d in removed)
+    if renamed:
+        lines.append("Renamed holidays:")
+        for d in renamed:
+            previous = old_by_date[d] or "unnamed"
+            lines.append(f"• {_format_holiday(d, new_by_date[d])} (was: {previous})")
+    return title[:200], "\n".join(lines)
 
 
 def is_working_day(cfg: dict, day: date_type) -> bool:
@@ -287,6 +358,16 @@ def _save_settings(db: Session, user: User, data: dict) -> AttendanceSettings:
     if row is None:
         row = AttendanceSettings(tenant_id=user.tenant_id)
         db.add(row)
+    # Holiday announcement: diff BEFORE overwriting, so the notification
+    # describes exactly what changed. The rows are added to this same
+    # session — a rollback (e.g. the IntegrityError retry in
+    # update_settings) never stores a notification for a change that did
+    # not happen. No notification when holidays are untouched.
+    holiday_notice = None
+    if "holidays" in data:
+        holiday_notice = _holiday_change_text(
+            row.holidays, normalize_holidays(data["holidays"])
+        )
     if "work_days" in data:
         row.work_days_json = json.dumps(data["work_days"])
     if "start_time" in data:
@@ -297,6 +378,17 @@ def _save_settings(db: Session, user: User, data: dict) -> AttendanceSettings:
         row.office_ips_json = json.dumps([ip.strip() for ip in data["office_ips"] if ip.strip()])
     if "holidays" in data:
         row.holidays_json = json.dumps(data["holidays"])
+    if holiday_notice is not None:
+        title, message = holiday_notice
+        notification_service.notify_tenant_users(
+            db,
+            tenant_id=user.tenant_id,
+            exclude_user_id=user.id,
+            type="attendance_holiday",
+            title=title,
+            message=message,
+            link="/attendance",
+        )
     # Audit: a tenant admin can silently clear office_ips (disabling the
     # WiFi gate for everyone) — that change must be attributable.
     changed = sorted(data.keys())
@@ -366,6 +458,7 @@ def get_today(
         wifi_enforced=enforced,
         ip_allowed=allowed,
         record=_serialize(db, record) if record else None,
+        upcoming_holidays=_upcoming_holidays(cfg, today),
     )
 
 

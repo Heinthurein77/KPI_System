@@ -9,8 +9,11 @@ import AppShell from "../components/layout/AppShell";
 import ConfirmDialog from "../components/ui/ConfirmDialog";
 import Modal from "../components/ui/Modal";
 import { getBlobErrorMessage, getErrorMessage } from "../api/errors";
+import HolidayBanner from "../components/attendance/HolidayBanner";
+import HolidayListEditor from "../components/attendance/HolidayListEditor";
 import { MONTHS } from "../utils/months";
 import { slugify } from "../utils/slugify";
+import { formatHoliday, normalizeHolidays, validateHolidayRows } from "../utils/holidays";
 import { middayLabel } from "../utils/time";
 import {
   checkIn,
@@ -68,56 +71,11 @@ function Stat({ label, value, sub, accent }) {
   );
 }
 
-// Holidays textarea parsing — the textarea keeps its RAW text while the
-// admin types (no per-keystroke normalising: rewriting the value on every
-// keystroke yanks the caret to the end whenever Enter creates a transient
-// empty line, and typed dates get glued onto existing ones on a phone).
-// Parsing happens only when the count is displayed, when a range is added
-// and when saving. `dates` are real YYYY-MM-DD calendar dates, sorted and
-// deduped; `invalid` holds lines that are not real dates (bad format or an
-// impossible day such as 2026-02-30).
-function parseHolidayLines(text) {
-  const dates = [];
-  const invalid = [];
-  for (const raw of String(text ?? "").split("\n")) {
-    const line = raw.trim();
-    if (!line) continue;
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(line)) {
-      invalid.push(line);
-      continue;
-    }
-    const [y, m, d] = line.split("-").map(Number);
-    const dt = new Date(Date.UTC(y, m - 1, d));
-    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) {
-      invalid.push(line);
-      continue;
-    }
-    dates.push(line);
-  }
-  return { dates: [...new Set(dates)].sort(), invalid };
-}
-
 function parseLines(text) {
   return String(text ?? "")
     .split("\n")
     .map((s) => s.trim())
     .filter(Boolean);
-}
-
-// Every date from `from` to `to` inclusive, as YYYY-MM-DD strings.
-// Returns [] when either end is not a real date or the end is before the start.
-function datesInRange(from, to) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(from || "") || !/^\d{4}-\d{2}-\d{2}$/.test(to || "")) return [];
-  const [fy, fm, fd] = from.split("-").map(Number);
-  const [ty, tm, td] = to.split("-").map(Number);
-  const start = Date.UTC(fy, fm - 1, fd);
-  const end = Date.UTC(ty, tm - 1, td);
-  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return [];
-  const out = [];
-  for (let t = start; t <= end; t += 86400000) {
-    out.push(new Date(t).toISOString().slice(0, 10));
-  }
-  return out;
 }
 
 export default function AttendancePage() {
@@ -132,13 +90,12 @@ export default function AttendancePage() {
   const [settingsForm, setSettingsForm] = useState(null);
   const [showSaveConfirm, setShowSaveConfirm] = useState(false);
   const [settingsSaving, setSettingsSaving] = useState(false);
-  // Raw textarea text for the two one-per-line settings lists. The
-  // textareas keep exactly what the admin typed (see parseHolidayLines);
-  // the parsed lists are derived only for display, range-add and saving.
-  const [holidaysText, setHolidaysText] = useState("");
+  // Holidays as [{date, name}] rows, edited in HolidayListEditor. The
+  // office-IPs textarea below still keeps raw text (see parseLines);
+  // the holiday rows are structured inputs, so no raw-text parsing is
+  // needed for them.
+  const [holidays, setHolidays] = useState([]);
   const [officeIpsText, setOfficeIpsText] = useState("");
-  const [rangeFrom, setRangeFrom] = useState("");
-  const [rangeTo, setRangeTo] = useState("");
   // Settings-only error, shown under the Save button where the admin is
   // working (the page-top banner is a long scroll away from the form).
   const [settingsError, setSettingsError] = useState("");
@@ -201,7 +158,7 @@ export default function AttendancePage() {
         if (seq !== loadSeq.current) return;
         setSettings(s);
         setSettingsForm(s);
-        setHolidaysText(s.holidays.join("\n"));
+        setHolidays(normalizeHolidays(s.holidays));
         setOfficeIpsText(s.office_ips.join("\n"));
       }
     } catch (e) {
@@ -520,8 +477,8 @@ export default function AttendancePage() {
 
   // Summary of the pending settings, shown in the save confirm dialog
   // so the admin sees exactly what will be saved before confirming.
-  // Counts come from the parsed textarea text (the live lists), not the
-  // last-saved form — the dialog must show what is about to be saved.
+  // Counts come from the live form state, not the last-saved form — the
+  // dialog must show what is about to be saved.
   function pendingSettingsSummary() {
     if (!settingsForm) return "";
     const days = settingsForm.work_days.map((d) => WEEKDAYS[d]).join(", ");
@@ -535,53 +492,33 @@ export default function AttendancePage() {
         ? settings.midday
         : middayLabel(settingsForm.start_time, settingsForm.end_time);
     const ips = parseLines(officeIpsText).length;
-    const holidays = parseHolidayLines(holidaysText).dates.length;
+    const holidayLines = holidays.map((h) => formatHoliday(h.date, h.name));
     return [
       `Working days: ${days}`,
       `Office hours: ${settingsForm.start_time}–${settingsForm.end_time} (midday ${midday})`,
       ips > 0
         ? `Office WiFi IPs: ${parseLines(officeIpsText).join(", ")} (${ips} configured — check-in/out enforced on office WiFi only)`
         : "Office WiFi IPs: none — check-in/out not enforced yet",
-      `Holidays: ${holidays} date${holidays === 1 ? "" : "s"}`,
+      holidays.length > 0
+        ? `Holidays (${holidays.length}): ${holidayLines.join("; ")}`
+        : "Holidays: none",
     ].join("\n");
   }
 
-  // Validate the holidays text BEFORE opening the save confirm dialog:
-  // an invalid line must block the save with a clear message next to the
-  // form, not a failed PATCH whose banner sits at the top of the page.
+  // Validate the holiday rows BEFORE opening the save confirm dialog:
+  // a row with no (or an impossible) date must block the save with a
+  // clear message next to the form, not a failed PATCH whose banner
+  // sits at the top of the page.
   function openSaveConfirm() {
     setSettingsError("");
-    const { invalid } = parseHolidayLines(holidaysText);
-    if (invalid.length > 0) {
+    const problems = validateHolidayRows(holidays);
+    if (problems.length > 0) {
       setSettingsError(
-        `Invalid holiday date${invalid.length === 1 ? "" : "s"}: ${invalid.slice(0, 3).join(", ")}${invalid.length > 3 ? ` (+${invalid.length - 3} more)` : ""} — use YYYY-MM-DD, e.g. 2026-12-25. Nothing was saved; fix the line${invalid.length === 1 ? "" : "s"} and try again.`,
+        `${problems.slice(0, 3).join(" ")} Nothing was saved; fix ${problems.length === 1 ? "it" : "them"} and try again.`,
       );
       return;
     }
     setShowSaveConfirm(true);
-  }
-
-  // Append every day in the picked range to the holidays list (deduped,
-  // sorted). One range covers a multi-day holiday such as Thingyan
-  // without typing each day.
-  function handleAddRange() {
-    setSettingsError("");
-    if (!rangeFrom || !rangeTo) {
-      setSettingsError("Pick both a start and an end date for the range.");
-      return;
-    }
-    const days = datesInRange(rangeFrom, rangeTo);
-    if (days.length === 0) {
-      setSettingsError("The range end must be on or after the start date.");
-      return;
-    }
-    if (days.length > 366) {
-      setSettingsError(`That range is ${days.length} days — add at most one year (366 days) at a time.`);
-      return;
-    }
-    const merged = [...new Set([...parseHolidayLines(holidaysText).dates, ...days])].sort();
-    setHolidaysText(merged.join("\n"));
-    if (settingsForm) setSettingsForm({ ...settingsForm, holidays: merged });
   }
 
   async function handleSaveSettings() {
@@ -590,13 +527,11 @@ export default function AttendancePage() {
     setNotice("");
     setSettingsSaving(true);
     try {
-      // Parse the raw textarea text at save time (see parseHolidayLines):
-      // the backend re-validates, but a bad line must never reach it.
-      const { dates: holidays, invalid } = parseHolidayLines(holidaysText);
-      if (invalid.length > 0) {
-        setSettingsError(
-          `Invalid holiday date${invalid.length === 1 ? "" : "s"}: ${invalid.slice(0, 3).join(", ")} — use YYYY-MM-DD. Nothing was saved.`,
-        );
+      // Re-validate the holiday rows at save time (the backend
+      // re-validates too, but a bad row must never reach it).
+      const problems = validateHolidayRows(holidays);
+      if (problems.length > 0) {
+        setSettingsError(`${problems.slice(0, 3).join(" ")} Nothing was saved.`);
         setShowSaveConfirm(false);
         return;
       }
@@ -610,15 +545,21 @@ export default function AttendancePage() {
       const saved = await updateAttendanceSettings(payload);
       setSettings(saved);
       setSettingsForm(saved);
-      setHolidaysText(saved.holidays.join("\n"));
+      setHolidays(normalizeHolidays(saved.holidays));
       setOfficeIpsText(saved.office_ips.join("\n"));
       const days = saved.work_days.map((d) => WEEKDAYS[d]).join(", ");
       const ips = saved.office_ips.length;
+      // The banner + bell announcement go out whenever the holiday list
+      // itself changed (the backend notifies on exactly that condition).
+      const holidaysChanged =
+        JSON.stringify(normalizeHolidays(saved.holidays)) !==
+        JSON.stringify(normalizeHolidays(settings?.holidays ?? []));
       setNotice(
         `✓ Settings saved — Office ${saved.start_time}–${saved.end_time} (${days}), ` +
           (ips > 0
             ? `WiFi enforced with ${ips} office IP${ips === 1 ? "" : "s"} (${saved.office_ips.join(", ")}).`
-            : "WiFi not enforced (no office IP yet)."),
+            : "WiFi not enforced (no office IP yet).") +
+          (holidaysChanged ? " Holiday announcement sent to everyone." : ""),
       );
       setShowSaveConfirm(false);
       await load();
@@ -633,10 +574,6 @@ export default function AttendancePage() {
       setSettingsSaving(false);
     }
   }
-
-  // Live parse of the holidays textarea (display only — the raw text is
-  // never rewritten while typing, so the caret stays where the admin put it).
-  const { dates: holidayDates, invalid: holidayInvalid } = parseHolidayLines(holidaysText);
 
   const record = todayData?.record;
   const monthName = new Date(year, month - 1, 1).toLocaleString("en-US", { month: "long" });
@@ -688,6 +625,13 @@ export default function AttendancePage() {
           <div className="mt-5 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-semibold text-emerald-800 shadow-sm">
             {notice}
           </div>
+        )}
+
+        {/* Holiday announcement — for every role, including tenant
+            admins (their personal Today card below is hidden, but
+            holidays concern the whole organisation). */}
+        {todayData && (
+          <HolidayBanner upcoming={todayData.upcoming_holidays || []} today={todayData.today} />
         )}
 
         {/* Today — personal dashboard: only employees and dept admins check in,
@@ -1084,58 +1028,14 @@ export default function AttendancePage() {
                 />
                 <span className="text-xs text-slate-400">Empty = not enforced yet (testing). Once set, check-in/out works only from these IPs.</span>
               </label>
-              <div>
-                <label className="block">
-                  <span className="text-sm font-medium text-slate-700">
-                    Holidays ({holidayDates.length} date{holidayDates.length === 1 ? "" : "s"}) — one date per line, YYYY-MM-DD
-                  </span>
-                  <textarea
-                    rows={8}
-                    value={holidaysText}
-                    onChange={(e) => {
-                      setHolidaysText(e.target.value);
-                      setSettingsError("");
-                    }}
-                    placeholder={"2026-12-25\n2026-12-31\n2027-01-01"}
-                    className="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                  />
-                </label>
-                {holidayInvalid.length > 0 && (
-                  <p className="mt-1.5 text-xs font-medium text-amber-700">
-                    {holidayInvalid.length} line{holidayInvalid.length === 1 ? "" : "s"} {holidayInvalid.length === 1 ? "looks" : "look"} invalid ({holidayInvalid.slice(0, 2).join(", ")}) — fix {holidayInvalid.length === 1 ? "it" : "them"} before saving.
-                  </p>
-                )}
-                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-sm font-medium text-slate-700">Add a date range · ရက်အပိုင်းအခြား ထည့်ရန်</p>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <input
-                      type="date"
-                      value={rangeFrom}
-                      onChange={(e) => setRangeFrom(e.target.value)}
-                      aria-label="Range start date"
-                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
-                    />
-                    <span className="text-sm text-slate-500">to</span>
-                    <input
-                      type="date"
-                      value={rangeTo}
-                      onChange={(e) => setRangeTo(e.target.value)}
-                      aria-label="Range end date"
-                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
-                    />
-                    <button
-                      type="button"
-                      onClick={handleAddRange}
-                      className="rounded-lg bg-slate-800 px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-700"
-                    >
-                      Add range
-                    </button>
-                  </div>
-                  <p className="mt-1.5 text-xs text-slate-400">
-                    Adds every day in the range (e.g. a multi-day holiday) — duplicates are skipped, the list stays sorted.
-                  </p>
-                </div>
-              </div>
+              <HolidayListEditor
+                value={holidays}
+                onChange={(next) => {
+                  setHolidays(next);
+                  setSettingsError("");
+                }}
+                onError={setSettingsError}
+              />
               {settingsError && (
                 <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{settingsError}</p>
               )}

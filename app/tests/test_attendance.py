@@ -455,7 +455,7 @@ def test_settings_patch_returns_the_values_the_notice_shows(client, db):
     assert saved["end_time"] == "17:00"
     assert saved["midday"] == "13:00"
     assert saved["office_ips"] == [OFFICE_IP]
-    assert saved["holidays"] == ["2026-11-15"]
+    assert saved["holidays"] == [{"date": "2026-11-15", "name": ""}]
     assert saved["wifi_enforced"] is True
     row = db.query(AttendanceSettings).filter_by(tenant_id=tenant.id).one()
     assert row.office_ips == [OFFICE_IP]

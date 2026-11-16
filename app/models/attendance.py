@@ -40,6 +40,83 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+# ---------------------------------------------------------------- holidays
+#
+# Holidays are stored as a JSON list of {"date": "YYYY-MM-DD", "name": ""}
+# objects in holidays_json (the name is what the announcement banner and
+# the bell notification show). Older rows hold plain "YYYY-MM-DD" strings
+# — every read below is tolerant of both shapes, and a corrupt entry is
+# skipped rather than breaking settings reads. No migration: same column.
+
+def parse_holiday_entry(entry) -> dict:
+    """Strict parse of one holiday entry -> {"date", "name"}.
+
+    Accepts a legacy plain string or a {"date", "name"} dict. Raises
+    ValueError on a missing/bad date or a name longer than 80 chars —
+    the write path (schema validator) surfaces these as 422.
+    """
+    if isinstance(entry, str):
+        raw_date, name = entry.strip(), ""
+    elif isinstance(entry, dict):
+        raw_date = entry.get("date")
+        name = entry.get("name") or ""
+        if not isinstance(raw_date, str):
+            raise ValueError("each holiday needs a date (YYYY-MM-DD).")
+        raw_date = raw_date.strip()
+        if not isinstance(name, str):
+            raise ValueError("holiday name must be text.")
+        name = name.strip()
+    else:
+        raise ValueError("holidays must be dates (YYYY-MM-DD) or {date, name} objects.")
+    try:
+        date_type.fromisoformat(raw_date)
+    except ValueError:
+        raise ValueError(f"holidays must be real dates (YYYY-MM-DD), got {raw_date!r}.") from None
+    if len(name) > 80:
+        raise ValueError("holiday name must be at most 80 characters.")
+    return {"date": raw_date, "name": name}
+
+
+def _dedupe_holidays(items: list[dict]) -> list[dict]:
+    """Dedupe by date (keep the entry that has a name, else the first),
+    sorted by date."""
+    by_date: dict[str, dict] = {}
+    for item in items:
+        prev = by_date.get(item["date"])
+        if prev is None or (not prev["name"] and item["name"]):
+            by_date[item["date"]] = item
+    return [by_date[d] for d in sorted(by_date)]
+
+
+def normalize_holiday(entry) -> dict | None:
+    """Tolerant parse of one stored entry; None when it has no real date."""
+    try:
+        return parse_holiday_entry(entry)
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def normalize_holidays(raw, *, strict: bool = False) -> list[dict]:
+    """A stored holidays list -> sorted, deduped [{"date", "name"}].
+
+    Tolerant by default (bad entries are skipped — a corrupt row must
+    never break a settings read). With strict=True a bad entry raises
+    ValueError instead (write path).
+    """
+    if not isinstance(raw, list):
+        if strict:
+            raise ValueError("holidays must be a list of dates or {date, name} objects.")
+        return []
+    if strict:
+        return _dedupe_holidays([parse_holiday_entry(entry) for entry in raw])
+    items = []
+    for entry in raw:
+        item = normalize_holiday(entry)
+        if item is not None:
+            items.append(item)
+    return _dedupe_holidays(items)
+
+
 class AttendanceSettings(Base):
     __tablename__ = "attendance_settings"
     __table_args__ = (
@@ -62,7 +139,9 @@ class AttendanceSettings(Base):
     # no enforcement yet (allowed, with a warning) so the feature is testable
     # before the office IP is known.
     office_ips_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
-    # Tenant holidays, JSON list of "YYYY-MM-DD" strings.
+    # Tenant holidays, JSON list of {"date": "YYYY-MM-DD", "name": ""}
+    # objects (legacy rows hold plain "YYYY-MM-DD" strings — reads
+    # normalise both shapes; see normalize_holidays above).
     holidays_json: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
 
     updated_at: Mapped[datetime] = mapped_column(
@@ -84,9 +163,9 @@ class AttendanceSettings(Base):
             return []
 
     @property
-    def holidays(self) -> list[str]:
+    def holidays(self) -> list[dict]:
         try:
-            return [str(d) for d in json.loads(self.holidays_json or "[]")]
+            return normalize_holidays(json.loads(self.holidays_json or "[]"))
         except (ValueError, TypeError):
             return []
 

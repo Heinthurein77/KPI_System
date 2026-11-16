@@ -44,6 +44,8 @@ Batch the day's commits, verify once, push once, deploy once.
 
 ## [Unreleased]
 
+- Attendance holiday announcements: holidays now have names (settings editor: date + name per holiday, range-add kept); a banner on the Attendance page shows holidays in the next 7 days to every role, and saving a changed holiday list sends one bell notification (`attendance_holiday`, link `/attendance`) to every active tenant user except the saving admin. Legacy plain-date holiday lists still read and work with no migration. New tests: `app/tests/test_attendance_holidays.py`.
+
 > **Status (2026-11-13): local only — the commits in this section
 > (`dfec917`, `1a0e732`) are not yet pushed, have had no CI run (N13),
 > and are not deployed. They become a release only after the push +

@@ -17,12 +17,19 @@ _RFC1918_NETWORKS = (
 )
 
 
+class HolidayOut(BaseModel):
+    date: str  # "YYYY-MM-DD"
+    name: str = ""  # shown in the banner + notification; "" = unnamed
+
+
 class AttendanceSettingsUpdate(BaseModel):
     work_days: list[int] | None = None  # datetime.weekday() numbers, 0=Mon
     start_time: str | None = None  # "HH:MM"
     end_time: str | None = None  # "HH:MM"
     office_ips: list[str] | None = None
-    holidays: list[str] | None = None  # "YYYY-MM-DD"
+    # "YYYY-MM-DD" strings (legacy) or {"date", "name"} objects — the
+    # validator normalises both to sorted, deduped {"date", "name"} dicts.
+    holidays: list | None = None
 
     @field_validator("work_days", mode="before")
     @classmethod
@@ -74,14 +81,17 @@ class AttendanceSettingsUpdate(BaseModel):
             cleaned.append(str(ip))
         return cleaned
 
-    @field_validator("holidays")
+    @field_validator("holidays", mode="before")
     @classmethod
     def _check_holidays(cls, value):
         if value is None:
             return value
-        for item in value:
-            date_type.fromisoformat(item)  # raises ValueError on bad dates
-        return sorted(set(value))
+        # Strict parse (bad date / long name -> 422), then dedupe by date
+        # and sort. The model import is lazy, mirroring the parse_time
+        # import above — schemas must not pull models in at import time.
+        from app.models.attendance import normalize_holidays
+
+        return normalize_holidays(value, strict=True)
 
 
 class AttendanceSettingsOut(BaseModel):
@@ -90,7 +100,7 @@ class AttendanceSettingsOut(BaseModel):
     end_time: str
     midday: str
     office_ips: list[str]
-    holidays: list[str]
+    holidays: list[HolidayOut]
     wifi_enforced: bool  # True once at least one office IP is configured
 
     model_config = {"from_attributes": True}
@@ -119,6 +129,9 @@ class AttendanceTodayOut(BaseModel):
     wifi_enforced: bool
     ip_allowed: bool
     record: AttendanceRecordOut | None = None
+    # Holidays from today through today+7 days, sorted by date — the
+    # Attendance page banner renders these.
+    upcoming_holidays: list[HolidayOut] = []
 
 
 class AttendanceSummaryOut(BaseModel):

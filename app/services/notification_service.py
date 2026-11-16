@@ -54,6 +54,41 @@ def _active_role_users(
     return list(db.scalars(stmt).all())
 
 
+def _active_tenant_users(
+    db: Session,
+    tenant_id: int,
+    exclude_user_id: int | None = None,
+) -> list[User]:
+    stmt = select(User).where(
+        User.tenant_id == tenant_id,
+        User.is_active == True,  # noqa: E712
+    )
+    if exclude_user_id is not None:
+        stmt = stmt.where(User.id != exclude_user_id)
+    return list(db.scalars(stmt).all())
+
+
+def notify_tenant_users(
+    db: Session,
+    *,
+    tenant_id: int,
+    exclude_user_id: int | None = None,
+    type: str,
+    title: str,
+    message: str,
+    link: str | None = None,
+) -> list[Notification]:
+    """Notify every active user of a tenant, any role (optionally excluding
+    the actor). One row per user — used for tenant-wide announcements such
+    as a holiday schedule change."""
+    created = []
+    for recipient in _active_tenant_users(db, tenant_id, exclude_user_id):
+        created.append(
+            _add(db, tenant_id=tenant_id, user_id=recipient.id, type=type, title=title, message=message, link=link)
+        )
+    return created
+
+
 def notify_user(
     db: Session,
     *,

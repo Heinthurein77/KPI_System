@@ -7,7 +7,7 @@ import EmptyState from "../ui/EmptyState";
 import PageLoading from "../ui/PageLoading";
 import LoadError from "../ui/LoadError";
 import { STYLES as STATUS_STYLES, LABELS as STATUS_LABELS } from "../ui/statusMeta";
-import { employeeSaveScores, employeeSubmit } from "../../api/kpi";
+import { employeeSaveScores, employeeSubmit, employeeWithdraw } from "../../api/kpi";
 import { getErrorMessage } from "../../api/errors";
 import { MONTHS } from "../../utils/months";
 import { DASHBOARD_POLL_INTERVAL_MS, useApi } from "../../hooks/useApi";
@@ -30,6 +30,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   const [invalidScoreId, setInvalidScoreId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [confirmSubmit, setConfirmSubmit] = useState(false);
+  const [confirmWithdraw, setConfirmWithdraw] = useState(false);
   const [params, setParams] = useState({});
   const paramsRef = useRef(params);
   const firstNavRef = useRef(true);
@@ -375,9 +376,40 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     setSaving(true);
     setError(null);
     try {
-      await employeeSubmit({ year: data.active_year, period: data.active_period, scores: buildScoresPayload(), comments: buildCommentsPayload() });
+      const result = await employeeSubmit({ year: data.active_year, period: data.active_period, scores: buildScoresPayload(), comments: buildCommentsPayload() });
       clearDraft(data.active_year, data.active_period);
-      toast.success("Submitted for department approval.");
+      // S-m3: the submit endpoint now returns the partial-submit result.
+      // A grace-skipped row stays DRAFT — say so plainly instead of
+      // reporting a full submit when part of the period was skipped.
+      if (result && Array.isArray(result.skipped) && result.skipped.length > 0) {
+        toast.success(`Submitted for department approval. ${result.skipped.length} draft(s) were skipped — their grace window had closed. Withdraw them below if you no longer need them.`);
+      } else {
+        toast.success("Submitted for department approval.");
+      }
+      load(params);
+    } catch (err) {
+      setError(getErrorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // S-M2: withdraw the employee's own stuck DRAFT rows for this period —
+  // the user-decided exit for a draft whose grace window has closed.
+  // Only offered for drafts that are no longer editable (stuck): an
+  // editable draft withdrawn during its fillable window would simply
+  // be re-created by lazy materialisation on the next dashboard visit.
+  const stuckDrafts = data.submissions.filter((s) => s.status === "draft" && !isRowEditable(s));
+
+  async function handleWithdraw() {
+    setConfirmWithdraw(false);
+    setSaving(true);
+    setError(null);
+    try {
+      const result = await employeeWithdraw({ year: data.active_year, period: data.active_period });
+      clearDraft(data.active_year, data.active_period);
+      const count = result && Array.isArray(result.withdrawn) ? result.withdrawn.length : stuckDrafts.length;
+      toast.success(`Withdrew ${count} stuck draft(s). Their weights are freed — a new KPI can be added for this period.`);
       load(params);
     } catch (err) {
       setError(getErrorMessage(err));
@@ -605,8 +637,58 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
             </p>
           )}
 
+          {/* S-M2: stuck drafts — DRAFT rows whose grace window has closed.
+              They can no longer be edited or submitted; the only exit is
+              for the employee to withdraw them (no score is recorded,
+              nothing is approved, and their weights are freed). */}
+          {stuckDrafts.length > 0 && (
+            <div className="mt-6 rounded-lg bg-amber-50 border border-amber-200 px-4 py-3">
+              <p className="text-sm font-semibold text-amber-800">
+                {stuckDrafts.length} stuck draft{stuckDrafts.length !== 1 ? "s" : ""} — the grace window for{" "}
+                {data.active_period} {data.active_year} has closed
+              </p>
+              <p className="mt-1 text-sm text-amber-700">
+                {stuckDrafts.map((s) => s.kpi_template.metric_name).join(", ")} can no longer be edited or
+                submitted. Withdraw {stuckDrafts.length === 1 ? "it" : "them"} to clear {stuckDrafts.length === 1 ? "it" : "them"} — no score will be recorded and the weights will be freed.
+              </p>
+              <button
+                type="button"
+                disabled={saving}
+                onClick={() => setConfirmWithdraw(true)}
+                className="mt-3 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-800 shadow-sm hover:bg-amber-100 transition disabled:opacity-60"
+              >
+                Withdraw stuck draft{stuckDrafts.length !== 1 ? "s" : ""}
+              </button>
+            </div>
+          )}
+
         </>
       )}
+
+      <ConfirmDialog
+        open={confirmWithdraw}
+        title="Withdraw stuck draft(s)?"
+        message={`Your ${stuckDrafts.length} stuck draft(s) for ${data.active_period} ${data.active_year} will be deleted. No score will be recorded, nothing will be approved, and the weights will be freed so a new KPI can be added. This cannot be undone.`}
+        details={
+          <div className="rounded-xl border border-slate-200 bg-slate-50 divide-y divide-slate-100 max-h-56 overflow-y-auto">
+            {stuckDrafts.map((s) => (
+              <div key={s.id} className="flex items-center justify-between gap-3 px-3 py-2">
+                <span className="min-w-0 truncate text-xs font-medium text-slate-700" title={s.kpi_template.metric_name}>
+                  {s.kpi_template.metric_name}
+                </span>
+                <span className="shrink-0 rounded-full bg-amber-100 px-2.5 py-0.5 text-[11px] font-medium text-amber-700">
+                  draft — stuck
+                </span>
+              </div>
+            ))}
+          </div>
+        }
+        confirmLabel="Withdraw"
+        tone="danger"
+        submitting={saving}
+        onConfirm={handleWithdraw}
+        onCancel={() => setConfirmWithdraw(false)}
+      />
 
       <ConfirmDialog
         open={confirmSubmit}

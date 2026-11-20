@@ -47,3 +47,42 @@ def test_prune_deletes_only_rows_older_than_retention(db):
 
 def test_prune_empty_table_returns_zero(db):
     assert prune_audit_logs(db, retention_days=180) == 0
+
+
+def _make_notification(db, tenant, user, type, days_old: int):
+    from app.tests.factories import make_notification
+
+    n = make_notification(db, tenant, user, type=type)
+    n.created_at = datetime.now(timezone.utc) - timedelta(days=days_old)
+    db.commit()
+    return n
+
+
+def test_prune_notifications_keeps_deadline_reminders(db):
+    """S-m9: old non-reminder notifications are pruned, but
+    deadline_reminder rows survive — _already_reminded keys idempotency
+    on their continued existence."""
+    from app.jobs.prune_audit_logs import prune_notifications
+
+    tenant = make_tenant(db)
+    actor = make_user(db, tenant, UserRole.EMPLOYEE)
+    old_kpi = _make_notification(db, tenant, actor, "kpi_submitted", days_old=100)
+    old_reminder = _make_notification(db, tenant, actor, "deadline_reminder", days_old=100)
+    recent = _make_notification(db, tenant, actor, "kpi_submitted", days_old=10)
+    old_kpi_id, old_reminder_id, recent_id = old_kpi.id, old_reminder.id, recent.id
+
+    deleted = prune_notifications(db, retention_days=90)
+
+    assert deleted == 1
+    db.expunge_all()
+    from app.models.notification import Notification
+
+    assert db.get(Notification, old_kpi_id) is None
+    assert db.get(Notification, old_reminder_id) is not None
+    assert db.get(Notification, recent_id) is not None
+
+
+def test_prune_notifications_empty_table_returns_zero(db):
+    from app.jobs.prune_audit_logs import prune_notifications
+
+    assert prune_notifications(db, retention_days=90) == 0

@@ -176,3 +176,28 @@ def test_send_welcome_email_skipped_when_unconfigured():
         with patch("smtplib.SMTP") as mock_smtp:
             email_service.send_welcome_email("new@example.com", "New Hire")
             mock_smtp.assert_not_called()
+
+
+def test_notification_link_omitted_without_base_url(db):
+    """S-m2: config documents 'Unset -> emails omit the link' — a bare
+    relative 'View: /dashboard?...' must never be emitted."""
+    tenant = make_tenant(db)
+    dept = make_department(db, tenant)
+    user = make_user(db, tenant, UserRole.EMPLOYEE, department=dept, email="real@example.com")
+    n = make_notification(db, tenant, user, link="/dashboard?year=2026&period=October")
+
+    with patch.object(email_service, "settings", _configured_settings(APP_BASE_URL=None)):
+        with patch("smtplib.SMTP") as mock_smtp_cls:
+            mock_smtp = mock_smtp_cls.return_value
+            with patch.object(
+                email_service,
+                "_send_in_background",
+                side_effect=lambda payloads: email_service._run_sender(payloads),
+            ):
+                email_service.send_for_notifications(db, [n])
+
+            mock_smtp.send_message.assert_called_once()
+            body = mock_smtp.send_message.call_args[0][0].get_content()
+            assert "Test message" in body
+            assert "View:" not in body
+            assert "/dashboard" not in body

@@ -8,9 +8,13 @@ a month (same day as the restore drill is a good habit — see
 
 The production database is Neon Free tier. Its limits are hard: when they
 are hit, the database stops working — there is no warning email from the
-app and nothing in the repo watches usage. The main storage driver is
-audit-log growth (pruned to 180 days by the monthly cron, so it is bounded,
-but a busy tenant still grows it).
+app and nothing in the repo watches usage. The main storage drivers are
+audit-log growth (pruned to 180 days by the monthly cron, so it is bounded)
+and notification growth (pruned to 90 days by the same monthly cron since
+2026-11-20, senior review S-m9 — except `deadline_reminder` rows, which
+the reminder idempotency check depends on and which are therefore kept;
+they accumulate at roughly one row per user per period, so they are the
+residual growth to watch if the table ever looks large).
 
 ## The limits (Neon Free tier)
 
@@ -40,8 +44,9 @@ but a busy tenant still grows it).
 
 - **Storage > 700 MB or compute > 70 CU-h mid-month:** tell the agent.
   Likely causes are audit-log growth (check the prune cron ran — see
-  `docs/backup-and-restore.md`) or a runaway import. Do not wait for the
-  limit.
+  `docs/backup-and-restore.md`) or notification growth (same cron now
+  prunes notifications older than 90 days, except `deadline_reminder`
+  rows) or a runaway import. Do not wait for the limit.
 - **Storage > 900 MB or compute nearly exhausted:** decide on the Neon
   **Launch plan** (paid — larger storage, more compute, **7-day** PITR
   instead of 6 hours). That decision is the user's; the agent can do the

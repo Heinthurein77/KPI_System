@@ -64,7 +64,9 @@ def test_full_happy_path_employee_to_approved(db, client):
     )
     assert resp.status_code == 200
     submitted = resp.json()
-    assert submitted[0]["status"] == "pending_dept_approval"
+    # S-m3: the submit endpoint returns {submissions, submitted, skipped}.
+    assert submitted["submissions"][0]["status"] == "pending_dept_approval"
+    assert submitted["skipped"] == []
 
     # Step 4: Dept Admin approves -> pending_final_approval.
     resp = client.post(
@@ -177,7 +179,7 @@ def test_reject_path_then_reject_and_approve_are_refused(db, client):
         json={"year": year, "period": period, "scores": {}},
         headers=auth_headers(employee, tenant),
     )
-    assert resp.json()[0]["status"] == "pending_dept_approval"
+    assert resp.json()["submissions"][0]["status"] == "pending_dept_approval"
 
     # Dept Admin rejects instead of approving.
     resp = client.post(

@@ -155,6 +155,16 @@ def change_password(
     user.password_hash = hash_password(payload.new_password)
     user.must_change_password = False
     user.token_version = (user.token_version or 0) + 1
+    # S-M5: a credential change plus forced session invalidation is
+    # exactly the event the audit trail should capture — who changed it
+    # and that all sessions were invalidated. The password itself is
+    # never logged. The audit row shares the commit below.
+    audit_service.log(
+        db, user, "password_changed", "user", user.id, user.name,
+        f"Password changed by {user.name} ({user.role.value}); "
+        "all sessions invalidated (token_version bumped).",
+        department_id=user.department_id,
+    )
     db.commit()
     # The token_version bump invalidates this session — clear the now-dead
     # cookie so the SPA doesn't keep sending it. The user logs in again.

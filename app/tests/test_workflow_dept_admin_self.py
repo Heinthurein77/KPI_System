@@ -64,7 +64,7 @@ def test_dept_admin_self_assessment_skips_dept_review(db, client):
     )
     assert resp.status_code == 200
     submitted = resp.json()
-    assert submitted[0]["status"] == "pending_final_approval"
+    assert submitted["submissions"][0]["status"] == "pending_final_approval"
 
     # The Dept Admin's own submission never appears in their review queue.
     resp = client.get(

@@ -15,6 +15,7 @@ from app.schemas.kpi import (
     RejectRequest,
     SaveScoresRequest,
     SubmitRequest,
+    WithdrawRequest,
 )
 from app.services import kpi_service
 
@@ -78,8 +79,41 @@ def employee_submit(
             expected_period=payload.period,
         )
 
-    kpi_service.submit_for_dept_approval(db, user, payload.year, payload.period)
-    return _own_submissions_for_period(db, user, payload.year, payload.period)
+    # S-m3: return the partial-submit result — a grace-skipped submit
+    # must not look identical to a full one. The submission list stays
+    # under "submissions" (same rows as before) so existing clients keep
+    # working; "submitted"/"skipped" carry the service's id lists.
+    result = kpi_service.submit_for_dept_approval(db, user, payload.year, payload.period)
+    return {
+        "submissions": _own_submissions_for_period(db, user, payload.year, payload.period),
+        "submitted": result["submitted"],
+        "skipped": result["skipped"],
+    }
+
+
+@router.post("/employee/withdraw")
+def employee_withdraw(
+    payload: WithdrawRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Withdraw the employee's own DRAFT rows for a period (S-M2).
+
+    The user-decided exit for a DRAFT stuck after its grace window
+    closed: the employee withdraws it themselves — no score invented,
+    nothing force-approved. Only Employees and Dept Admins self-assess,
+    and only their OWN drafts are ever touched (the service filters by
+    employee_id). Withdrawal bypasses the grace window (it is not an
+    edit); a future month is still refused.
+    """
+    if user.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN):
+        raise HTTPException(403, "This account type does not self-assess.")
+
+    result = kpi_service.withdraw_draft(db, user, payload.year, payload.period)
+    return {
+        "submissions": _own_submissions_for_period(db, user, payload.year, payload.period),
+        "withdrawn": result["withdrawn"],
+    }
 
 
 @router.post("/bulk-approve")

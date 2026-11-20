@@ -23,7 +23,15 @@ until the restore drill in §3 has actually been done and its time recorded.
 > (`scripts/backup-uploads.sh`). It was removed with the volume itself:
 > nothing in the app writes to `/app/uploads` anymore (bulk import reads
 > the file into memory and never writes to disk), so there are no uploaded
-> files to back up. The three cron jobs in §1 are the complete set.
+> files to back up.
+>
+> Note (2026-11-20, senior review S-M1): a FOURTH cron job was added —
+> the daily recurring-KPI rollover (below). The day-8 rollover used to
+> rely only on lazy per-employee materialisation when each employee
+> opened their dashboard; the cron is now the real automation and the
+> lazy path is only a fallback. The three jobs in §1 are therefore now
+> four; `scripts/check-cron-logs.sh` still watches only the original
+> three — extend it to the rollover log if you want the same watch.
 
 ## 1. Confirm the server crontab
 
@@ -33,9 +41,9 @@ On the server, in `~/kpi-app`:
 crontab -l
 ```
 
-All three jobs must be listed. Install any missing one with `crontab -e`
+All four jobs must be listed. Install any missing one with `crontab -e`
 — **do not paste a cron line directly into the shell** (it will try to run
-it as a command and fail). All three are required (N2, 2026-11-12) — the
+it as a command and fail). All four are required (N2, 2026-11-12) — the
 backup job included: it is the highest-stakes job, and without it there
 is nothing to restore from.
 
@@ -43,7 +51,16 @@ is nothing to restore from.
 # KPI deadline reminders — daily 08:00
 0 8 * * * cd ~/kpi-app && docker compose exec -T web python -m app.jobs.send_deadline_reminders >> ~/kpi-app/deadline-reminders.log 2>&1
 
-# Audit-log pruning — monthly, keeps 180 days
+# Recurring KPI rollover — daily 07:00 (S-M1, 2026-11-20). Materialises
+# the current month's recurring KPI set for all tenants once the day-8
+# rollover opens; before day 8 it does nothing, and re-running it on
+# the same day creates nothing twice (idempotent). Runs before the
+# 08:00 reminders so the new month's drafts exist when employees are
+# nudged about them.
+0 7 * * * cd ~/kpi-app && docker compose exec -T web python -m app.jobs.run_recurring_rollover >> ~/kpi-app/recurring-rollover.log 2>&1
+
+# Audit-log pruning — monthly, keeps 180 days (audit logs) and 90 days
+# (notifications, except deadline_reminder rows — see docs/neon-usage-check.md)
 0 3 1 * * cd ~/kpi-app && docker compose exec -T web python -m app.jobs.prune_audit_logs >> ~/kpi-app/prune-audit.log 2>&1
 
 # Database backup — daily 02:00 (see scripts/backup-db.sh header). The

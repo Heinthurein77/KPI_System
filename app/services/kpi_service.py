@@ -609,6 +609,12 @@ def save_self_scores(
             "These scores were changed by another request. Reload and try again.",
             expected_updated_at=submission.updated_at,
         )
+        # S-m4: self-score edits are audited like every other score
+        # transition (submit/dept save/approve/final approve/override/
+        # reject all log) — otherwise the values entered, changed, or
+        # cleared before submission are invisible in the audit trail.
+        old_self_score = submission.self_score
+        old_comment = submission.self_score_comment
         if submission.id in scores:
             _validate_score_within_target(submission, scores[submission.id], "Self score")
             submission.self_score = scores[submission.id]
@@ -616,6 +622,22 @@ def save_self_scores(
             # Only keys actually sent by the client update the comment; an
             # empty string clears it. Keys not sent leave it untouched.
             submission.self_score_comment = comments[submission.id].strip() or None
+        if (
+            submission.self_score != old_self_score
+            or submission.self_score_comment != old_comment
+        ):
+            audit_service.log(
+                db, employee, "kpi_self_scores_saved", "kpi_submission", submission.id,
+                _entity_label(submission),
+                f"Self score saved: {fmt_score(old_self_score)} → "
+                f"{fmt_score(submission.self_score)}"
+                + (
+                    " (comment updated)"
+                    if submission.self_score_comment != old_comment
+                    else ""
+                ),
+                department_id=submission.department_id,
+            )
     db.commit()
 
 
@@ -739,6 +761,81 @@ def submit_for_dept_approval(
     db.commit()
     email_service.send_for_notifications(db, emailed)
     return {"submitted": [s.id for s in to_submit], "skipped": [s.id for s in skipped]}
+
+
+def withdraw_draft(
+    db: Session, employee: User, year: int, period: str, today: date | None = None
+) -> dict:
+    """Employee withdraws their OWN stuck DRAFT rows for a period (S-M2).
+
+    The user-decided exit for a DRAFT whose grace window has closed:
+    the employee withdraws it themselves. No score is invented and
+    nothing is force-approved — the draft rows are deleted, which
+
+    - clears the stuck state (the rows are gone, so nothing stays DRAFT
+      past grace), and
+    - frees the frozen weight: deleted rows no longer count in
+      ``validate_period_total_weight`` / ``period_submission_snapshots``,
+      so a new KPI can be created/saved for the period afterwards.
+
+    No resurrection on the next dashboard visit: the dashboard only
+    calls ``ensure_period_submissions`` for fillable periods (current
+    month or grace month), and a post-grace period is not fillable, so
+    the deleted rows are not re-created there. (During grace the
+    period is still fillable and lazy materialisation would re-create
+    a withdrawn draft on the next visit — withdraw is meant for the
+    post-grace stuck case; the UI only offers it for stuck drafts.)
+
+    Withdrawal is NOT an edit, so it bypasses the grace-window check
+    that blocks ``save_self_scores`` on post-grace DRAFTs. A future
+    month is still refused (admin pre-creation territory). Every row
+    is claimed first (C2, same idiom as submit/approve) so a withdraw
+    racing a concurrent submit cannot delete a row that was just
+    submitted. Each deletion is audit-logged.
+    """
+    today = today or app_today()
+    # Future months are never employee-editable, even for withdrawal.
+    assert_not_future_month(year, period, today)
+    drafts = db.scalars(
+        select(KPISubmission)
+        .options(
+            joinedload(KPISubmission.kpi_template),
+            joinedload(KPISubmission.employee),
+        )
+        .where(
+            KPISubmission.employee_id == employee.id,
+            KPISubmission.year == year,
+            KPISubmission.month_or_quarter == period,
+            KPISubmission.tenant_id == employee.tenant_id,
+            KPISubmission.status == KPIStatus.DRAFT,
+        )
+    ).all()
+    if not drafts:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "No draft KPI found for this period to withdraw.",
+        )
+    # Claim every row first — all claims happen before any deletion or
+    # audit row, so a concurrent submit wins the race deterministically
+    # and the loser gets a 400 with nothing deleted.
+    for submission in drafts:
+        _claim_submission(
+            db, submission, [KPIStatus.DRAFT],
+            "This draft was already submitted or withdrawn.",
+        )
+    withdrawn_ids = [s.id for s in drafts]
+    for submission in drafts:
+        audit_service.log(
+            db, employee, "kpi_draft_withdrawn", "kpi_submission", submission.id,
+            _entity_label(submission),
+            f"Draft withdrawn by {employee.name} for {period} {year} "
+            f"(self score was {fmt_score(submission.self_score)}); "
+            "no score was recorded and nothing was approved.",
+            department_id=submission.department_id,
+        )
+        db.delete(submission)
+    db.commit()
+    return {"withdrawn": withdrawn_ids}
 
 
 def _entity_label(submission: KPISubmission) -> str:
@@ -1015,9 +1112,12 @@ def tenant_admin_override(
     Weight guard — DELIBERATE BYPASS, documented (B-M4): unlike
     dept_approve / final_approve, this function does NOT call
     validate_period_total_weight. Override is the escape hatch for
-    legacy over-100 periods (a DRAFT stuck after grace can only be
-    cleared this way — see S-M2); enforcing the guard here would close
-    that exit. The bypass is intentional, not an oversight.
+    legacy over-100 periods. It is NOT the exit for a DRAFT stuck after
+    grace — that exit is now the employee's own withdraw
+    (``withdraw_draft``, S-M2), which deletes the stuck DRAFT rows
+    without inventing a score; override still works on a DRAFT, but it
+    force-approves with an admin-chosen score and must not be used just
+    to clear an unscored draft.
     """
     _assert_period_match(submission, expected_year, expected_period)
     _claim_submission(

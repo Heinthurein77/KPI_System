@@ -38,3 +38,38 @@ def test_production_with_placeholder_or_short_secret_key_is_rejected(monkeypatch
 def test_development_needs_neither_a_strong_key_nor_a_database(monkeypatch):
     s = build(monkeypatch, ENVIRONMENT="development")
     assert s.is_sqlite and not s.is_production
+
+
+def test_invalid_timezone_is_rejected_at_startup(monkeypatch):
+    """S-m7: TIMEZONE must be a loadable IANA zone — fail fast with a
+    clear error instead of a ZoneInfo exception mid-request."""
+    with pytest.raises(ValidationError, match="TIMEZONE"):
+        build(monkeypatch, TIMEZONE="Not/AZone")
+
+
+def test_valid_timezone_is_accepted(monkeypatch):
+    s = build(monkeypatch, TIMEZONE="Asia/Bangkok")
+    assert s.TIMEZONE == "Asia/Bangkok"
+
+
+def test_ignored_env_vars_are_surfaced(monkeypatch):
+    """S-m7: a typo'd setting name (SUBMISSION_GRACE_DAY) or a KPI_*
+    var is reported instead of silently running on the default."""
+    from app.core.config import ignored_env_vars
+
+    flagged = ignored_env_vars(
+        {
+            "SUBMISSION_GRACE_DAY": "3",
+            "KPI_FOO": "1",
+            "SUBMISSION_GRACE_DAYS": "7",
+            "SECRET_KEY": "x",
+            "HOME": "/root",
+            "PATH": "/usr/bin",
+        }
+    )
+    assert "SUBMISSION_GRACE_DAY" in flagged
+    assert "KPI_FOO" in flagged
+    assert "SUBMISSION_GRACE_DAYS" not in flagged
+    assert "SECRET_KEY" not in flagged
+    assert "HOME" not in flagged
+    assert "PATH" not in flagged

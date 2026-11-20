@@ -105,7 +105,7 @@ def test_monthly_summary_spec_example():
     result = monthly_summary(records, days)
     assert result == {
         "working_days": 22, "present": 20, "half": 1,
-        "leave": 0, "absent": 1, "attendance_pct": 93.2,
+        "leave": 0, "absent": 1, "unknown": 0, "attendance_pct": 93.2,
     }
 
 

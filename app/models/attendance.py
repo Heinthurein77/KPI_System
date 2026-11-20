@@ -17,6 +17,7 @@ import json
 from datetime import date as date_type, datetime, time as time_type, timezone
 
 from sqlalchemy import (
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -178,6 +179,15 @@ class AttendanceRecord(Base):
         UniqueConstraint(
             "tenant_id", "employee_id", "record_date",
             name="uq_attendance_tenant_employee_day",
+        ),
+        # S-m8: DB-level backstop for the status vocabulary. The summary
+        # used to count any unrecognised status as absent; a corrupt or
+        # mistyped status can now never be written in the first place.
+        # Verified safe before adding: both local dev DBs hold zero
+        # attendance_records rows, so no existing row violates it.
+        CheckConstraint(
+            "status IN ('present', 'half', 'leave')",
+            name="ck_attendance_records_status",
         ),
     )
 

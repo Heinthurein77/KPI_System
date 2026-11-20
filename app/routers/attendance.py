@@ -63,7 +63,7 @@ from app.schemas.attendance import (
     LeaveCreate,
     LeaveUpdate,
 )
-from app.services import audit_service, notification_service
+from app.services import audit_service, email_service, notification_service
 from app.services.attendance_export_service import build_attendance_detail_report
 from app.services.attendance_service import (
     DEFAULT_END,
@@ -329,6 +329,7 @@ def _summary_for(
         half=result["half"],
         leave=result["leave"],
         absent=result["absent"],
+        unknown=result["unknown"],
         attendance_pct=result["attendance_pct"],
         records=[_serialize(db, r, author=employee) for r in sorted(records, key=lambda r: r.record_date)],
     )
@@ -374,7 +375,7 @@ def _save_settings(db: Session, user: User, data: dict) -> AttendanceSettings:
         row.holidays_json = json.dumps(data["holidays"])
     if holiday_notice is not None:
         title, message = holiday_notice
-        notification_service.notify_tenant_users(
+        holiday_notified = notification_service.notify_tenant_users(
             db,
             tenant_id=user.tenant_id,
             exclude_user_id=user.id,
@@ -383,6 +384,8 @@ def _save_settings(db: Session, user: User, data: dict) -> AttendanceSettings:
             message=message,
             link="/attendance",
         )
+    else:
+        holiday_notified = []
     # Audit: a tenant admin can silently clear office_ips (disabling the
     # WiFi gate for everyone) — that change must be attributable.
     changed = sorted(data.keys())
@@ -394,6 +397,14 @@ def _save_settings(db: Session, user: User, data: dict) -> AttendanceSettings:
     )
     db.commit()
     db.refresh(row)
+    # S-m1: holiday announcements were bell-only. Every KPI workflow
+    # notification is also emailed, following the same pattern used by
+    # the KPI workflows: email after commit, failures swallowed inside
+    # send_for_notifications, so a mail outage can never fail the
+    # settings save. Only the holiday-change notifications are emailed
+    # — other settings changes notify nobody and email nobody.
+    if holiday_notified:
+        email_service.send_for_notifications(db, holiday_notified)
     return row
 
 
@@ -504,10 +515,22 @@ def check_in(
         check_in_ip=ip,
     )
     db.add(record)
-    # M1: a double-tap / two tabs racing the INSERT hits the unique
-    # constraint (uq_attendance_tenant_employee_day) — roll back and
-    # answer 409 with the winner's record instead of a 500.
+    # S-M4: check-in is audited like leave/settings/export — the WiFi-gate
+    # IP decision is evidence that belongs in the queryable audit trail,
+    # not only in text logs. Flush first so the audit row can reference
+    # the record id; the audit row shares this transaction, so a failed
+    # check-in (unique-constraint race below) never leaves an audit row
+    # behind for a check-in that did not happen.
     try:
+        db.flush()
+        audit_service.log(
+            db, user, "attendance_check_in", "attendance_record",
+            record.id, f"{user.name} — {today.isoformat()}",
+            f"Checked in at {check_in_time.strftime('%H:%M')} from {ip} "
+            f"(WiFi gate: {'enforced, IP allowed' if enforced else 'not enforced — no office IPs configured'}; "
+            f"status {record.status}, late {record.late_minutes} min).",
+            department_id=user.department_id,
+        )
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -542,7 +565,7 @@ def check_out(
     now = _now_local()
     today = now.date()
     ip = _client_ip(request)
-    allowed, _enforced = _ip_allowed(cfg, ip)
+    allowed, enforced = _ip_allowed(cfg, ip)
     if not allowed:
         raise HTTPException(
             403,
@@ -602,6 +625,18 @@ def check_out(
     if result.rowcount == 0:
         db.rollback()
         raise HTTPException(409, "You have already checked out today.")
+    # S-M4: check-out is audited like check-in — including the WiFi-gate
+    # IP decision and the day actually closed (after-midnight check-outs
+    # close yesterday's record, M18). The audit row shares the commit
+    # below, so a failed close never leaves an audit row behind.
+    audit_service.log(
+        db, user, "attendance_check_out", "attendance_record",
+        record.id, f"{user.name} — {record.record_date.isoformat()}",
+        f"Checked out at {check_out_time.strftime('%H:%M')} from {ip} "
+        f"(WiFi gate: {'enforced, IP allowed' if enforced else 'not enforced — no office IPs configured'}; "
+        f"status {new_status}).",
+        department_id=user.department_id,
+    )
     db.commit()
     db.refresh(record)
     logger.info(

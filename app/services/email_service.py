@@ -31,10 +31,11 @@ logger = logging.getLogger("kpi_system")
 
 def _build_message(to_email: str, subject: str, body: str, link: str | None) -> EmailMessage:
     full_body = body
+    # S-m2: config documents "Unset → emails omit the link" — only append
+    # the View link when a base URL is configured. A bare relative path
+    # ("View: /dashboard?...") is unclickable in an email.
     if link and settings.APP_BASE_URL:
         full_body += f"\n\nView: {settings.APP_BASE_URL.rstrip('/')}{link}"
-    elif link:
-        full_body += f"\n\nView: {link}"
     msg = EmailMessage()
     msg["From"] = settings.smtp_from
     msg["To"] = to_email

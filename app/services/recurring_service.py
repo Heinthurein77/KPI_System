@@ -11,6 +11,8 @@ materialise_recurring_for_period(db, year, period, tenant_id=None)
     The core "roll-forward" function.  Call it from:
       - the POST /api/admin/recurring/run admin endpoint  (on demand)
       - a scheduled task / cron job                       (automatic)
+        — app/jobs/run_recurring_rollover.py, daily (S-M1), which is
+        the real automation behind the day-8 rollover.
 
 RecurrenceResult
     A small dataclass returned by materialise_recurring_for_period

@@ -85,7 +85,7 @@ def test_t1_happy_path(client, db):
         "year": YEAR, "period": PERIOD, "scores": {}, "comments": {},
     }, headers=h_aye)
     assert r.status_code == 200, r.text
-    assert r.json()[0]["status"] == "pending_dept_approval"
+    assert r.json()["submissions"][0]["status"] == "pending_dept_approval"
 
     # dept approve with adjusted score
     r = client.post(f"/api/kpi/{sid}/dept-approve", json={
@@ -171,7 +171,7 @@ def test_t3_reject_revise_resubmit(client, db):
         "scores": {str(sid): 45}, "comments": {str(sid): "Added evidence"},
     }, headers=h_cho)
     assert r.status_code == 200, r.text
-    assert r.json()[0]["status"] == "pending_dept_approval"
+    assert r.json()["submissions"][0]["status"] == "pending_dept_approval"
 
     # approve path completes
     r = client.post(f"/api/kpi/{sid}/dept-approve", json={

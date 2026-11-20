@@ -8,6 +8,10 @@ export function employeeSubmit(payload) {
   return client.post("/api/kpi/employee/submit", payload).then((r) => r.data);
 }
 
+export function employeeWithdraw(payload) {
+  return client.post("/api/kpi/employee/withdraw", payload).then((r) => r.data);
+}
+
 export function deptSave(submissionId, payload) {
   return client.post(`/api/kpi/${submissionId}/dept-save`, payload).then((r) => r.data);
 }

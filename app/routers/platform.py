@@ -104,6 +104,15 @@ def platform_change_password(
     admin.password_hash = hash_password(payload.new_password)
     admin.must_change_password = False
     admin.token_version = (admin.token_version or 0) + 1
+    # S-M5: platform password changes are audited like tenant ones —
+    # who changed it and that all sessions were invalidated. The
+    # password itself is never logged. Platform-scoped (tenant_id NULL)
+    # audit rows are supported since 0024.
+    audit_service.log(
+        db, admin, "password_changed", "user", admin.id, admin.name,
+        f"Platform password changed by {admin.name} ({admin.role.value}); "
+        "all sessions invalidated (token_version bumped).",
+    )
     db.commit()
     # The token_version bump invalidates this session — clear the now-dead
     # cookie so the SPA doesn't keep sending it. The admin logs in again.

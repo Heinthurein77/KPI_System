@@ -79,18 +79,26 @@ def monthly_summary(
     `records` maps a date to 'present', 'half' or 'leave'. A working day
     with no record is an unexplained absence. Leave counts as absent
     (0 credit) in the percentage, but is reported separately.
+
+    S-m8: a record whose status is none of 'present'/'half'/'leave' is
+    counted as ``unknown`` — surfaced separately, never silently folded
+    into ``absent``. (A missing record — no row at all — is still an
+    unexplained absence, as before.) Present/half/leave counting and
+    the percentage are unchanged.
     """
-    present = half = leave = absent = 0
+    present = half = leave = absent = unknown = 0
     for day in working_days:
         status = records.get(day)
-        if status == "present":
+        if status is None:
+            absent += 1
+        elif status == "present":
             present += 1
         elif status == "half":
             half += 1
         elif status == "leave":
             leave += 1
         else:
-            absent += 1
+            unknown += 1
     total = len(working_days)
     credited = present + 0.5 * half
     pct = round(credited / total * 100, 1) if total else 0.0
@@ -100,5 +108,6 @@ def monthly_summary(
         "half": half,
         "leave": leave,
         "absent": absent,
+        "unknown": unknown,
         "attendance_pct": pct,
     }

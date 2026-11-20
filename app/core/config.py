@@ -1,7 +1,15 @@
+import difflib
+import logging
+import os
 from functools import lru_cache
 from math import log2
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+logger = logging.getLogger("kpi_system.config")
 
 # Substrings that show up in placeholder/example secrets people forget to
 # replace (including this file's own default below). Checked case-insensitively
@@ -149,6 +157,21 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def _validate_timezone(self) -> "Settings":
+        """S-m7: TIMEZONE must be a loadable IANA zone — fail fast at
+        startup with a clear error instead of a ZoneInfo exception on
+        the first request that calls timezone.today()."""
+        try:
+            ZoneInfo(self.TIMEZONE)
+        except Exception as exc:
+            raise ValueError(
+                f"TIMEZONE {self.TIMEZONE!r} is not a valid IANA timezone "
+                "(e.g. 'Asia/Yangon'). Fix the TIMEZONE env var — every "
+                "period/grace/reminder calculation depends on it."
+            ) from exc
+        return self
+
+    @model_validator(mode="after")
     def _require_database_in_production(self) -> "Settings":
         """Without DATABASE_URL the app silently falls back to a SQLite file
         inside the container — which is wiped on every rebuild/redeploy, so a
@@ -168,3 +191,65 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+
+
+# ---------------------------------------------------------------------------
+# S-m7: surface silently ignored env vars.
+#
+# ``extra="ignore"`` stays — switching to ``extra="forbid"`` would crash
+# startup on any harmless extra var a deployment happens to set (e.g. a
+# Docker or platform variable). Instead, at import time we log a warning
+# listing env vars that LOOK like they were meant for this app but match
+# no setting: anything under the ``KPI_`` prefix, anything sharing the
+# first segment of a real setting name (``SUBMISSION_GRACE_DAY`` vs the
+# real ``SUBMISSION_GRACE_DAYS``), and near-miss spellings of a real
+# setting. A typo'd var used to run silently on the default with no
+# trace at all; now it shows up in the startup log. Vars from the
+# ``.env`` file are checked too (pydantic-settings reads that file
+# itself — those keys never reach ``os.environ``).
+# ---------------------------------------------------------------------------
+
+def _env_file_keys() -> set[str]:
+    keys: set[str] = set()
+    try:
+        for line in Path(".env").read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            keys.add(line.split("=", 1)[0].strip())
+    except OSError:
+        pass
+    return keys
+
+
+def ignored_env_vars(environ: dict | None = None) -> list[str]:
+    """Env/.env keys that look app-related but match no Settings field."""
+    known = set(Settings.model_fields)
+    prefixes = {"KPI"}
+    for field in known:
+        prefixes.add(field.split("_", 1)[0])
+    candidates = set(os.environ) if environ is None else set(environ)
+    if environ is None:
+        candidates |= _env_file_keys()
+    ignored: list[str] = []
+    for key in sorted(candidates):
+        if key in known:
+            continue
+        if any(key.startswith(prefix + "_") for prefix in prefixes):
+            ignored.append(key)
+        elif difflib.get_close_matches(key, known, n=1, cutoff=0.85):
+            ignored.append(key)
+    return ignored
+
+
+def log_ignored_env_vars() -> None:
+    ignored = ignored_env_vars()
+    if ignored:
+        logger.warning(
+            "Ignoring unrecognised environment variable(s) that look like "
+            "KPI settings (check for typos — they have no effect): %s",
+            ", ".join(ignored),
+        )
+
+
+log_ignored_env_vars()

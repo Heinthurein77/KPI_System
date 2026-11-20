@@ -113,6 +113,18 @@ class SubmitRequest(PeriodYearValidated):
     _validate_comments = field_validator("comments")(_validate_comment_keys_and_values)
 
 
+class WithdrawRequest(PeriodYearValidated):
+    """Employee withdraws their own DRAFT rows for a period (S-M2).
+
+    Only year/period are needed: the service withdraws every DRAFT row
+    the employee owns in that period. No scores are carried — withdrawal
+    records nothing and approves nothing.
+    """
+
+    year: int
+    period: str
+
+
 class DeptSaveRequest(PeriodYearValidated):
     year: int
     period: str

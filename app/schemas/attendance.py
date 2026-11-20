@@ -147,6 +147,9 @@ class AttendanceSummaryOut(BaseModel):
     half: int
     leave: int
     absent: int
+    # S-m8: records whose status is none of present/half/leave — counted
+    # separately, never silently folded into absent. 0 on all healthy data.
+    unknown: int = 0
     attendance_pct: float
     records: list[AttendanceRecordOut] = []
 

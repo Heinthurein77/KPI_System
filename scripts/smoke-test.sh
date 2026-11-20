@@ -53,7 +53,13 @@ trap cleanup EXIT
 compose down -v --remove-orphans >/dev/null 2>&1 || true
 
 echo "smoke-test: building + starting scratch stack (project $PROJECT)..."
-compose up -d --build --wait
+if ! compose up -d --build --wait; then
+    echo "smoke-test: FAIL — stack did not reach healthy" >&2
+    compose ps >&2 || true
+    compose logs web 2>/dev/null | tail -80 >&2 || true
+    compose logs db 2>/dev/null | tail -20 >&2 || true
+    exit 1
+fi
 
 echo "smoke-test: waiting up to ${TIMEOUT}s for $BASE_URL/readyz ..."
 deadline=$((SECONDS + TIMEOUT))

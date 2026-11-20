@@ -11,9 +11,15 @@
   rejects revoked tokens. Rows are pruned lazily (expired rows are
   deleted on logout).
 
-Revision ID: 0017_diary_unique_day_revoked_tokens
+Revision ID: 0017_diary_unique_day_revoked
 Revises: 0016_add_daily_tasks
 Create Date: 2026-11-03
+
+NOTE: the id is deliberately short (29 chars). Alembic's version_num is
+VARCHAR(32) and Postgres enforces it — the previous id
+(0017_diary_unique_day_revoked_tokens, 36 chars) made `alembic upgrade
+head` fail on any fresh Postgres at the 0016 -> 0017 stamp, while SQLite
+silently accepted it. Keep all revision ids at most 32 chars.
 """
 
 from typing import Sequence, Union
@@ -22,7 +28,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision: str = "0017_diary_unique_day_revoked_tokens"
+revision: str = "0017_diary_unique_day_revoked"
 down_revision: Union[str, Sequence[str], None] = "0016_add_daily_tasks"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

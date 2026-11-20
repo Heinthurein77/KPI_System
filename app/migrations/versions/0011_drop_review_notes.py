@@ -4,7 +4,7 @@ The reviewer-notes feature was removed; drop its table. The 0009 migration
 is left untouched so existing databases upgrade cleanly through the chain.
 
 Revision ID: 0011_drop_review_notes
-Revises: 0010_add_user_email_notifications
+Revises: 0010_add_user_email_notif
 Create Date: 2026-10-15
 """
 from typing import Sequence, Union
@@ -14,7 +14,7 @@ import sqlalchemy as sa
 
 
 revision: str = "0011_drop_review_notes"
-down_revision: Union[str, Sequence[str], None] = "0010_add_user_email_notifications"
+down_revision: Union[str, Sequence[str], None] = "0010_add_user_email_notif"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

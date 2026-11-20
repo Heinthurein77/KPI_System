@@ -13,7 +13,7 @@ keeps the SQLite scratch-DB chain test working (SQLite cannot ALTER a
 column type in place).
 
 Revision ID: 0018_metric_name_text
-Revises: 0017_diary_unique_day_revoked_tokens
+Revises: 0017_diary_unique_day_revoked
 Create Date: 2026-11-04
 """
 
@@ -24,7 +24,7 @@ import sqlalchemy as sa
 
 
 revision: str = "0018_metric_name_text"
-down_revision: Union[str, Sequence[str], None] = "0017_diary_unique_day_revoked_tokens"
+down_revision: Union[str, Sequence[str], None] = "0017_diary_unique_day_revoked"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

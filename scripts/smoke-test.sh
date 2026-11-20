@@ -53,7 +53,7 @@ trap cleanup EXIT
 compose down -v --remove-orphans >/dev/null 2>&1 || true
 
 echo "smoke-test: building + starting scratch stack (project $PROJECT)..."
-if ! compose up -d --build --wait; then
+if ! compose up -d --build --wait --wait-timeout 240; then
     echo "smoke-test: FAIL — stack did not reach healthy" >&2
     compose ps >&2 || true
     compose logs web 2>/dev/null | tail -80 >&2 || true

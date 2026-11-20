@@ -63,11 +63,21 @@ def _type_family(type_: object) -> str:
     """Column type with lengths stripped, so VARCHAR(11) == VARCHAR(12).
 
     Enum types collapse to ENUM on both dialects: SQLite renders them as
-    VARCHAR, Postgres keeps the named enum type.
+    VARCHAR, Postgres keeps the named enum type. Postgres also spells
+    two generic families differently from the model metadata, and those
+    are rendering artifacts, not drift:
+    - generic DateTime renders as TIMESTAMP (with or without time zone)
+      on Postgres, while SQLite and the model metadata call it DATETIME;
+    - SQLAlchemy Float is stored as double precision on Postgres, so
+      reflection reports DOUBLE PRECISION where the model says FLOAT.
     """
     name = re.sub(r"\(.*\)", "", str(type_).upper()).strip()
     if name in ("USERROLE", "KPISTATUS", "TENANTSTATUS"):
         return "ENUM"
+    if name.startswith("TIMESTAMP"):
+        return "DATETIME"
+    if name == "DOUBLE PRECISION":
+        return "FLOAT"
     return name
 
 

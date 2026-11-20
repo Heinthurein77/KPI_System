@@ -4,7 +4,8 @@
 Concurrency tests follow the test_reliability_races.py pattern: parallel
 TestClient calls via threads. SQLite serialises writers, so the observed
 rates are a lower bound for production Postgres — the assertions are
-about outcomes (exactly one success, zero 500s), which must hold on both.
+about outcomes (no 500s, audit rows matching successful calls), which
+must hold on both.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -185,23 +186,42 @@ def _pending_final_setup(db):
     return tenant, admin, employee, submission
 
 
-def test_override_on_already_approved_is_rejected(client, db):
-    """B-M4: overriding an APPROVED row is a 400 with no new audit row
-    or notification (was: silently re-approved with a fresh audit row)."""
+def test_override_on_already_approved_corrects_score(client, db):
+    """Post-approval correction (user decision 2026-11-20): a tenant
+    admin may correct an already-APPROVED row's score via override.
+    The row stays APPROVED, the new score and remarks are stored, and
+    the correction is audit-logged ("Score corrected after approval")."""
     tenant, admin, _employee, submission = _pending_final_setup(db)
     headers = auth_headers(admin, tenant)
     payload = {"year": 2026, "period": "October", "final_score": 70.0}
     first = client.post(f"/api/kpi/{submission.id}/override", json=payload, headers=headers)
     assert first.status_code == 200, first.text
     assert _audit_count(db, "kpi_overridden", submission.id) == 1
-    second = client.post(f"/api/kpi/{submission.id}/override", json=payload, headers=headers)
-    assert second.status_code == 400, second.text
-    assert _audit_count(db, "kpi_overridden", submission.id) == 1
+    correction = {"year": 2026, "period": "October", "final_score": 85.0, "remarks": "Correction"}
+    second = client.post(f"/api/kpi/{submission.id}/override", json=correction, headers=headers)
+    assert second.status_code == 200, second.text
+    assert _audit_count(db, "kpi_overridden", submission.id) == 2
+    db.expire_all()
+    s = db.get(type(submission), submission.id)
+    assert s.status == KPIStatus.APPROVED
+    assert s.final_score == 85.0
+    assert s.remarks == "Correction"
+    summaries = [
+        r.summary for r in db.query(AuditLog).filter(
+            AuditLog.action == "kpi_overridden", AuditLog.entity_id == submission.id
+        ).order_by(AuditLog.id).all()
+    ]
+    assert "corrected after approval" in summaries[-1]
 
 
-def test_override_racing_final_approve_has_one_winner(client, db):
-    """B-M4: an override racing a final approve serialises — exactly
-    one 200, exactly one audit row across both actions, no 500s."""
+def test_override_racing_final_approve_serialises_without_500s(client, db):
+    """Post-approval correction (user decision 2026-11-20): an override
+    racing a final approve no longer has a single winner. Every
+    override succeeds — the first as the approval, the rest as
+    corrections — while a final approve only wins if it claims the row
+    before any override does (otherwise 400). The claim still
+    serialises the race: no 500s, at most one final-approval audit row,
+    and exactly one override audit row per override that returned 200."""
     tenant, admin, _employee, submission = _pending_final_setup(db)
     headers = auth_headers(admin, tenant)
     override = {"year": 2026, "period": "October", "final_score": 70.0}
@@ -214,15 +234,13 @@ def test_override_racing_final_approve_has_one_winner(client, db):
                for _ in range(4)]
         )
         codes = [f.result().status_code for f in futures]
-    assert codes.count(200) == 1, codes
     assert not any(c >= 500 for c in codes), codes
     db.expire_all()
     assert db.get(type(submission), submission.id).status == KPIStatus.APPROVED
-    assert (
-        _audit_count(db, "kpi_overridden", submission.id)
-        + _audit_count(db, "kpi_final_approved", submission.id)
-        == 1
-    )
+    assert _audit_count(db, "kpi_overridden", submission.id) == 4
+    final_approved = _audit_count(db, "kpi_final_approved", submission.id)
+    assert final_approved in (0, 1)
+    assert codes.count(200) == 4 + final_approved, codes
 
 
 # ---------------------------------------------------------------- B-M5

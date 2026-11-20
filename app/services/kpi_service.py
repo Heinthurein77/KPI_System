@@ -1103,11 +1103,15 @@ def tenant_admin_override(
 ) -> None:
     """Tenant Admin can override the score and force-approve at any workflow stage.
 
-    Status guard (B-M4): an already-APPROVED row cannot be silently
-    re-approved — the C2 claim below only accepts DRAFT / REJECTED /
-    PENDING_DEPT_APPROVAL / PENDING_FINAL_APPROVAL, so a second override
-    (or an override racing final_approve) gets a 400 and writes no new
-    audit row or notification.
+    Post-approval correction (user decision 2026-11-20): a tenant admin
+    may correct an already-APPROVED row's score via override. The row
+    stays APPROVED; the correction is audit-logged
+    ("Score corrected after approval: ...") and the employee is
+    notified, exactly like a first override. The C2 claim below still
+    serialises concurrent overrides — a second caller racing this one
+    blocks on the row lock, then claims the (now corrected) row and
+    overwrites with its own score, so corrections are last-write-wins
+    in score order, never duplicated audit rows.
 
     Weight guard — DELIBERATE BYPASS, documented (B-M4): unlike
     dept_approve / final_approve, this function does NOT call
@@ -1120,11 +1124,13 @@ def tenant_admin_override(
     to clear an unscored draft.
     """
     _assert_period_match(submission, expected_year, expected_period)
+    was_approved = submission.status == KPIStatus.APPROVED
     _claim_submission(
         db, submission,
         [KPIStatus.DRAFT, KPIStatus.REJECTED,
-         KPIStatus.PENDING_DEPT_APPROVAL, KPIStatus.PENDING_FINAL_APPROVAL],
-        "Submission is already approved.",
+         KPIStatus.PENDING_DEPT_APPROVAL, KPIStatus.PENDING_FINAL_APPROVAL,
+         KPIStatus.APPROVED],
+        "Submission could not be claimed (already handled by another caller).",
     )
     _validate_score_within_target(submission, final_score, "Override score")
     old_score = submission.final_score if submission.final_score is not None else (
@@ -1138,6 +1144,8 @@ def tenant_admin_override(
     submission.final_reviewed_at = _now()
     audit_service.log(
         db, admin, "kpi_overridden", "kpi_submission", submission.id, _entity_label(submission),
+        f"Score corrected after approval: {fmt_score(old_score)} → {fmt_score(final_score)}."
+        if was_approved else
         f"Score overridden: {fmt_score(old_score)} → {fmt_score(final_score)}.",
         department_id=submission.department_id,
     )

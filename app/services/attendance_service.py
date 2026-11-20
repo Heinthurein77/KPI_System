@@ -16,7 +16,6 @@ Rules (decided by the user 2026-11-10):
 
 from __future__ import annotations
 
-import calendar
 from datetime import date as date_type, time as time_type
 
 
@@ -69,23 +68,6 @@ def day_status(
     if check_out is not None and _minutes(check_out) < _minutes(mid):
         return "half"
     return "present"
-
-
-def working_days_in_month(
-    year: int,
-    month: int,
-    work_days: list[int],
-    holidays: set[date_type] | None = None,
-) -> list[date_type]:
-    """All working days of a month: weekdays in `work_days`, minus holidays."""
-    holidays = holidays or set()
-    _, last_day = calendar.monthrange(year, month)
-    return [
-        date_type(year, month, day)
-        for day in range(1, last_day + 1)
-        if date_type(year, month, day).weekday() in work_days
-        and date_type(year, month, day) not in holidays
-    ]
 
 
 def monthly_summary(

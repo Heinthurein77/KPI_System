@@ -173,6 +173,15 @@ def create_tenant(
         )
     )
     try:
+        # B-m4: tenant creation is an audit event (was unaudited; only
+        # tenant delete logged). Platform-scoped: the acting admin has
+        # tenant_id NULL, so the row survives the tenant it describes.
+        # Logged in the same commit as the create, so the two never
+        # diverge — and a failed create rolls the audit row back too.
+        audit_service.log(
+            db, _admin, "tenant_created", "tenant", tenant.id, tenant.name,
+            f'Tenant "{tenant.name}" (slug={tenant.slug}) created by platform admin.',
+        )
         db.commit()
     except IntegrityError:
         db.rollback()
@@ -189,6 +198,11 @@ def suspend_tenant(
     if tenant is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Tenant not found.")
     tenant.status = TenantStatus.SUSPENDED
+    # B-m4: tenant suspension is an audit event (was unaudited).
+    audit_service.log(
+        db, _admin, "tenant_suspended", "tenant", tenant.id, tenant.name,
+        f'Tenant "{tenant.name}" (slug={tenant.slug}) suspended by platform admin.',
+    )
     db.commit()
     return tenant
 
@@ -201,6 +215,11 @@ def activate_tenant(
     if tenant is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Tenant not found.")
     tenant.status = TenantStatus.ACTIVE
+    # B-m4: tenant activation is an audit event (was unaudited).
+    audit_service.log(
+        db, _admin, "tenant_activated", "tenant", tenant.id, tenant.name,
+        f'Tenant "{tenant.name}" (slug={tenant.slug}) re-activated by platform admin.',
+    )
     db.commit()
     return tenant
 

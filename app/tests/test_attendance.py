@@ -15,13 +15,13 @@ from sqlalchemy import select
 
 from app.models.attendance import AttendanceRecord, AttendanceSettings
 from app.models.kpi_submission import KPIStatus
+from app.routers.attendance import _working_days as _router_working_days
 from app.services.attendance_service import (
     day_status,
     late_minutes,
     midday,
     monthly_summary,
     parse_time,
-    working_days_in_month,
 )
 from app.tests.factories import (
     MONTH_NAMES,
@@ -55,8 +55,13 @@ def _set_settings(client, admin, tenant, **kwargs):
     return resp.json()
 
 
-def _working_weekdays(year, month):
-    return working_days_in_month(year, month, [0, 1, 2, 3, 4])
+def _working_weekdays(year, month, holidays=None):
+    # B-m7: the service helper working_days_in_month is gone — these
+    # tests cover the router's _working_days (the live version) instead,
+    # with an explicit cfg so no settings row or DB is needed. Holidays
+    # are ISO date strings, the shape the router's cfg carries.
+    cfg = {"work_days": [0, 1, 2, 3, 4], "holidays": holidays or []}
+    return _router_working_days(None, None, year, month, cfg=cfg)
 
 
 # ------------------------------------------------------------ pure service
@@ -93,7 +98,7 @@ def test_half_day_trigger_check_out_before_midday():
 def test_monthly_summary_spec_example():
     # 20 full + 1 half + 1 absent out of 22 working days = 93.2%.
     # October 2026 has exactly 22 weekdays.
-    days = working_days_in_month(2026, 10, [0, 1, 2, 3, 4])
+    days = _working_weekdays(2026, 10)
     assert len(days) == 22
     records = {d: "present" for d in days[:20]}
     records[days[20]] = "half"
@@ -105,7 +110,7 @@ def test_monthly_summary_spec_example():
 
 
 def test_monthly_summary_leave_counts_as_absent():
-    days = working_days_in_month(2026, 10, [0, 1, 2, 3, 4])
+    days = _working_weekdays(2026, 10)
     records = {d: "present" for d in days[:20]}
     records[days[20]] = "leave"
     records[days[21]] = "leave"
@@ -118,7 +123,7 @@ def test_monthly_summary_leave_counts_as_absent():
 
 
 def test_working_days_exclude_weekends_and_holidays():
-    days = working_days_in_month(2026, 10, [0, 1, 2, 3, 4], {date_type(2026, 10, 5)})
+    days = _working_weekdays(2026, 10, holidays=["2026-10-05"])
     assert all(d.weekday() < 5 for d in days)
     assert date_type(2026, 10, 5) not in days  # Monday holiday removed
     assert len(days) == 21  # 22 weekdays in Oct 2026 minus 1 holiday

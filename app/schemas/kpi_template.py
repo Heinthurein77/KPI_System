@@ -1,6 +1,7 @@
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.core.months import MONTH_NAMES
+from app.core.validation import PeriodYearValidated
 from app.schemas.user import DepartmentOut, UserSummaryOut
 
 
@@ -9,25 +10,12 @@ from app.schemas.user import DepartmentOut, UserSummaryOut
 # direct API callers cannot persist corrupt year/period rows. One shared
 # copy (app.core.months) — never a second local list.
 VALID_PERIODS = tuple(MONTH_NAMES)
-MIN_YEAR, MAX_YEAR = 2000, 2100
 
 
-class _PeriodYearValidated(BaseModel):
-    """Mixin: year/period are validated at the schema boundary."""
-
-    @field_validator("period", check_fields=False)
-    @classmethod
-    def _check_period(cls, v: str) -> str:
-        if v not in VALID_PERIODS:
-            raise ValueError(f"period must be one of: {', '.join(VALID_PERIODS)}")
-        return v
-
-    @field_validator("year", check_fields=False)
-    @classmethod
-    def _check_year(cls, v: int) -> int:
-        if not (MIN_YEAR <= v <= MAX_YEAR):
-            raise ValueError(f"year must be between {MIN_YEAR} and {MAX_YEAR}")
-        return v
+# Backwards-compatible alias: the shared mixin lives in
+# app.core.validation now (B-m1); this name stays so existing imports
+# keep working.
+_PeriodYearValidated = PeriodYearValidated
 
 
 class KPITemplateOut(BaseModel):
@@ -60,6 +48,16 @@ class CreateTemplateRequest(BaseModel):
     weight: float = Field(gt=0, le=100)
     department_id: int | None = None
 
+    @field_validator("metric_name")
+    @classmethod
+    def _name_not_blank(cls, v: str) -> str:
+        # B-m2: an empty/whitespace-only metric name must 422 here, like
+        # the rename path already rejects it — it must never be persisted.
+        v = v.strip()
+        if not v:
+            raise ValueError("Metric name cannot be empty.")
+        return v
+
 
 class CreateCustomTemplateRequest(_PeriodYearValidated):
     employee_id: int
@@ -71,6 +69,15 @@ class CreateCustomTemplateRequest(_PeriodYearValidated):
     # New custom assignments recur by default. Existing persisted templates
     # retain their migration default (False), and API callers can opt out.
     is_recurring: bool = True
+
+    @field_validator("metric_name")
+    @classmethod
+    def _name_not_blank(cls, v: str) -> str:
+        # B-m2: same rule as CreateTemplateRequest.
+        v = v.strip()
+        if not v:
+            raise ValueError("Metric name cannot be empty.")
+        return v
 
 
 class WeightAdjustmentItem(BaseModel):
@@ -96,11 +103,25 @@ class CreateCustomTemplateWithRebalanceRequest(_PeriodYearValidated):
     is_recurring: bool = True
     weight_adjustments: list[WeightAdjustmentItem] = []
 
+    @field_validator("metric_name")
+    @classmethod
+    def _name_not_blank(cls, v: str) -> str:
+        # B-m2: same rule as CreateTemplateRequest.
+        v = v.strip()
+        if not v:
+            raise ValueError("Metric name cannot be empty.")
+        return v
 
-class RunRecurringKpisRequest(BaseModel):
-    """Target month for an idempotent tenant-wide recurring KPI run."""
 
-    year: int = Field(ge=1)
+class RunRecurringKpisRequest(_PeriodYearValidated):
+    """Target month for an idempotent tenant-wide recurring KPI run.
+
+    Year/period go through the shared validator now (B-m1): previously
+    year was only ge=1 and period was unchecked here, with the router
+    doing its own 422 period check.
+    """
+
+    year: int
     period: str
 
 

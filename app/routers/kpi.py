@@ -104,7 +104,10 @@ def dept_save(
     user: User = Depends(require_dept_admin),
 ):
     submission = kpi_service.get_submission_scoped(db, user, submission_id)
-    kpi_service.dept_save_score(db, user, submission, payload.dept_score, payload.remarks)
+    kpi_service.dept_save_score(
+        db, user, submission, payload.dept_score, payload.remarks,
+        expected_year=payload.year, expected_period=payload.period,
+    )
     return submission
 
 
@@ -116,7 +119,10 @@ def dept_approve(
     user: User = Depends(require_dept_admin),
 ):
     submission = kpi_service.get_submission_scoped(db, user, submission_id)
-    kpi_service.dept_approve(db, user, submission, payload.dept_score, payload.remarks)
+    kpi_service.dept_approve(
+        db, user, submission, payload.dept_score, payload.remarks,
+        expected_year=payload.year, expected_period=payload.period,
+    )
     return submission
 
 
@@ -128,7 +134,10 @@ def final_approve(
     user: User = Depends(require_tenant_admin),
 ):
     submission = kpi_service.get_submission_scoped(db, user, submission_id)
-    kpi_service.final_approve(db, user, submission, payload.final_score, payload.remarks)
+    kpi_service.final_approve(
+        db, user, submission, payload.final_score, payload.remarks,
+        expected_year=payload.year, expected_period=payload.period,
+    )
     return submission
 
 
@@ -140,7 +149,10 @@ def tenant_admin_override(
     user: User = Depends(require_tenant_admin),
 ):
     submission = kpi_service.get_submission_scoped(db, user, submission_id)
-    kpi_service.tenant_admin_override(db, user, submission, payload.final_score, payload.remarks)
+    kpi_service.tenant_admin_override(
+        db, user, submission, payload.final_score, payload.remarks,
+        expected_year=payload.year, expected_period=payload.period,
+    )
     return submission
 
 
@@ -152,5 +164,8 @@ def reject(
     user: User = Depends(require_dept_admin),
 ):
     submission = kpi_service.get_submission_scoped(db, user, submission_id)
-    kpi_service.reject_submission(db, user, submission, payload.remarks)
+    kpi_service.reject_submission(
+        db, user, submission, payload.remarks,
+        expected_year=payload.year, expected_period=payload.period,
+    )
     return submission

@@ -127,7 +127,7 @@ def test_dashboard_employee_combined_keeps_same_name_employees_separate(db, clie
 
 
 # ---------------------------------------------------------------------------
-# 6. is_current_or_future_period gating: a past period with nothing existing
+# 6. Fillable-period gating: a past period with nothing existing
 #    yet must not auto-create drafts, and must go through the read-only path.
 # ---------------------------------------------------------------------------
 

@@ -13,8 +13,8 @@ from openpyxl import load_workbook
 
 from app.models.attendance import AttendanceRecord
 from app.models.user import UserRole
+from app.routers.attendance import _working_days as _router_working_days
 from app.services.attendance_export_service import HEADERS
-from app.services.attendance_service import working_days_in_month
 from app.tests.factories import (
     auth_headers,
     make_department,
@@ -67,7 +67,11 @@ def _setup(client, db):
 
 
 def _working_days():
-    return working_days_in_month(YEAR, MONTH, [0, 1, 2, 3, 4])
+    # B-m7: the service helper working_days_in_month is gone — cover the
+    # router's _working_days (the live version) instead, with an
+    # explicit cfg so no settings row is needed.
+    cfg = {"work_days": [0, 1, 2, 3, 4], "holidays": []}
+    return _router_working_days(None, None, YEAR, MONTH, cfg=cfg)
 
 
 def _export(client, user, tenant, params=None):

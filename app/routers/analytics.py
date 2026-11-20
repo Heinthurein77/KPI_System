@@ -12,14 +12,15 @@ Rating buckets mirror the app's own dashboard rating:
 """
 
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_, select
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.months import MONTH_NAMES
 from app.core.timezone import today as app_today
 from app.core.deps import get_current_user, require_tenant_admin
+from app.core.validation import resolve_year_period
 from app.database import get_db
 from app.models.department import Department
 from app.models.kpi_submission import KPIStatus, KPISubmission
@@ -36,15 +37,6 @@ def _bucket(score: float) -> str:
     if score <= 75:
         return "Normal"
     return "Performance"
-
-
-def _validated_year_period(year: int | None, period: str | None) -> tuple[int, str]:
-    today = app_today()
-    year = year or today.year
-    period = period or MONTH_NAMES[today.month - 1]
-    if period not in MONTH_NAMES:
-        raise HTTPException(422, f"Invalid period '{period}'. Must be a full month name.")
-    return year, period
 
 
 def _submitted(sub: KPISubmission) -> bool:
@@ -81,14 +73,43 @@ class TrendPointOut(BaseModel):
 
 
 def _period_submissions(db: Session, tenant_id: int, year: int, period: str) -> list[KPISubmission]:
+    # B-M7: relations the aggregation touches are eager-loaded so the
+    # per-row property reads below never lazy-load one query per row.
     return list(
         db.scalars(
-            select(KPISubmission).where(
+            select(KPISubmission)
+            .options(
+                joinedload(KPISubmission.employee),
+                joinedload(KPISubmission.kpi_template),
+            )
+            .where(
                 KPISubmission.tenant_id == tenant_id,
                 KPISubmission.year == year,
                 KPISubmission.month_or_quarter == period,
             )
-        )
+        ).unique()
+    )
+
+
+def _range_submissions(
+    db: Session, tenant_id: int, months: list[tuple[int, str]]
+) -> list[KPISubmission]:
+    """All submissions for a list of (year, period) pairs in ONE query
+    (B-M7: analytics_trend used to issue one _period_submissions query
+    per month, up to 24)."""
+    conditions = [
+        and_(KPISubmission.year == year, KPISubmission.month_or_quarter == period)
+        for year, period in months
+    ]
+    return list(
+        db.scalars(
+            select(KPISubmission)
+            .options(
+                joinedload(KPISubmission.employee),
+                joinedload(KPISubmission.kpi_template),
+            )
+            .where(KPISubmission.tenant_id == tenant_id, or_(*conditions))
+        ).unique()
     )
 
 
@@ -100,7 +121,7 @@ def analytics_overview(
     user: User = Depends(get_current_user),
 ):
     """Tenant-wide KPI overview for one period (employees + dept admins)."""
-    year, period = _validated_year_period(year, period)
+    year, period = resolve_year_period(year, period)
 
     members = {
         u.id: u
@@ -201,9 +222,15 @@ def analytics_trend(
             m, y = 12, y - 1
     months.reverse()
 
+    # One range query for all requested months (B-M7), grouped in memory.
+    all_submissions = _range_submissions(db, user.tenant_id, months)
+    by_month: dict[tuple[int, str], list[KPISubmission]] = {}
+    for sub in all_submissions:
+        by_month.setdefault((sub.year, sub.month_or_quarter), []).append(sub)
+
     points: list[TrendPointOut] = []
     for year, period in months:
-        submissions = _period_submissions(db, user.tenant_id, year, period)
+        submissions = by_month.get((year, period), [])
         # Trend shows official numbers only — approved submissions.
         scores = [
             s.effective_score

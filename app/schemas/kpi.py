@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from app.core.validation import PeriodYearValidated
 from app.models.kpi_submission import KPIStatus
 from app.schemas.kpi_template import KPITemplateOut
 from app.schemas.user import DepartmentOut, UserSummaryOut
@@ -92,7 +93,7 @@ def _validate_comment_keys_and_values(comments: dict[str, str]) -> dict[str, str
     return comments
 
 
-class SaveScoresRequest(BaseModel):
+class SaveScoresRequest(PeriodYearValidated):
     year: int
     period: str
     scores: dict[str, float] = {}
@@ -102,7 +103,7 @@ class SaveScoresRequest(BaseModel):
     _validate_comments = field_validator("comments")(_validate_comment_keys_and_values)
 
 
-class SubmitRequest(BaseModel):
+class SubmitRequest(PeriodYearValidated):
     year: int
     period: str
     scores: dict[str, float] = {}
@@ -112,28 +113,28 @@ class SubmitRequest(BaseModel):
     _validate_comments = field_validator("comments")(_validate_comment_keys_and_values)
 
 
-class DeptSaveRequest(BaseModel):
+class DeptSaveRequest(PeriodYearValidated):
     year: int
     period: str
     dept_score: float = Field(ge=0)
     remarks: str | None = None
 
 
-class DeptApproveRequest(BaseModel):
+class DeptApproveRequest(PeriodYearValidated):
     year: int
     period: str
     dept_score: float | None = Field(default=None, ge=0)
     remarks: str | None = None
 
 
-class FinalApproveRequest(BaseModel):
+class FinalApproveRequest(PeriodYearValidated):
     year: int
     period: str
     final_score: float | None = Field(default=None, ge=0)
     remarks: str | None = None
 
 
-class OverrideRequest(BaseModel):
+class OverrideRequest(PeriodYearValidated):
     year: int
     period: str
     final_score: float = Field(ge=0)
@@ -146,13 +147,13 @@ class BulkApproveItem(BaseModel):
     remarks: str | None = None
 
 
-class BulkApproveRequest(BaseModel):
+class BulkApproveRequest(PeriodYearValidated):
     year: int
     period: str
     items: list[BulkApproveItem] = Field(min_length=1, max_length=500)
 
 
-class RejectRequest(BaseModel):
+class RejectRequest(PeriodYearValidated):
     year: int
     period: str
     remarks: str | None = None

@@ -380,9 +380,11 @@ def test_report_returns_correct_data_with_few_queries(client, db):
     _set_settings(client, admin, tenant, work_days=[0, 1, 2, 3, 4])
     today = app_today()
     year, month = today.year, today.month
-    from app.services.attendance_service import working_days_in_month
+    from app.routers.attendance import _working_days as _router_working_days
 
-    days = working_days_in_month(year, month, [0, 1, 2, 3, 4])
+    days = _router_working_days(
+        db, tenant.id, year, month, cfg={"work_days": [0, 1, 2, 3, 4], "holidays": []}
+    )
     _insert_record(db, tenant, users[0], days[0], "present", check_in=time_type(9, 0))
     _insert_record(db, tenant, users[0], days[1], "half", check_in=time_type(14, 0))
     _insert_record(db, tenant, users[1], days[0], "present", check_in=time_type(9, 5))

@@ -1,5 +1,5 @@
 """Coverage for app/routers/dashboard.py's combined_final_score weighting/status
-logic and is_current_or_future_period.
+logic and the live current-month rule (submission_grace).
 
 combined_final_score takes `submissions: List[Any]` and only touches
 `.final_score`, `.effective_target` and `.effective_weight` (which on real ORM
@@ -12,7 +12,8 @@ branches.
 from datetime import date
 from types import SimpleNamespace
 
-from app.routers.dashboard import combined_final_score, is_current_or_future_period
+from app.routers.dashboard import combined_final_score
+from app.services.submission_grace import is_current_month, is_fillable_period
 
 
 def _template(target=100.0, weight=1.0, is_lower_better=None):
@@ -154,38 +155,56 @@ def test_returns_none_for_empty_submissions_list():
 
 
 # ---------------------------------------------------------------------------
-# is_current_or_future_period
+# Live current-month rule (B-m7: is_current_or_future_period /
+# is_exact_current_month in dashboard.py were dead code — the live rule
+# is submission_grace.is_current_month, with is_fillable_period adding
+# the grace window on top. These tests pin the live rule, not the dead
+# helpers.)
 # ---------------------------------------------------------------------------
 
 
-def test_is_current_or_future_period_true_for_current_month():
+def test_is_current_month_true_for_current_month():
     today = date(2026, 3, 15)
-    assert is_current_or_future_period(2026, "March", today) is True
+    assert is_current_month(2026, "March", today) is True
 
 
-def test_is_current_or_future_period_true_for_future_month_same_year():
+def test_is_current_month_false_for_future_month_same_year():
     today = date(2026, 3, 15)
-    assert is_current_or_future_period(2026, "April", today) is True
+    assert is_current_month(2026, "April", today) is False
 
 
-def test_is_current_or_future_period_false_for_past_month_same_year():
+def test_is_current_month_false_for_past_month_same_year():
     today = date(2026, 3, 15)
-    assert is_current_or_future_period(2026, "February", today) is False
+    assert is_current_month(2026, "February", today) is False
 
 
-def test_is_current_or_future_period_true_for_future_year():
+def test_is_current_month_false_for_future_year():
     today = date(2026, 3, 15)
-    assert is_current_or_future_period(2027, "January", today) is True
+    assert is_current_month(2027, "January", today) is False
 
 
-def test_is_current_or_future_period_false_for_past_year():
+def test_is_current_month_false_for_past_year():
     today = date(2026, 3, 15)
-    assert is_current_or_future_period(2025, "December", today) is False
+    assert is_current_month(2025, "December", today) is False
 
 
-def test_over_target_row_yields_none_instead_of_500():
-    """M9: one over-target row must not 500 a whole dashboard/team view —
-    that employee's group simply has no combined score."""
+def test_fillable_period_covers_current_and_grace_month_only():
+    # 2026-03-05: March is current, February is still in grace
+    # (Feb 28 + 7 days = Mar 7), January's grace ended Feb 7, and
+    # April is a future month.
+    today = date(2026, 3, 5)
+    assert is_fillable_period(2026, "March", today, 7) is True
+    assert is_fillable_period(2026, "February", today, 7) is True
+    assert is_fillable_period(2026, "January", today, 7) is False
+    assert is_fillable_period(2026, "April", today, 7) is False
+
+
+def test_over_target_row_is_excluded_and_flagged_not_dropped():
+    """B-m8: one over-target row is excluded from the employee's
+    combined score and flagged — the employee no longer vanishes from
+    combined-score displays (combined_final_score used to return None
+    for the whole group). calculate_kpi is untouched: the bad row
+    simply never reaches it."""
     from app.routers.dashboard import per_employee_combined_scores
 
     over = _submission(150.0, _template(target=100.0, weight=1.0))
@@ -194,7 +213,26 @@ def test_over_target_row_yields_none_instead_of_500():
     ok = _submission(80.0, _template(target=100.0, weight=1.0))
     ok.employee_id = 2
     ok.employee = SimpleNamespace(name="Ok")
-    assert combined_final_score([over]) is None
+    # All-bad group: no number to show, but still present and flagged.
+    flagged = combined_final_score([over])
+    assert flagged is not None
+    assert flagged["attainment"] is None
+    assert flagged["status"] is None
+    assert flagged["scored_count"] == 0
+    assert flagged["total_count"] == 1
+    assert flagged["has_over_target_row"] is True
+    # Mixed group: the good row scores on its own, flagged. (The
+    # combined score is the weight-weighted sum, so 80/100 at weight 1
+    # is 0.8 — the percentage-vs-sum question is the parked B-M1
+    # decision, not this finding.)
+    mixed = combined_final_score([over, ok])
+    assert mixed["attainment"] == 0.8
+    assert mixed["scored_count"] == 1
+    assert mixed["total_count"] == 2
+    assert mixed["has_over_target_row"] is True
+    # Per-employee map: neither employee vanishes.
     result = per_employee_combined_scores([over, ok])
-    assert result[1] is None
+    assert result[1] is not None
+    assert result[1]["has_over_target_row"] is True
     assert result[2] is not None
+    assert result[2]["has_over_target_row"] is False

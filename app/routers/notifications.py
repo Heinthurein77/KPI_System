@@ -69,7 +69,9 @@ def list_notifications(
         select(Notification)
         .where(Notification.user_id == user.id)
         .order_by(Notification.created_at.desc(), Notification.id.desc())
-        .limit(min(limit, 200))
+        # B-m5: clamp below as well as above, like the audit-log
+        # endpoints (a negative limit used to pass through to the DB).
+        .limit(min(max(limit, 1), 200))
         .offset(max(offset, 0))
     ).all()
     unread_count = db.scalar(

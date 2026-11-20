@@ -152,7 +152,7 @@ def _write_annual_month_sheet(
         "KPI Attainment",
         combined_score["attainment"] if combined_score else "N/A",
     )
-    _write_summary_cell(sheet, "G4", "H4", "Status", combined_score["status"].strip() if combined_score else "Not finalized")
+    _write_summary_cell(sheet, "G4", "H4", "Status", combined_score["status"].strip() if combined_score and combined_score["status"] else "Not finalized")
     if combined_score:
         sheet["H3"].number_format = "0.00"
 

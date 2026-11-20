@@ -22,6 +22,7 @@ from app.core.config import settings
 from app.core.deps import require_dept_admin
 from app.core.rate_limit import UPLOAD_RATE_LIMIT, limiter
 from app.core.timezone import today as app_today
+from app.core.validation import validate_year_period
 from app.database import get_db
 from app.models.user import User, UserRole
 from app.services import bulk_import_service
@@ -86,13 +87,16 @@ async def upload_import(
         raise HTTPException(400, "year and month must be given together.")
     if month is not None and not 1 <= month <= 12:
         raise HTTPException(400, "month must be between 1 and 12.")
-    if year is not None and not 2000 <= year <= 2100:
-        raise HTTPException(400, "year must be between 2000 and 2100.")
     today = app_today()
     if year is None:
         target_year, target_period = today.year, bulk_import_service.MONTH_NAMES[today.month - 1]
     else:
         target_year, target_period = year, bulk_import_service.MONTH_NAMES[month - 1]
+    # B-m1: the resolved (year, period) goes through the one shared
+    # validator instead of this endpoint's own range check. The 400
+    # stays — this endpoint's existing contract reports bad query
+    # params as 400, only the rule itself is shared now.
+    validate_year_period(target_year, target_period, status_code=400)
     # Same M6 gate as single custom-KPI creation — no second, divergent gate.
     assert_admin_creation_window_open(
         target_year, target_period, today, settings.SUBMISSION_GRACE_DAYS

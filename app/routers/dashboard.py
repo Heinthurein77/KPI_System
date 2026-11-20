@@ -1,4 +1,5 @@
 from datetime import date
+import logging
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -7,6 +8,7 @@ from app.core.config import settings
 from app.core.months import MONTH_NAMES
 from app.core.timezone import today as app_today
 from app.core.deps import get_current_user
+from app.core.validation import resolve_year_period
 from app.database import get_db
 from app.models.department import Department
 from app.models.kpi_submission import KPIStatus, KPISubmission
@@ -15,6 +17,8 @@ from app.schemas.kpi import KPISubmissionOut
 from app.schemas.user import DepartmentOut
 from app.services import kpi_service
 from app.services import submission_grace
+
+logger = logging.getLogger("kpi_system")
 
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
@@ -40,23 +44,6 @@ def get_app_config(user=Depends(get_current_user)):
 def current_month_period(today: date | None = None) -> tuple[int, str]:
     today = today or app_today()
     return today.year, MONTH_NAMES[today.month - 1]
-
-
-def is_current_or_future_period(year: int, period: str, today: date | None = None) -> bool:
-    """True for the current month and any future month (used by recurring service helpers)."""
-    current_year, current_period = current_month_period(today)
-    return (year, MONTH_NAMES.index(period)) >= (current_year, MONTH_NAMES.index(current_period))
-
-
-def is_exact_current_month(year: int, period: str, today: date | None = None) -> bool:
-    """True ONLY when year/period matches today's calendar month.
-
-    Used to decide whether employees may enter scores and whether draft
-    submissions should be auto-created.  Employees can update scores at
-    any point during the current month; future months are locked.
-    """
-    current_year, current_period = current_month_period(today)
-    return year == current_year and period == current_period
 
 
 def is_future_month(year: int, period: str, today: date | None = None) -> bool:
@@ -98,16 +85,6 @@ def _fillable_state(year: int, period: str, today: date | None = None):
     grace_month = submission_grace.is_grace_month(year, period, today, grace_days)
     end = submission_grace.grace_end(year, period, grace_days) if grace_month else None
     return fillable, grace_month, end.isoformat() if end else None
-
-
-def _validated_year_period(year: int | None, period: str | None) -> tuple[int, str]:
-    """Apply defaults and reject unknown period names with 422 instead of 500."""
-    default_year, default_period = current_month_period()
-    year = year or default_year
-    period = period or default_period
-    if period not in MONTH_NAMES:
-        raise HTTPException(422, f"Invalid period '{period}'. Must be a full month name.")
-    return year, period
 
 
 def _validated_status_filter(status_filter: str | None) -> None:
@@ -155,11 +132,25 @@ def calculate_kpi(kpi_list: List[Dict[str, Any]]) -> tuple[float, str]:
 def combined_final_score(submissions: List[Any]) -> Optional[Dict[str, Any]]:
     """
     Weight-combined final KPI score using calculate_kpi validation rules.
+
+    B-m8: a legacy over-target row is EXCLUDED from this employee's
+    score and flagged (``has_over_target_row``) instead of making the
+    whole employee vanish from combined-score displays (the old
+    behaviour returned None for the group). ``calculate_kpi`` is
+    untouched — the bad row simply never reaches it. When every scored
+    row is over target there is no number to show, but the employee
+    still appears, flagged, with attainment None rather than
+    disappearing. Exclusions are logged so the bad rows stay visible
+    to an admin instead of silently dropping out of the numbers.
     """
     valid_items = []
+    over_target = 0
     for s in submissions:
         target = s.effective_target
         if s.final_score is None or not s.kpi_template or not target:
+            continue
+        if float(s.final_score) > float(target):
+            over_target += 1
             continue
 
         valid_items.append({
@@ -169,23 +160,44 @@ def combined_final_score(submissions: List[Any]) -> Optional[Dict[str, Any]]:
         })
 
     if not valid_items:
-        return None
+        if not over_target:
+            return None
+        logger.warning(
+            "combined_final_score: excluded %d over-target row(s); "
+            "no valid scored rows remain (employee %s).",
+            over_target,
+            getattr(submissions[0], "employee_id", "?") if submissions else "?",
+        )
+        return {
+            "attainment": None,
+            "status": None,
+            "scored_count": 0,
+            "total_count": len(submissions),
+            "has_over_target_row": True,
+        }
 
     try:
         total_score, rating = calculate_kpi(valid_items)
     except ValueError:
-        # One over-target row must not 500 a whole dashboard or team
-        # view: that employee's group simply has no combined score
-        # (per_employee_combined_scores maps it to None). This is a
-        # display-layer guard only — calculate_kpi itself still raises
-        # when called directly, and the scoring formula is untouched.
+        # Defensive only: valid_items are pre-filtered above, so
+        # calculate_kpi should not raise here. Keep the old no-500
+        # behaviour if it ever does.
         return None
+
+    if over_target:
+        logger.warning(
+            "combined_final_score: excluded %d over-target row(s) from "
+            "an employee's combined score (employee %s).",
+            over_target,
+            getattr(submissions[0], "employee_id", "?") if submissions else "?",
+        )
 
     return {
         "attainment": total_score,
         "status": rating,
         "scored_count": len(valid_items),
         "total_count": len(submissions),
+        "has_over_target_row": over_target > 0,
     }
 
 
@@ -215,7 +227,7 @@ def my_kpi(
     if user.role != UserRole.DEPT_ADMIN:
         raise HTTPException(403, "This account type cannot access this view.")
 
-    year, period = _validated_year_period(year, period)
+    year, period = resolve_year_period(year, period)
 
     is_fillable_period, is_grace_period, grace_ends_on = _fillable_state(year, period)
     if is_fillable_period:
@@ -257,8 +269,18 @@ def dashboard(
     if user.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN, UserRole.TENANT_ADMIN):
         raise HTTPException(403, "This account type cannot access the dashboard.")
 
-    year, period = _validated_year_period(year, period)
+    year, period = resolve_year_period(year, period)
     _validated_status_filter(status_filter)
+    # B-m6: a dept admin asking for another department's board used to
+    # get a 200 with the filter silently dropped. That is a 403 now —
+    # their own department is allowed (and already the scope of their
+    # query), anything else is refused outright.
+    if (
+        user.role == UserRole.DEPT_ADMIN
+        and department_id is not None
+        and department_id != user.department_id
+    ):
+        raise HTTPException(403, "Department admins can only view their own department.")
     resolved_department_id = department_id
 
     context = {

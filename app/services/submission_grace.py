@@ -1,9 +1,9 @@
 """Submission grace period — entries stay open until N days after month-end.
 
-Background: the dashboard only lets employees edit the exact current month
-(``is_exact_current_month`` in ``app/routers/dashboard.py``), so in practice
-each month's scores had to be entered within that month. This module adds
-one configurable grace window on top of that rule: a past month stays
+Background: the dashboard only lets employees edit the current month
+(``is_current_month`` in this module), so in practice each month's
+scores had to be entered within that month. This module adds one
+configurable grace window on top of that rule: a past month stays
 fillable until ``grace_days`` after its last day (default 7), then it closes.
 
 Rules

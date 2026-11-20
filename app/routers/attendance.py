@@ -75,6 +75,8 @@ from app.services.attendance_service import (
     monthly_summary,
     parse_time,
 )
+from app.services.excel_safe import safe_file_part as _safe_file_part
+from app.core.validation import validate_month_bounds
 
 router = APIRouter(prefix="/api/attendance", tags=["attendance"])
 
@@ -162,17 +164,11 @@ def _visible_user_ids(db: Session, user: User) -> list[int]:
 def _month_bounds(year: int, month: int) -> tuple[date_type, date_type]:
     """First and last day of the month (inclusive).
 
-    Years outside 1-9999 are rejected with 400: date(0, …) / date(10000, …)
-    raise ValueError, which the generic handler would otherwise turn into
-    a 500. The bound is inclusive (not first-of-next-month) so December
-    9999 is representable — there is no 10000-01-01 date object.
+    Routed through the shared validator (B-m1) with the attendance
+    parameters: years 1-9999, 400 — the observable behaviour (codes and
+    ranges) is unchanged.
     """
-    if not 1 <= year <= 9999:
-        raise HTTPException(400, "year must be 1-9999")
-    if not 1 <= month <= 12:
-        raise HTTPException(400, "month must be 1-12")
-    _, last_day = calendar.monthrange(year, month)
-    return date_type(year, month, 1), date_type(year, month, last_day)
+    return validate_month_bounds(year, month)
 
 
 def _serialize(
@@ -862,18 +858,6 @@ _STATUS_LABELS = {
     "leave": "Leave",
     "absent": "Absent",
 }
-
-
-def _safe_file_part(value: str, fallback: str = "department") -> str:
-    """ASCII slug for a filename part. Non-Latin names (e.g. Burmese) have
-    no ASCII letters, so they fall back to `fallback` instead of producing
-    an empty slug — "department" for a department file, "employee" for a
-    per-person file."""
-    slug = "".join(
-        c if c.isascii() and (c.isalnum() or c in "-_") else "-"
-        for c in value.lower().replace(" ", "-")
-    )
-    return slug.strip("-") or fallback
 
 
 @router.get("/report/export")

@@ -59,6 +59,16 @@ class CreateUserRequest(BaseModel):
     department_id: int | None = None
     position: str | None = None
 
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, v: str) -> str:
+        # B-m2: an empty/whitespace-only user name must 422 here, like
+        # the rename/edit paths already reject it — never persisted.
+        v = v.strip()
+        if not v:
+            raise ValueError("User name cannot be empty.")
+        return v
+
     @field_validator("email")
     @classmethod
     def _email_valid(cls, v: str) -> str:

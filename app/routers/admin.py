@@ -9,9 +9,10 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from app.core.config import settings
 from app.core.deps import get_current_user, require_dept_admin, require_tenant_admin
+from app.core.validation import validate_year_period
 from app.core.rate_limit import (
     ADMIN_WRITE_RATE_LIMIT,
     EXPORT_RATE_LIMIT,
@@ -25,6 +26,7 @@ from app.core.security import hash_password, validate_password_length
 from app.core.tenant import get_tenant_scoped_or_404
 from app.database import get_db
 from app.models.audit_log import AuditLog
+from app.models.attendance import AttendanceRecord
 from app.models.department import Department
 from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.kpi_template import KPITemplate
@@ -68,7 +70,13 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 @router.get("/departments", response_model=list[DepartmentWithCountOut])
 def list_departments(db: Session = Depends(get_db), user: User = Depends(require_tenant_admin)):
-    departments = db.scalars(select(Department).where(Department.tenant_id == user.tenant_id)).all()
+    # B-M7: eager-load the users — len(d.users) used to fire one extra
+    # query per department.
+    departments = db.scalars(
+        select(Department)
+        .options(selectinload(Department.users))
+        .where(Department.tenant_id == user.tenant_id)
+    ).all()
     return [
         DepartmentWithCountOut(id=d.id, name=d.name, employee_count=len(d.users)) for d in departments
     ]
@@ -79,6 +87,12 @@ def create_department(
     payload: CreateDepartmentRequest, db: Session = Depends(get_db), user: User = Depends(require_tenant_admin)
 ):
     name = payload.name.strip()
+    if not name:
+        # B-m2: a whitespace-only department name 422s here. The rename
+        # path keeps its own 400 (see rename_department) — this schema
+        # is shared by both, so the create-side check lives here, not
+        # in the schema.
+        raise HTTPException(422, "Department name cannot be empty.")
     existing = db.scalar(
         select(Department).where(Department.tenant_id == user.tenant_id, Department.name == name)
     )
@@ -153,15 +167,30 @@ def delete_department(department_id: int, db: Session = Depends(get_db), user: U
 # from other departments (and, transitively, from other tenants entirely).
 
 @router.get("/users")
-def list_users(db: Session = Depends(get_db), user: User = Depends(require_dept_admin)):
+def list_users(
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_dept_admin),
+):
+    # B-M7: bounded like the audit log (default 100, max 500) — the
+    # users list used to load the whole tenant with no limit. The
+    # departments/roles metadata is small and stays unpaged.
+    limit = min(max(limit, 1), 500)
+    offset = max(offset, 0)
     if user.role == UserRole.DEPT_ADMIN:
         users = db.scalars(
-            select(User).where(User.department_id == user.department_id, User.tenant_id == user.tenant_id)
+            select(User)
+            .where(User.department_id == user.department_id, User.tenant_id == user.tenant_id)
+            .limit(limit)
+            .offset(offset)
         ).all()
         departments = []
         roles = [UserRole.EMPLOYEE]
     else:
-        users = db.scalars(select(User).where(User.tenant_id == user.tenant_id)).all()
+        users = db.scalars(
+            select(User).where(User.tenant_id == user.tenant_id).limit(limit).offset(offset)
+        ).all()
         departments = db.scalars(select(Department).where(Department.tenant_id == user.tenant_id)).all()
         roles = [UserRole.TENANT_ADMIN, UserRole.DEPT_ADMIN, UserRole.EMPLOYEE]
 
@@ -170,6 +199,25 @@ def list_users(db: Session = Depends(get_db), user: User = Depends(require_dept_
         "departments": [DepartmentOut.model_validate(d) for d in departments],
         "roles": [r.value for r in roles],
     }
+
+
+def _check_user_data_scope(user: User, target: User, what: str) -> None:
+    """Shared role scoping for the per-user KPI views (B-m7): employees
+    see only themselves, dept admins their own department's Employees
+    (plus themselves), tenant admins anyone in the tenant. ``what`` is
+    the view name used in the 403 message ("KPI trend" / "KPI data")."""
+    if user.role == UserRole.EMPLOYEE:
+        if target.id != user.id:
+            raise HTTPException(403, f"You can only view your own {what}.")
+    elif user.role == UserRole.DEPT_ADMIN:
+        # Dept admins may view their own trend/data in addition to
+        # their department's employees.
+        if target.id != user.id and (
+            target.department_id != user.department_id or target.role != UserRole.EMPLOYEE
+        ):
+            raise HTTPException(403, f"Cannot view {what} outside your department.")
+    elif user.role != UserRole.TENANT_ADMIN:
+        raise HTTPException(403, "Not allowed.")
 
 
 @router.get("/users/{user_id}", response_model=UserOut)
@@ -192,33 +240,40 @@ def get_user_kpi_trend(
     sees anyone in the tenant. Employees may view only their own trend."""
     target = get_tenant_scoped_or_404(db, User, user_id, user.tenant_id, "User not found.")
 
-    if user.role == UserRole.EMPLOYEE:
-        if target.id != user.id:
-            raise HTTPException(403, "You can only view your own KPI trend.")
-    elif user.role == UserRole.DEPT_ADMIN:
-        # Dept admins may view their own trend (via /my-trend) in addition to
-        # their department's employees.
-        if target.id != user.id and (
-            target.department_id != user.department_id or target.role != UserRole.EMPLOYEE
-        ):
-            raise HTTPException(403, "Cannot view KPI trend outside your department.")
-    elif user.role != UserRole.TENANT_ADMIN:
-        raise HTTPException(403, "Not allowed.")
+    _check_user_data_scope(user, target, "KPI trend")
+
+    # B-M7: the year is filtered in SQL, not in Python — the old code
+    # loaded ALL of the user's submissions across all years, then
+    # filtered by year in memory. available_years still needs every
+    # year, but that is a cheap DISTINCT-year query, not full rows.
+    available_years = sorted(
+        {
+            y
+            for y in db.scalars(
+                select(KPISubmission.year).where(
+                    KPISubmission.employee_id == target.id,
+                    KPISubmission.tenant_id == user.tenant_id,
+                )
+            )
+        }
+        | {current_month_period()[0]},
+        reverse=True,
+    )
+    target_year = year if year in available_years else available_years[0]
 
     submissions = db.scalars(
         select(KPISubmission)
         .options(joinedload(KPISubmission.kpi_template))
-        .where(KPISubmission.employee_id == target.id, KPISubmission.tenant_id == user.tenant_id)
+        .where(
+            KPISubmission.employee_id == target.id,
+            KPISubmission.tenant_id == user.tenant_id,
+            KPISubmission.year == target_year,
+        )
     ).unique().all()
-
-    current_year = current_month_period()[0]
-    available_years = sorted({s.year for s in submissions} | {current_year}, reverse=True)
-    target_year = year if year in available_years else available_years[0]
 
     by_period: dict[tuple[int, str], list[KPISubmission]] = {}
     for s in submissions:
-        if s.year == target_year:
-            by_period.setdefault((s.year, s.month_or_quarter), []).append(s)
+        by_period.setdefault((s.year, s.month_or_quarter), []).append(s)
 
     points = []
     for period in MONTH_NAMES:
@@ -267,16 +322,7 @@ def get_user_submissions_for_period(
     their own."""
     target = get_tenant_scoped_or_404(db, User, user_id, user.tenant_id, "User not found.")
 
-    if user.role == UserRole.EMPLOYEE:
-        if target.id != user.id:
-            raise HTTPException(403, "You can only view your own KPI data.")
-    elif user.role == UserRole.DEPT_ADMIN:
-        if target.id != user.id and (
-            target.department_id != user.department_id or target.role != UserRole.EMPLOYEE
-        ):
-            raise HTTPException(403, "Cannot view KPI data outside your department.")
-    elif user.role != UserRole.TENANT_ADMIN:
-        raise HTTPException(403, "Not allowed.")
+    _check_user_data_scope(user, target, "KPI data")
 
     submissions = db.scalars(
         select(KPISubmission)
@@ -377,7 +423,19 @@ def export_employee_annual_kpi_report(
             KPISubmission.month_or_quarter.in_(MONTH_NAMES),
         )
     ).unique().all()
-    submissions.sort(key=lambda s: (MONTH_NAMES.index(s.month_or_quarter), s.kpi_template.metric_name))
+    # B-m3: month_or_quarter is a free String(20) and legacy quarterly
+    # labels exist — MONTH_NAMES.index() on one raises ValueError and
+    # 500s the whole export. Unknown labels sort last instead. (The
+    # query above already filters to month names; this guards the sort
+    # itself so the export can never 500 on stored data.)
+    submissions.sort(
+        key=lambda s: (
+            MONTH_NAMES.index(s.month_or_quarter)
+            if s.month_or_quarter in MONTH_NAMES
+            else len(MONTH_NAMES),
+            s.kpi_template.metric_name,
+        )
+    )
 
     by_month = {month: [] for month in MONTH_NAMES}
     for submission in submissions:
@@ -443,6 +501,14 @@ def create_user(
         must_change_password=True,
     )
     db.add(target)
+    db.flush()  # assigns target.id for the audit row below
+    # B-m4: user creation is an audit event (was unaudited).
+    audit_service.log(
+        db, user, "user_created", "user", target.id, target.name,
+        f"User created ({target.role.value})"
+        + (f" in department {resolved_department_id}." if resolved_department_id else "."),
+        department_id=target.department_id,
+    )
     db.commit()
     # Welcome email with the admin-chosen password and the login link
     # (user-requested). It is sent AFTER the commit, in a background
@@ -509,6 +575,14 @@ def toggle_user_active(user_id: int, db: Session = Depends(get_db), user: User =
         )
 
     target.is_active = not target.is_active
+    # B-m4: enabling/disabling a user is an audit event (was unaudited).
+    audit_service.log(
+        db, user,
+        "user_activated" if target.is_active else "user_deactivated",
+        "user", target.id, target.name,
+        f"User {'activated' if target.is_active else 'deactivated'} by {user.name} ({user.role.value}).",
+        department_id=target.department_id,
+    )
     db.commit()
     return target
 
@@ -580,6 +654,8 @@ def edit_user(
         if clash is not None:
             raise HTTPException(400, "A user with this email already exists.")
 
+    old_department_id = target.department_id
+    old_role = target.role
     target.name = payload.name.strip()
     target.email = new_email
     target.role = payload.role
@@ -603,6 +679,36 @@ def edit_user(
         target.password_hash = hash_password(payload.password)
         target.must_change_password = True
         target.token_version = (target.token_version or 0) + 1
+    # B-M5: department scoping goes stale on transfer. KPISubmission and
+    # AttendanceRecord both carry a denormalised department_id frozen at
+    # creation, and dept-admin visibility filters on it — so moving the
+    # employee without moving those rows leaves the OLD dept admin able
+    # to see/approve them and the NEW one unable to. Update both tables
+    # to the employee's new department in the same transaction. (Rows
+    # already stale from transfers before this fix are NOT repaired by
+    # this endpoint — see scripts/repair_transferred_employee_departments.py.)
+    if target.department_id != old_department_id:
+        db.query(KPISubmission).filter(
+            KPISubmission.employee_id == target.id,
+            KPISubmission.tenant_id == user.tenant_id,
+        ).update({"department_id": target.department_id}, synchronize_session=False)
+        db.query(AttendanceRecord).filter(
+            AttendanceRecord.employee_id == target.id,
+            AttendanceRecord.tenant_id == user.tenant_id,
+        ).update({"department_id": target.department_id}, synchronize_session=False)
+    # B-m4: user edits are audit events (were unaudited).
+    audit_service.log(
+        db, user, "user_updated", "user", target.id, target.name,
+        f"User updated by {user.name} ({user.role.value})"
+        + (f": role {old_role.value} → {target.role.value}" if old_role != target.role else "")
+        + (
+            f"; department {old_department_id} → {target.department_id}"
+            if target.department_id != old_department_id
+            else ""
+        )
+        + ".",
+        department_id=target.department_id,
+    )
     db.commit()
     return target
 
@@ -634,15 +740,28 @@ def delete_user(user_id: int, db: Session = Depends(get_db), user: User = Depend
 # see tenant-wide metrics (since those apply to their team too) but not edit them.
 
 @router.get("/templates")
-def list_templates(db: Session = Depends(get_db), user: User = Depends(require_dept_admin)):
+def list_templates(
+    limit: int = 100,
+    offset: int = 0,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_dept_admin),
+):
+    # B-M7: bounded like the audit log (default 100, max 500) — the
+    # template list used to load the whole tenant with no limit. The
+    # departments/team metadata is small and stays unpaged.
+    limit = min(max(limit, 1), 500)
+    offset = max(offset, 0)
     default_year, default_period = current_month_period()
 
     if user.role == UserRole.DEPT_ADMIN:
         kpi_templates = db.scalars(
-            select(KPITemplate).where(
+            select(KPITemplate)
+            .where(
                 KPITemplate.tenant_id == user.tenant_id,
                 (KPITemplate.department_id == user.department_id) | (KPITemplate.department_id.is_(None)),
             )
+            .limit(limit)
+            .offset(offset)
         ).all()
         departments = []
         # Dept Admins may only target their own Employees.
@@ -654,7 +773,12 @@ def list_templates(db: Session = Depends(get_db), user: User = Depends(require_d
             )
         ).all()
     else:
-        kpi_templates = db.scalars(select(KPITemplate).where(KPITemplate.tenant_id == user.tenant_id)).all()
+        kpi_templates = db.scalars(
+            select(KPITemplate)
+            .where(KPITemplate.tenant_id == user.tenant_id)
+            .limit(limit)
+            .offset(offset)
+        ).all()
         departments = db.scalars(select(Department).where(Department.tenant_id == user.tenant_id)).all()
         # Tenant Admin may target any Employee or Dept Admin, tenant-wide.
         team = db.scalars(
@@ -704,8 +828,7 @@ def get_employee_period_weight(
     the applicable total is the number the guard will enforce there —
     the form budgets a future period against it.
     """
-    if not (2000 <= year <= 2100) or period not in MONTH_NAMES:
-        raise HTTPException(422, "year must be between 2000 and 2100 and period a month name.")
+    validate_year_period(year, period)
     employee = get_tenant_scoped_or_404(db, User, employee_id, user.tenant_id, "User not found.")
 
     # Access rules mirror create_custom_template.
@@ -823,6 +946,36 @@ def create_template(
     return template
 
 
+def _effective_start_period(
+    db: Session, employee: User, year: int, period: str
+) -> tuple[int, str]:
+    """Effective start period for a new custom KPI (B-m7: shared by the
+    single-create and the rebalance-create endpoints, which used to
+    copy-paste this block).
+
+    If the employee's current month is already fully FINAL_APPROVED,
+    adding a new KPI to that locked month would retroactively change an
+    approved record. Instead, auto-shift the effective start to the 1st
+    of next month so that approved data remains strictly immutable.
+    """
+    cur_year, cur_period = current_month_period()
+    current_month_subs = db.scalars(
+        select(KPISubmission).where(
+            KPISubmission.employee_id == employee.id,
+            KPISubmission.year == cur_year,
+            KPISubmission.month_or_quarter == cur_period,
+            KPISubmission.tenant_id == employee.tenant_id,
+        )
+    ).all()
+    if current_month_subs and all(s.status == KPIStatus.APPROVED for s in current_month_subs):
+        # Current month is fully FINAL_APPROVED → start new KPI from next month.
+        cur_idx = MONTH_NAMES.index(cur_period)
+        if cur_idx == 11:  # December → January next year
+            return cur_year + 1, MONTH_NAMES[0]
+        return cur_year, MONTH_NAMES[cur_idx + 1]
+    return year, period
+
+
 @router.post("/templates/custom", response_model=KPITemplateOut)
 def create_custom_template(
     payload: CreateCustomTemplateRequest,
@@ -841,28 +994,11 @@ def create_custom_template(
         if employee.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN):
             raise HTTPException(400, "Custom KPIs can only be assigned to Employees or Department Admins.")
 
-    # Determine effective start period.
-    # If the employee's current month is already fully FINAL_APPROVED, adding a
-    # new KPI to that locked month would retroactively change an approved record.
-    # Instead, auto-shift the effective start to the 1st of next month so that
-    # approved data remains strictly immutable.
-    effective_year, effective_period = payload.year, payload.period
-    cur_year, cur_period = current_month_period()
-    current_month_subs = db.scalars(
-        select(KPISubmission).where(
-            KPISubmission.employee_id == employee.id,
-            KPISubmission.year == cur_year,
-            KPISubmission.month_or_quarter == cur_period,
-            KPISubmission.tenant_id == employee.tenant_id,
-        )
-    ).all()
-    if current_month_subs and all(s.status == KPIStatus.APPROVED for s in current_month_subs):
-        # Current month is fully FINAL_APPROVED → start new KPI from next month.
-        cur_idx = MONTH_NAMES.index(cur_period)
-        if cur_idx == 11:  # December → January next year
-            effective_year, effective_period = cur_year + 1, MONTH_NAMES[0]
-        else:
-            effective_year, effective_period = cur_year, MONTH_NAMES[cur_idx + 1]
+    # Determine effective start period — never retroactively change a
+    # fully approved month (see _effective_start_period).
+    effective_year, effective_period = _effective_start_period(
+        db, employee, payload.year, payload.period
+    )
 
     submission = kpi_service.create_custom_employee_kpi(
         db, user, employee, payload.metric_name.strip(), payload.target, payload.weight,
@@ -903,22 +1039,9 @@ def create_custom_template_with_rebalance(
 
     # Determine effective start period — same approved-month guard as
     # create_custom_template: never retroactively change a fully approved month.
-    effective_year, effective_period = payload.year, payload.period
-    cur_year, cur_period = current_month_period()
-    current_month_subs = db.scalars(
-        select(KPISubmission).where(
-            KPISubmission.employee_id == employee.id,
-            KPISubmission.year == cur_year,
-            KPISubmission.month_or_quarter == cur_period,
-            KPISubmission.tenant_id == employee.tenant_id,
-        )
-    ).all()
-    if current_month_subs and all(s.status == KPIStatus.APPROVED for s in current_month_subs):
-        cur_idx = MONTH_NAMES.index(cur_period)
-        if cur_idx == 11:  # December → January next year
-            effective_year, effective_period = cur_year + 1, MONTH_NAMES[0]
-        else:
-            effective_year, effective_period = cur_year, MONTH_NAMES[cur_idx + 1]
+    effective_year, effective_period = _effective_start_period(
+        db, employee, payload.year, payload.period
+    )
 
     try:
         # 1. Weight adjustments (same rules as PATCH /templates/{id}/weight).
@@ -1121,8 +1244,7 @@ def run_recurring_kpis(
     missing draft submissions and never changes existing KPI data or workflow
     state.  It can be called by a monthly scheduler or run manually.
     """
-    if payload.period not in MONTH_NAMES:
-        raise HTTPException(422, f"period must be one of: {', '.join(MONTH_NAMES)}")
+    # Period is validated by the schema (shared validator, B-m1).
 
     # Same rollover rule as the automatic path: the current month's recurring
     # set only opens on day SUBMISSION_GRACE_DAYS + 1 (the 8th by default).

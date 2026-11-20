@@ -294,9 +294,17 @@ def test_t5_tenant_admin_final_bulk_and_override(client, db):
         assert s.final_score == score
         assert s.remarks == "Final: ok"
 
-    # override on an approved submission still works
+    # B-M4 (senior review 2026-11-20): override can no longer silently
+    # re-approve an already-APPROVED row — approved data is immutable.
+    # The correction path is an override while the row is still pending
+    # (or a stuck DRAFT via the S-M2 escape); once final-approved, the
+    # override is a 400 and the approved record is untouched.
     r = client.post(f"/api/kpi/{sid_aye}/override", json={
         "year": YEAR, "period": PERIOD, "final_score": 85, "remarks": "Correction",
     }, headers=h_top)
-    assert r.status_code == 200, r.text
-    assert r.json()["final_score"] == 85
+    assert r.status_code == 400, r.text
+    db.expire_all()
+    s = db.get(KPISubmission, sid_aye)
+    assert s.status == KPIStatus.APPROVED
+    assert s.final_score == 80
+    assert s.remarks == "Final: ok"

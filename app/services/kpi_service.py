@@ -39,7 +39,11 @@ def _now() -> datetime:
 
 
 def _claim_submission(
-    db: Session, submission: KPISubmission, expected_statuses: list[KPIStatus], conflict_message: str
+    db: Session,
+    submission: KPISubmission,
+    expected_statuses: list[KPIStatus],
+    conflict_message: str,
+    expected_updated_at: datetime | None = None,
 ) -> None:
     """Atomically claim a submission for a state transition (C2).
 
@@ -52,8 +56,15 @@ def _claim_submission(
     a no-op value-wise (it writes back the current status); the row lock
     and the rowcount are the claim. Callers must call this BEFORE
     mutating the submission and must not commit between claim and mutate.
+
+    When ``expected_updated_at`` is given (save_self_scores), the claim
+    also matches the row's ``updated_at`` — optimistic concurrency for
+    paths that do NOT change status, where a status claim alone would
+    still let a second writer silently overwrite the first. A concurrent
+    save that already committed bumps ``updated_at``, so the loser's
+    claim fails with 400 ("reload and retry") instead of last-write-win.
     """
-    result = db.execute(
+    stmt = (
         update(KPISubmission)
         .where(
             KPISubmission.id == submission.id,
@@ -62,9 +73,53 @@ def _claim_submission(
         )
         .values(status=submission.status)
     )
+    if expected_updated_at is not None:
+        stmt = stmt.where(KPISubmission.updated_at == expected_updated_at)
+    result = db.execute(stmt)
     if result.rowcount == 0:
         db.rollback()
         raise HTTPException(status.HTTP_400_BAD_REQUEST, conflict_message)
+
+
+def _lock_employee_period(db: Session, employee: User) -> None:
+    """Serialise concurrent custom-KPI creates for one employee (B-M3).
+
+    The 100% weight guard (``validate_period_total_weight``) is
+    check-then-act: two concurrent creates can each read a period total
+    under 100% and both commit, leaving the period over the limit the
+    guard exists to enforce. This no-op conditional UPDATE on the
+    employee's own User row takes the row lock (Postgres) / write lock
+    (SQLite) and holds it until the caller's commit, so a second
+    concurrent create blocks, then re-reads the period total after the
+    first has committed — and the guard sees the true total. Same
+    conditional-UPDATE idiom as ``_claim_submission``, chosen over
+    SELECT ... FOR UPDATE for SQLite/Postgres parity; no new table or
+    migration, the User row is the per-employee serialisation point, and
+    creates for different employees never block each other. It changes
+    nothing about what the 100% limit IS — only that it holds under
+    concurrency.
+    """
+    result = db.execute(
+        update(User).where(User.id == employee.id).values(name=employee.name)
+    )
+    if result.rowcount == 0:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Employee not found.")
+
+
+def _assert_period_match(submission: KPISubmission, year: int | None, period: str | None) -> None:
+    """A single-item review payload claims a year/period (B-M6): it must
+    match the submission's own year/period, or the request is a 422 —
+    the same period-match rule bulk_approve already enforces per item.
+    Callers that do not carry a period claim pass None/None (bulk
+    approve, which validates the period itself before dispatching)."""
+    if year is None or period is None:
+        return
+    if (submission.year, submission.month_or_quarter) != (year, period):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT,
+            f"Submission {submission.id} belongs to {submission.month_or_quarter} "
+            f"{submission.year}, not the claimed {period} {year}.",
+        )
 
 
 def force_delete_template(db: Session, actor: User, template: KPITemplate) -> None:
@@ -294,6 +349,35 @@ def applicable_templates(
     return applicable
 
 
+def _loaded_period_submissions(
+    db: Session, employee: User, year: int, period: str
+) -> list[KPISubmission]:
+    """This employee's rows for one period, with every relation the
+    dashboard serialiser touches already loaded (B-M7: the old return
+    path handed back rows whose template/employee relations lazy-loaded
+    one query per row when the dashboard sorted/serialised them)."""
+    return (
+        db.scalars(
+            select(KPISubmission)
+            .options(
+                joinedload(KPISubmission.employee),
+                joinedload(KPISubmission.kpi_template),
+                joinedload(KPISubmission.department),
+                joinedload(KPISubmission.dept_reviewer),
+                joinedload(KPISubmission.final_reviewer),
+            )
+            .where(
+                KPISubmission.employee_id == employee.id,
+                KPISubmission.year == year,
+                KPISubmission.month_or_quarter == period,
+                KPISubmission.tenant_id == employee.tenant_id,
+            )
+        )
+        .unique()
+        .all()
+    )
+
+
 def ensure_period_submissions(
     db: Session, employee: User, year: int, period: str, today: date | None = None
 ) -> list[KPISubmission]:
@@ -307,21 +391,28 @@ def ensure_period_submissions(
     new materialises, but already-existing submissions stay visible — the
     month's set simply has not started yet, which is not an error.
     """
-    templates = applicable_templates(db, employee, year, period, today=today)
+    today = today or app_today()
+    # B-m7: one applicable_templates call. The rollover gate only ever
+    # empties the set for the current month before day grace_days + 1, so
+    # compute the full set once and apply that gate here, instead of
+    # calling applicable_templates a second time on the empty path.
+    all_templates = applicable_templates(
+        db, employee, year, period, today=today, apply_rollover_gate=False
+    )
+    if (
+        year == today.year
+        and period in GRACE_MONTH_NAMES
+        and period == GRACE_MONTH_NAMES[today.month - 1]
+        and not recurring_rollover_open(today, settings.SUBMISSION_GRACE_DAYS)
+    ):
+        templates: list[KPITemplate] = []
+    else:
+        templates = all_templates
 
-    existing = db.scalars(
-        select(KPISubmission).where(
-            KPISubmission.employee_id == employee.id,
-            KPISubmission.year == year,
-            KPISubmission.month_or_quarter == period,
-            KPISubmission.tenant_id == employee.tenant_id,
-        )
-    ).all()
+    existing = _loaded_period_submissions(db, employee, year, period)
 
     if not templates:
-        if employee.role == UserRole.EMPLOYEE and not applicable_templates(
-            db, employee, year, period, today=today, apply_rollover_gate=False
-        ):
+        if employee.role == UserRole.EMPLOYEE and not all_templates:
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST,
                 "No KPI metrics have been configured for your department yet.",
@@ -356,15 +447,12 @@ def ensure_period_submissions(
         db.commit()
     except IntegrityError:
         db.rollback()
-        return db.scalars(
-            select(KPISubmission).where(
-                KPISubmission.employee_id == employee.id,
-                KPISubmission.year == year,
-                KPISubmission.month_or_quarter == period,
-                KPISubmission.tenant_id == employee.tenant_id,
-            )
-        ).all()
-    return existing + created
+        return _loaded_period_submissions(db, employee, year, period)
+    # Always re-fetch: the commit above expires every attribute
+    # (expire_on_commit), so returning `existing` would make the
+    # dashboard refresh each row with its own SELECT — the N+1 this
+    # helper exists to avoid. One re-fetch replaces N refreshes.
+    return _loaded_period_submissions(db, employee, year, period)
 
 
 def create_custom_employee_kpi(
@@ -397,6 +485,10 @@ def create_custom_employee_kpi(
     """
     today = today or app_today()
     assert_admin_creation_window_open(year, period, today, settings.SUBMISSION_GRACE_DAYS)
+    # B-M3: serialise concurrent creates for this employee before the
+    # duplicate check and the weight guard read, so the guard below sees
+    # the true period total (see _lock_employee_period).
+    _lock_employee_period(db, employee)
     existing_template = db.scalar(
         select(KPITemplate).where(
             KPITemplate.employee_id == employee.id,
@@ -506,6 +598,17 @@ def save_self_scores(
                 today,
                 settings.SUBMISSION_GRACE_DAYS,
             )
+        # B-M2: claim the row (status + updated_at) before mutating, so
+        # two concurrent saves serialise on the row lock and the loser
+        # gets a 400 ("reload and retry") instead of silently overwriting
+        # the winner's scores. A status-only claim would not be enough
+        # here — a save does not change status, so without the
+        # updated_at match both writers would still succeed in turn.
+        _claim_submission(
+            db, submission, [KPIStatus.DRAFT, KPIStatus.REJECTED],
+            "These scores were changed by another request. Reload and try again.",
+            expected_updated_at=submission.updated_at,
+        )
         if submission.id in scores:
             _validate_score_within_target(submission, scores[submission.id], "Self score")
             submission.self_score = scores[submission.id]
@@ -591,6 +694,16 @@ def submit_for_dept_approval(
     # Everyone else goes through department review first.
     skip_dept_review = employee.role == UserRole.DEPT_ADMIN
     next_status = KPIStatus.PENDING_FINAL_APPROVAL if skip_dept_review else KPIStatus.PENDING_DEPT_APPROVAL
+    # B-M2: claim every row first (C2 conditional UPDATE, same as the
+    # approve paths) — all claims happen before any mutation, audit row
+    # or notification, so a concurrent double-submit serialises: the
+    # loser blocks on the row lock, then its claim fails with 400 and it
+    # produces no duplicate audit rows, notifications or emails.
+    for submission in to_submit:
+        _claim_submission(
+            db, submission, [KPIStatus.DRAFT, KPIStatus.REJECTED],
+            "This period was already submitted.",
+        )
     for submission in to_submit:
         submission.status = next_status
         submission.submitted_at = _now()
@@ -647,9 +760,16 @@ def _validate_score_within_target(submission: KPISubmission, score: float | None
 
 
 def dept_save_score(
-    db: Session, reviewer: User, submission: KPISubmission, dept_score: float, remarks: str | None
+    db: Session,
+    reviewer: User,
+    submission: KPISubmission,
+    dept_score: float,
+    remarks: str | None,
+    expected_year: int | None = None,
+    expected_period: str | None = None,
 ) -> None:
     """Dept Admin edits the score without forwarding yet."""
+    _assert_period_match(submission, expected_year, expected_period)
     if submission.status != KPIStatus.PENDING_DEPT_APPROVAL:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not awaiting department review.")
     # C2: claim the row first so two concurrent saves serialize on the
@@ -680,6 +800,8 @@ def dept_approve(
     dept_score: float | None,
     remarks: str | None,
     commit: bool = True,
+    expected_year: int | None = None,
+    expected_period: str | None = None,
 ) -> list:
     """Dept Admin approves and forwards to the Super Admin for final review.
 
@@ -688,6 +810,7 @@ def dept_approve(
     their emails after its single commit. With commit=True (default),
     behavior is unchanged: commit + send, and [] is returned.
     """
+    _assert_period_match(submission, expected_year, expected_period)
     if submission.status != KPIStatus.PENDING_DEPT_APPROVAL:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not awaiting department review.")
     if reviewer.id == submission.employee_id:
@@ -755,12 +878,15 @@ def final_approve(
     final_score: float | None,
     remarks: str | None,
     commit: bool = True,
+    expected_year: int | None = None,
+    expected_period: str | None = None,
 ) -> list:
     """Super Admin gives final approval, optionally adjusting the score.
 
     commit=False behaves like dept_approve's: no commit, no email send,
     notification objects returned for the caller's single commit + send.
     """
+    _assert_period_match(submission, expected_year, expected_period)
     if submission.status != KPIStatus.PENDING_FINAL_APPROVAL:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not awaiting final approval.")
     # C2: atomic conditional-UPDATE claim (see dept_approve).
@@ -870,9 +996,36 @@ def bulk_approve(
 
 
 def tenant_admin_override(
-    db: Session, admin: User, submission: KPISubmission, final_score: float, remarks: str | None
+    db: Session,
+    admin: User,
+    submission: KPISubmission,
+    final_score: float,
+    remarks: str | None,
+    expected_year: int | None = None,
+    expected_period: str | None = None,
 ) -> None:
-    """Tenant Admin can override the score and force-approve at any workflow stage."""
+    """Tenant Admin can override the score and force-approve at any workflow stage.
+
+    Status guard (B-M4): an already-APPROVED row cannot be silently
+    re-approved — the C2 claim below only accepts DRAFT / REJECTED /
+    PENDING_DEPT_APPROVAL / PENDING_FINAL_APPROVAL, so a second override
+    (or an override racing final_approve) gets a 400 and writes no new
+    audit row or notification.
+
+    Weight guard — DELIBERATE BYPASS, documented (B-M4): unlike
+    dept_approve / final_approve, this function does NOT call
+    validate_period_total_weight. Override is the escape hatch for
+    legacy over-100 periods (a DRAFT stuck after grace can only be
+    cleared this way — see S-M2); enforcing the guard here would close
+    that exit. The bypass is intentional, not an oversight.
+    """
+    _assert_period_match(submission, expected_year, expected_period)
+    _claim_submission(
+        db, submission,
+        [KPIStatus.DRAFT, KPIStatus.REJECTED,
+         KPIStatus.PENDING_DEPT_APPROVAL, KPIStatus.PENDING_FINAL_APPROVAL],
+        "Submission is already approved.",
+    )
     _validate_score_within_target(submission, final_score, "Override score")
     old_score = submission.final_score if submission.final_score is not None else (
         submission.dept_score if submission.dept_score is not None else submission.self_score
@@ -905,8 +1058,14 @@ def tenant_admin_override(
 
 
 def reject_submission(
-    db: Session, reviewer: User, submission: KPISubmission, remarks: str | None
+    db: Session,
+    reviewer: User,
+    submission: KPISubmission,
+    remarks: str | None,
+    expected_year: int | None = None,
+    expected_period: str | None = None,
 ) -> None:
+    _assert_period_match(submission, expected_year, expected_period)
     if submission.status not in (KPIStatus.PENDING_DEPT_APPROVAL, KPIStatus.PENDING_FINAL_APPROVAL):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not in a reviewable state.")
     # C2: atomic conditional-UPDATE claim, so a reject racing an approve

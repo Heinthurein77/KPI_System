@@ -10,18 +10,9 @@ from app.core.rate_limit import EXPORT_RATE_LIMIT, _authenticated_user_key, limi
 from app.database import get_db
 from app.models.user import User, UserRole
 from app.services import annual_report as annual_report_service
+from app.services.excel_safe import safe_file_part as _safe_file_part
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
-
-
-def _safe_file_part(value: str) -> str:
-    """Slugify a user-supplied name for a Content-Disposition filename —
-    same rule as attendance._safe_file_part, with an 'employee' fallback
-    (a person's file must not be mislabelled 'department'). Strips quotes,
-    CR/LF and anything outside [a-z0-9-_], so a crafted employee name
-    cannot inject headers."""
-    slug = "".join(c if c.isalnum() or c in "-_" else "-" for c in value.lower().replace(" ", "-"))
-    return slug.strip("-") or "employee"
 
 
 @router.get("/annual/{employee_id}")

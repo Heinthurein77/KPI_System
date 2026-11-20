@@ -2,30 +2,14 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import AppShell from "../../components/layout/AppShell";
 import PageLoading from "../../components/ui/PageLoading";
+import LoadError from "../../components/ui/LoadError";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import Modal from "../../components/ui/Modal";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { createUser, deleteUser, listUsers, resetUserPassword, toggleUserActive } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
-
-// Shown when the initial data load fails (instead of an endless spinner).
-// Lets the user retry the failed request.
-function LoadError({ message, onRetry }) {
-  return (
-    <div className="rounded-2xl bg-white shadow-sm border border-slate-200 px-8 py-10 max-w-md w-full mx-auto text-center">
-      <p className="text-sm font-semibold text-red-600">Couldn't load data</p>
-      <p className="mt-2 text-sm text-slate-500">{message}</p>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
-      >
-        Try again
-      </button>
-    </div>
-  );
-}
+import { useApi } from "../../hooks/useApi";
 
 function titleCase(role) {
   return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -36,8 +20,9 @@ export default function UsersPage() {
   const toast = useToast();
   const isDeptAdmin = currentUser.role === "dept_admin";
 
-  const [data, setData] = useState(null);
-  const [loadError, setLoadError] = useState(null);
+  const { data, error: loadError, load } = useApi(listUsers, {
+    onError: (message) => toast.error(message),
+  });
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -63,23 +48,10 @@ export default function UsersPage() {
   const [filterDept, setFilterDept] = useState("");
   const [filterRole, setFilterRole] = useState("");
 
-  function load() {
-    listUsers()
-      .then((d) => {
-        setData(d);
-        setLoadError(null);
-      })
-      .catch((err) => {
-        const message = getErrorMessage(err);
-        setLoadError(message);
-        toast.error(message);
-      });
-  }
-
-  // `toast` is a plain object re-created every render (not memoized by
-  // ToastContext), so listing it here would refetch on every render.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(load, []);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Close the Add dialog and clear its transient state (errors, password
   // visibility) so a reopened form starts clean — typed values are kept

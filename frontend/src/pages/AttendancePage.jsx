@@ -15,6 +15,7 @@ import { MONTHS } from "../utils/months";
 import { slugify } from "../utils/slugify";
 import { formatHoliday, normalizeHolidays, validateHolidayRows } from "../utils/holidays";
 import { middayLabel } from "../utils/time";
+import { downloadBlob } from "../utils/download";
 import {
   checkIn,
   checkOut,
@@ -430,18 +431,13 @@ export default function AttendancePage() {
         month,
         effectiveDeptFilter || undefined,
       );
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
       const dept = reportDepartments.find((d) => String(d.id) === effectiveDeptFilter);
       const slug = dept ? `-${slugify(dept.name, "department")}` : "";
       // Prefer the server's filename; rebuild locally only as a fallback.
-      link.download =
-        filename || `attendance-${year}-${String(month).padStart(2, "0")}${slug}.xlsx`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 0);
+      downloadBlob(
+        blob,
+        filename || `attendance-${year}-${String(month).padStart(2, "0")}${slug}.xlsx`
+      );
       setNotice("Attendance Excel downloaded. · Excel ထုတ်ပြီးပြီ။");
     } catch (e) {
       setError(await getBlobErrorMessage(e, "Could not download the Excel. Please try again."));
@@ -457,16 +453,11 @@ export default function AttendancePage() {
     setExportingUserId(row.user_id);
     try {
       const { blob, filename } = await downloadAttendancePersonExcel(year, month, row.user_id);
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download =
+      downloadBlob(
+        blob,
         filename ||
-        `attendance-${year}-${String(month).padStart(2, "0")}-${slugify(row.employee_name, "employee")}.xlsx`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 0);
+          `attendance-${year}-${String(month).padStart(2, "0")}-${slugify(row.employee_name, "employee")}.xlsx`
+      );
       setNotice(`${row.employee_name}'s attendance Excel downloaded.`);
     } catch (e) {
       setError(await getBlobErrorMessage(e, "Could not download the Excel. Please try again."));

@@ -1,8 +1,24 @@
 import client from "./client";
 
 export function login(orgSlug, email, password) {
-  localStorage.setItem("tenant_slug", orgSlug.trim().toLowerCase());
-  return client.post("/api/auth/login", { email, password }).then((r) => r.data);
+  const slug = orgSlug.trim().toLowerCase();
+  const previousSlug = localStorage.getItem("tenant_slug");
+  // Stored BEFORE the POST on purpose: the request interceptor reads it to
+  // set the X-Tenant-Slug header the login endpoint resolves the tenant
+  // from. On failure the typed slug is NOT kept — restore whatever was
+  // there before (or nothing), so a typo'd slug is never persisted.
+  localStorage.setItem("tenant_slug", slug);
+  return client.post("/api/auth/login", { email, password }).then(
+    (r) => r.data,
+    (err) => {
+      if (previousSlug === null || previousSlug === slug) {
+        localStorage.removeItem("tenant_slug");
+      } else {
+        localStorage.setItem("tenant_slug", previousSlug);
+      }
+      throw err;
+    }
+  );
 }
 
 export function platformLogin(email, password) {

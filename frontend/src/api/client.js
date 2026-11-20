@@ -44,13 +44,18 @@ client.interceptors.response.use(
       // failure, or the server is down — distinct from a 4xx/5xx the API returned.
       error.message = `Could not reach the API at ${API_BASE_URL}. Check the base URL and CORS configuration.`;
     } else if (error.response.status === 401) {
-      // Session expired, token revoked, or account disabled mid-session: drop
-      // the tenant context and send the user back to sign in. The session
-      // cookie itself is httpOnly, so only the server can clear it — a fresh
-      // login replaces it. Skip when the failing request is itself a login
-      // attempt or we're already on a login page, so failed logins still
-      // show their error message. Platform admins go to their own login —
-      // org credentials don't work there and vice versa.
+      // Session expired, token revoked, or account disabled mid-session:
+      // send the user back to sign in. The session cookie itself is
+      // httpOnly, so only the server can clear it — a fresh login replaces
+      // it. The tenant slug is deliberately KEPT here: it is only the
+      // routing hint the login form needs, and wiping it on any transient
+      // 401 (e.g. a token_version bump from a password change elsewhere)
+      // forced the user to retype their org slug. Only a genuine
+      // tenant-context failure clears it (see the 400 branch below).
+      // Skip when the failing request is itself a login attempt or we're
+      // already on a login page, so failed logins still show their error
+      // message. Platform admins go to their own login — org credentials
+      // don't work there and vice versa.
       // NOTE: this must depend on the current path ONLY. A logged-out visitor
       // has no tenant slug either, and the old `|| !tenant_slug` clause sent
       // every such visitor (e.g. opening /dashboard) to /platform/login
@@ -61,8 +66,16 @@ client.interceptors.response.use(
       const isLoginRequest = /\/auth\/login\/?$/.test(url);
       const isPlatform = pathname.startsWith("/platform");
       if (!onLoginPage && !isLoginRequest) {
-        localStorage.removeItem("tenant_slug");
         window.location.href = isPlatform ? "/platform/login" : "/login";
+      }
+    } else if (error.response.status === 400) {
+      // Genuine tenant-context failure: the server could not resolve any
+      // organization for the stored slug (tenant renamed/deleted) — the
+      // only case where the slug itself is wrong and must go, so the login
+      // form starts empty instead of prefilling a dead slug.
+      const detail = error.response.data?.detail;
+      if (detail === "No organization could be resolved for this request.") {
+        localStorage.removeItem("tenant_slug");
       }
     }
     return Promise.reject(error);

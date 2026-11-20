@@ -17,7 +17,9 @@ export function AuthProvider({ children }) {
     meCall
       .then(setUser)
       .catch(() => {
-        localStorage.removeItem("tenant_slug");
+        // Keep the stored tenant slug: a failed /me (expired session,
+        // token_version bump) is a session problem, not a tenant problem,
+        // and the login form prefills the slug from it (S-m6).
         setUser(null);
       })
       .finally(() => setLoading(false));

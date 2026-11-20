@@ -38,6 +38,7 @@ export default function ToastViewport({ toasts, onDismiss }) {
           <button
             type="button"
             onClick={() => onDismiss(t.id)}
+            aria-label="Dismiss notification"
             className="shrink-0 rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 transition"
           >
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">

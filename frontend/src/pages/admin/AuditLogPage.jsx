@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react";
 import AppShell from "../../components/layout/AppShell";
 import PageLoading from "../../components/ui/PageLoading";
+import LoadError from "../../components/ui/LoadError";
 import EmptyState from "../../components/ui/EmptyState";
 import { getAuditLog } from "../../api/admin";
-import { getErrorMessage } from "../../api/errors";
+import { useApi } from "../../hooks/useApi";
 
 const ROLE_LABELS = {
   super_admin: "Super Admin",
@@ -40,18 +41,19 @@ function formatTimestamp(iso) {
 }
 
 export default function AuditLogPage() {
-  const [entries, setEntries] = useState(null);
-  const [error, setError] = useState(null);
+  // Shared load lifecycle (F-M1).
+  const { data: entries, error, load } = useApi(getAuditLog);
   const [query, setQuery] = useState("");
 
   useEffect(() => {
-    getAuditLog().then(setEntries).catch((err) => setError(getErrorMessage(err)));
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (error) {
     return (
       <AppShell title="Audit Log">
-        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
+        <LoadError message={error} onRetry={() => load()} />
       </AppShell>
     );
   }

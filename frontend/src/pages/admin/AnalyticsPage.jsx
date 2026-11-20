@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bar,
   BarChart,
@@ -16,8 +16,8 @@ import {
 } from "recharts";
 import AppShell from "../../components/layout/AppShell";
 import { getAnalyticsOverview, getAnalyticsTrend } from "../../api/analytics";
-import { getErrorMessage } from "../../api/errors";
 import { MONTHS } from "../../utils/months";
+import { useApi } from "../../hooks/useApi";
 
 const BUCKET_COLORS = {
   "Need to improve": "#f87171",
@@ -48,31 +48,19 @@ export default function AnalyticsPage() {
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
   const [period, setPeriod] = useState(MONTHS[now.getMonth()]);
-  const [overview, setOverview] = useState(null);
-  const [trend, setTrend] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+
+  // Shared load lifecycle (F-M1): the overview + trend pair load as one
+  // fetch; the cancelled-flag guard is the hook's stale-response guard.
+  const fetcher = useCallback(
+    () => Promise.all([getAnalyticsOverview(year, period), getAnalyticsTrend(6)]),
+    [year, period]
+  );
+  const { data, error, loading, load } = useApi(fetcher);
+  const [overview, trend] = data ?? [null, []];
 
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError("");
-    Promise.all([getAnalyticsOverview(year, period), getAnalyticsTrend(6)])
-      .then(([ov, tr]) => {
-        if (cancelled) return;
-        setOverview(ov);
-        setTrend(tr);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(getErrorMessage(e));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [year, period]);
+    load();
+  }, [load]);
 
   const bucketData = useMemo(() => {
     if (!overview) return [];

@@ -5,65 +5,27 @@ import EmployeeSelfAssessment from "../components/dashboard/EmployeeSelfAssessme
 import TeamReviewBoard from "../components/dashboard/TeamReviewBoard";
 import FreshInstallWelcome from "../components/dashboard/FreshInstallWelcome";
 import PageLoading from "../components/ui/PageLoading";
+import LoadError from "../components/ui/LoadError";
 import { useAuth } from "../context/AuthContext";
 import { useToast } from "../context/ToastContext";
 import { getDashboard } from "../api/dashboard";
 import { deptApprove, deptSave, finalApprove, overrideScore, rejectSubmission } from "../api/kpi";
 import { getErrorMessage } from "../api/errors";
+import { DASHBOARD_POLL_INTERVAL_MS, useApi } from "../hooks/useApi";
 
-// How often the admin review boards silently re-check for new submissions,
-// so a KPI filled on the employee side shows on the admin side without a
-// manual refresh. Shared 5-minute cadence with the employee board in
-// EmployeeSelfAssessment.jsx. Silent: a failed tick never toasts or wipes
-// the board — the next tick retries. Skipped while the tab is hidden.
-const BOARD_POLL_INTERVAL_MS = 5 * 60 * 1000;
-
-// Shown when the initial data load fails (instead of an endless spinner).
-// Lets the user retry the failed request.
-function LoadError({ message, onRetry }) {
-  return (
-    <div className="rounded-2xl bg-white shadow-sm border border-slate-200 px-8 py-10 max-w-md w-full mx-auto text-center">
-      <p className="text-sm font-semibold text-red-600">Couldn't load data</p>
-      <p className="mt-2 text-sm text-slate-500">{message}</p>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
-      >
-        Try again
-      </button>
-    </div>
-  );
-}
-
-function DeptAdminDashboard({ initialParams, navKey }) {
+// One admin dashboard for both roles (F-M1). DeptAdminDashboard and
+// TenantAdminDashboard used to be two near-identical copies of the same
+// component — same load lifecycle, same poll, same navKey effect —
+// differing only in which approve handlers they pass to TeamReviewBoard.
+// The role-specific bits are branched below instead of duplicated.
+function AdminDashboard({ user, initialParams, navKey, isTenantAdmin }) {
   const toast = useToast();
-  const [data, setData] = useState(null);
-  const [loadError, setLoadError] = useState(null);
+  const { data, error: loadError, load } = useApi(getDashboard, {
+    onError: (message) => toast.error(message),
+  });
   const [params, setParams] = useState(initialParams);
   const paramsRef = useRef(params);
   const firstNavRef = useRef(true);
-  const loadIdRef = useRef(0);
-
-  function load(nextParams, { silent = false } = {}) {
-    // Guard against out-of-order responses: if the period/filter is changed
-    // again before this request lands, a stale response must not overwrite
-    // the newer one.
-    const requestId = ++loadIdRef.current;
-    getDashboard(nextParams)
-      .then((d) => {
-        if (loadIdRef.current !== requestId) return;
-        setData(d);
-        setLoadError(null);
-      })
-      .catch((err) => {
-        if (loadIdRef.current !== requestId) return;
-        if (silent) return; // background tick: keep the old board, retry next tick
-        const message = getErrorMessage(err);
-        setLoadError(message);
-        toast.error(message);
-      });
-  }
 
   useEffect(() => {
     load(params);
@@ -79,7 +41,7 @@ function DeptAdminDashboard({ initialParams, navKey }) {
     const timer = setInterval(() => {
       if (document.hidden) return;
       load(paramsRef.current, { silent: true });
-    }, BOARD_POLL_INTERVAL_MS);
+    }, DASHBOARD_POLL_INTERVAL_MS);
     return () => clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -106,9 +68,19 @@ function DeptAdminDashboard({ initialParams, navKey }) {
     load(params);
   }
 
+  function applyParams(next) {
+    paramsRef.current = next;
+    setParams(next);
+    load(next);
+  }
+
   if (!data) {
     if (loadError) return <LoadError message={loadError} onRetry={() => load(params)} />;
     return <PageLoading />;
+  }
+
+  if (isTenantAdmin && data.is_fresh_install) {
+    return <FreshInstallWelcome userName={user.name} />;
   }
 
   async function handleDeptSave(id, dept_score, remarks) {
@@ -129,106 +101,6 @@ function DeptAdminDashboard({ initialParams, navKey }) {
       toast.error(getErrorMessage(err));
     }
   }
-  async function handleReject(id, remarks) {
-    try {
-      await rejectSubmission(id, { year: data.active_year, period: data.active_period, remarks: remarks || undefined });
-      toast.success("Submission rejected.");
-      reload();
-    } catch (err) {
-      toast.error(getErrorMessage(err));
-    }
-  }
-
-  return (
-    <TeamReviewBoard
-      data={data}
-      onApply={(next) => {
-        paramsRef.current = next;
-        setParams(next);
-        load(next);
-      }}
-      pendingStatuses={["pending_dept_approval"]}
-      pendingLabel="awaiting your review"
-      pendingChipClass="bg-amber-50 text-amber-700 ring-amber-200"
-      pendingDotClass="bg-amber-500"
-      onReload={reload}
-      onDeptSave={handleDeptSave}
-      onDeptApprove={handleDeptApprove}
-      onReject={handleReject}
-    />
-  );
-}
-
-function TenantAdminDashboard({ user, initialParams, navKey }) {
-  const toast = useToast();
-  const [data, setData] = useState(null);
-  const [loadError, setLoadError] = useState(null);
-  const [params, setParams] = useState(initialParams);
-  const paramsRef = useRef(params);
-  const firstNavRef = useRef(true);
-  const loadIdRef = useRef(0);
-
-  function load(nextParams, { silent = false } = {}) {
-    // Same stale-response guard as DeptAdminDashboard.load — see comment there.
-    const requestId = ++loadIdRef.current;
-    getDashboard(nextParams)
-      .then((d) => {
-        if (loadIdRef.current !== requestId) return;
-        setData(d);
-        setLoadError(null);
-      })
-      .catch((err) => {
-        if (loadIdRef.current !== requestId) return;
-        if (silent) return; // background tick: keep the old board, retry next tick
-        const message = getErrorMessage(err);
-        setLoadError(message);
-        toast.error(message);
-      });
-  }
-
-  useEffect(() => {
-    load(params);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Live board — same polling as DeptAdminDashboard, see comment there.
-  useEffect(() => {
-    const timer = setInterval(() => {
-      if (document.hidden) return;
-      load(paramsRef.current, { silent: true });
-    }, BOARD_POLL_INTERVAL_MS);
-    return () => clearInterval(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  // Same notification-link problem as DeptAdminDashboard: follow the URL's
-  // year/period when the query string changes instead of staying on the
-  // mount-time period. First run is the mount load.
-  useEffect(() => {
-    if (firstNavRef.current) {
-      firstNavRef.current = false;
-      return;
-    }
-    const next = { ...paramsRef.current, ...initialParams };
-    paramsRef.current = next;
-    setParams(next);
-    load(next);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navKey]);
-
-  function reload() {
-    load(params);
-  }
-
-  if (!data) {
-    if (loadError) return <LoadError message={loadError} onRetry={() => load(params)} />;
-    return <PageLoading />;
-  }
-
-  if (data.is_fresh_install) {
-    return <FreshInstallWelcome userName={user.name} />;
-  }
-
   async function handleFinalApprove(id, final_score) {
     try {
       await finalApprove(id, { year: data.active_year, period: data.active_period, final_score });
@@ -260,19 +132,17 @@ function TenantAdminDashboard({ user, initialParams, navKey }) {
   return (
     <TeamReviewBoard
       data={data}
-      onApply={(next) => {
-        paramsRef.current = next;
-        setParams(next);
-        load(next);
-      }}
-      pendingStatuses={["pending_dept_approval", "pending_final_approval"]}
-      pendingLabel="in review"
-      pendingChipClass="bg-blue-50 text-blue-700 ring-blue-200"
-      pendingDotClass="bg-blue-500"
-      showDepartmentColumn
+      onApply={applyParams}
+      pendingStatuses={isTenantAdmin ? ["pending_dept_approval", "pending_final_approval"] : ["pending_dept_approval"]}
+      pendingLabel={isTenantAdmin ? "in review" : "awaiting your review"}
+      pendingChipClass={isTenantAdmin ? "bg-blue-50 text-blue-700 ring-blue-200" : "bg-amber-50 text-amber-700 ring-amber-200"}
+      pendingDotClass={isTenantAdmin ? "bg-blue-500" : "bg-amber-500"}
+      showDepartmentColumn={isTenantAdmin || undefined}
       onReload={reload}
-      onFinalApprove={handleFinalApprove}
-      onOverride={handleOverride}
+      onDeptSave={isTenantAdmin ? undefined : handleDeptSave}
+      onDeptApprove={isTenantAdmin ? undefined : handleDeptApprove}
+      onFinalApprove={isTenantAdmin ? handleFinalApprove : undefined}
+      onOverride={isTenantAdmin ? handleOverride : undefined}
       onReject={handleReject}
     />
   );
@@ -305,8 +175,8 @@ export default function DashboardPage() {
   return (
     <AppShell title={title}>
       {user.role === "employee" && <EmployeeSelfAssessment fetcher={getDashboard} initialParams={initialParams} navKey={navKey} />}
-      {user.role === "dept_admin" && <DeptAdminDashboard initialParams={initialParams} navKey={navKey} />}
-      {user.role === "tenant_admin" && <TenantAdminDashboard user={user} initialParams={initialParams} navKey={navKey} />}
+      {user.role === "dept_admin" && <AdminDashboard user={user} initialParams={initialParams} navKey={navKey} />}
+      {user.role === "tenant_admin" && <AdminDashboard user={user} initialParams={initialParams} navKey={navKey} isTenantAdmin />}
       {user.role === "super_admin" && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-10 text-center">
           <p className="text-sm text-slate-500">

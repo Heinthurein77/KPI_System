@@ -13,16 +13,21 @@ import { useToast } from "../../context/ToastContext";
 import { createCustomTemplateWithRebalance, deleteTemplate, getPeriodWeight, listTemplates, renameTemplate } from "../../api/admin";
 import { getErrorMessage } from "../../api/errors";
 import { MONTH_NAMES_EN } from "../../utils/months";
+import LoadError from "../../components/ui/LoadError";
+import { useApi } from "../../hooks/useApi";
+import { useAppConfig } from "../../hooks/useAppConfig";
 
 // The only period the M6 admin-creation gate allows right now: during the
-// grace week (days 1..SUBMISSION_GRACE_DAYS, default 7) the previous month;
-// from day 8 on, the current month. Mirrors BulkImportPage. The backend
-// stays the authority and rejects anything else with a clear message
-// (shown via getErrorMessage in the create toast error path).
-function allowedTemplatePeriod(now = new Date()) {
+// grace week (days 1..SUBMISSION_GRACE_DAYS, read from the server via
+// /api/app-config — S-M3) the previous month; from day graceDays + 1 on,
+// the current month. The backend stays the authority and rejects anything
+// else with a clear message (shown via getErrorMessage in the create
+// toast error path). `now` defaults to the browser clock and `graceDays`
+// to 7 only until the server config loads.
+function allowedTemplatePeriod(now = new Date(), graceDays = 7) {
   let year = now.getFullYear();
   let month = now.getMonth() + 1;
-  const graceWeek = now.getDate() <= 7;
+  const graceWeek = now.getDate() <= graceDays;
   if (graceWeek) {
     month -= 1;
     if (month === 0) {
@@ -82,24 +87,6 @@ function scaleWeightsTo(values, target) {
     k++;
   }
   return out;
-}
-
-// Shown when the initial data load fails (instead of an endless spinner).
-// Lets the user retry the failed request.
-function LoadError({ message, onRetry }) {
-  return (
-    <div className="rounded-2xl bg-white shadow-sm border border-slate-200 px-8 py-10 max-w-md w-full mx-auto text-center">
-      <p className="text-sm font-semibold text-red-600">Couldn't load data</p>
-      <p className="mt-2 text-sm text-slate-500">{message}</p>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
-      >
-        Try again
-      </button>
-    </div>
-  );
 }
 
 // Metric name that clamps to 2 lines with an expand affordance, but only
@@ -192,8 +179,18 @@ export default function TemplatesPage() {
   const toast = useToast();
   const isDeptAdmin = user.role === "dept_admin";
 
-  const [data, setData] = useState(null);
-  const [loadError, setLoadError] = useState(null);
+  // Shared load lifecycle (F-M1): data / error / retry + stale-response
+  // guard live in useApi; the local LoadError copy is gone.
+  const { data, setData, error: loadError, load } = useApi(listTemplates, {
+    onError: (message) => toast.error(message),
+  });
+
+  // S-M3: grace length + server day from the backend. The form's target
+  // period starts from the local clock (same as before) and is corrected
+  // once when the server config lands — but only if the user hasn't
+  // already picked a different period via the next-month offer.
+  const appConfig = useAppConfig();
+  const configAppliedRef = useRef(false);
 
   // ── New Custom KPI form state ──
   const [customEmployeeId, setCustomEmployeeId] = useState("");
@@ -202,9 +199,24 @@ export default function TemplatesPage() {
   const [customWeight, setCustomWeight] = useState("");
   const [customRecurring, setCustomRecurring] = useState(true);
   // Target period for the new KPI — NOT the backend default (current month),
-  // which the M6 gate rejects during days 1–7. During grace week this is the
-  // previous month; from day 8 it is the current month.
+  // which the M6 gate rejects during the grace week. During grace week this is the
+  // previous month; from day graceDays + 1 it is the current month.
   const [customPeriod, setCustomPeriod] = useState(() => allowedTemplatePeriod());
+
+  // S-M3 one-time correction (see appConfig above): once the server
+  // config loads, re-derive the default target period from the server
+  // date + grace length, unless the user already moved it.
+  useEffect(() => {
+    if (!appConfig.loaded || configAppliedRef.current) return;
+    configAppliedRef.current = true;
+    const serverAllowed = allowedTemplatePeriod(appConfig.today, appConfig.graceDays);
+    setCustomPeriod((prev) => {
+      const localAllowed = allowedTemplatePeriod();
+      return prev.year === localAllowed.year && prev.period === localAllowed.period
+        ? serverAllowed
+        : prev;
+    });
+  }, [appConfig]);
   const [weightError, setWeightError] = useState(null);
   // Backend/submit errors other than the weight total (shown inline above
   // Submit, alongside the toast) so a failed submit says which field failed
@@ -304,23 +316,10 @@ export default function TemplatesPage() {
     }
   }
 
-  function load() {
-    listTemplates()
-      .then((d) => {
-        setData(d);
-        setLoadError(null);
-      })
-      .catch((err) => {
-        const message = getErrorMessage(err);
-        setLoadError(message);
-        toast.error(message);
-      });
-  }
-
-  // `toast` is a plain object re-created every render (not memoized by
-  // ToastContext), so listing it here would refetch on every render.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(load, []);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // All existing recurring custom KPIs for the selected employee.
   const existingEmployeeKpis = useMemo(() => {
@@ -362,10 +361,13 @@ export default function TemplatesPage() {
   // opens); the form's target starts here. When the target period is
   // full, the prompt offers to start the KPI one month later instead:
   // `onNextMonthPath` is true once the user takes that offer. During
-  // grace week (days 1–7) the next month is the CURRENT month, which
-  // M6 blocks until day 8 — so the offer is hidden then, with a plain
+  // grace week (days 1..graceDays) the next month is the CURRENT month, which
+  // M6 blocks until day graceDays + 1 — so the offer is hidden then, with a plain
   // explanation, instead of offering a month the backend would reject.
-  const allowedPeriod = useMemo(() => allowedTemplatePeriod(), [showAddCustom]);
+  const allowedPeriod = useMemo(
+    () => allowedTemplatePeriod(appConfig.today ?? new Date(), appConfig.graceDays),
+    [showAddCustom, appConfig]
+  );
   const nextPeriod = useMemo(() => {
     const n = nextMonthOf(allowedPeriod);
     return { ...n, label: `${n.period} ${n.year}` };
@@ -980,8 +982,8 @@ export default function TemplatesPage() {
               </div>
 
               {/* Target period — only the period the M6 gate allows is offered:
-                  previous month during days 1–7 (grace week), current month
-                  from day 8. Anything else the backend rejects with a clear
+                  previous month during the grace week, current month
+                  from day graceDays + 1. Anything else the backend rejects with a clear
                   message, shown in the error toast. */}
               <div>
                 <label htmlFor="custom-period" className="mb-1 block text-xs font-semibold text-slate-600">
@@ -1003,7 +1005,7 @@ export default function TemplatesPage() {
                     {onNextMonthPath
                       ? `Starts ${customPeriod.label} — ${allowedPeriod.label}'s approved scores and weights are untouched.`
                       : customPeriod.graceWeek
-                        ? "Days 1–7 (grace week): new KPIs target the previous month. The current month opens on day 8."
+                        ? `Days 1–${appConfig.graceDays} (grace week): new KPIs target the previous month. The current month opens on day ${appConfig.graceDays + 1}.`
                         : "New KPIs target the current month. The previous month's grace window has closed."}
                   </span>
                 </div>
@@ -1202,7 +1204,7 @@ export default function TemplatesPage() {
                     )}
                     {!onNextMonthPath && customPeriod.graceWeek && (
                       <span className="text-xs text-amber-700">
-                        During grace week (days 1–7) new KPIs target last month — next month opens on day 8.
+                        During grace week (days 1–{appConfig.graceDays}) new KPIs target last month — next month opens on day {appConfig.graceDays + 1}.
                       </span>
                     )}
                     {onNextMonthPath && (

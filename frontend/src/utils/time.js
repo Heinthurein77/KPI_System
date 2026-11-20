@@ -10,6 +10,8 @@ export function middayLabel(startTime, endTime) {
     const [h, m] = t.split(":").map(Number);
     return h * 60 + m;
   };
-  const mid = (toMin(startTime) + toMin(endTime)) / 2;
+  // Integer math matching the backend's `// 2` (attendance_service.midday):
+  // float division rendered "13:15.5" for odd-minute office hours.
+  const mid = Math.floor((toMin(startTime) + toMin(endTime)) / 2);
   return `${String(Math.floor(mid / 60)).padStart(2, "0")}:${String(mid % 60).padStart(2, "0")}`;
 }

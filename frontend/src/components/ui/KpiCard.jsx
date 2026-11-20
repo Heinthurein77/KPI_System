@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import StatusBadge from "./StatusBadge";
 import ScoreBadge from "./ScoreBadge";
 import ConfirmDialog from "./ConfirmDialog";
@@ -107,6 +107,19 @@ export default function KpiCard({
   const [invalidScoreField, setInvalidScoreField] = useState(null);
   // Pending destructive/confirmatory action: { kind: "deptApprove" | "finalApprove" | "reject" }
   const [confirm, setConfirm] = useState(null);
+
+  // F-m4: the review-score inputs are local state, but a background reload
+  // (5-minute poll, or a mutation reload()) can bring a different server
+  // value for the SAME submission — resync then, so another admin's score
+  // or a server-side clamp is never invisible in the input. The effect
+  // only runs when the server value itself changes, so typing is never
+  // clobbered by a re-render. No attainment math or caps change here.
+  useEffect(() => {
+    setDeptScore(s.dept_score ?? s.self_score ?? "");
+  }, [s.id, s.dept_score, s.self_score]);
+  useEffect(() => {
+    setFinalScore(s.final_score ?? s.dept_score ?? "");
+  }, [s.id, s.final_score, s.dept_score]);
 
   // Target/weight in force when this submission was created (frozen snapshot
   // with fallback to the live template for pre-migration rows).

@@ -2,41 +2,33 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import AppShell from "../../components/layout/AppShell";
 import PageLoading from "../../components/ui/PageLoading";
+import LoadError from "../../components/ui/LoadError";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { activateTenant, createTenant, deleteTenant, listTenants, suspendTenant } from "../../api/platform";
 import { getErrorMessage } from "../../api/errors";
 import { useToast } from "../../context/ToastContext";
+import { useApi } from "../../hooks/useApi";
 
 const EMPTY_FORM = { name: "", slug: "", admin_name: "", admin_email: "", admin_password: "" };
 
 export default function TenantsPage() {
   const toast = useToast();
-  const [tenants, setTenants] = useState(null);
+  // Shared load lifecycle (F-M1); the inline error markup below is
+  // replaced by the shared LoadError.
+  const { data: tenants, error: loadError, load } = useApi(listTenants, {
+    onError: (message) => toast.error(message),
+  });
   const [form, setForm] = useState(EMPTY_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [pendingToggle, setPendingToggle] = useState(null);
   const [toggling, setToggling] = useState(false);
-  const [loadError, setLoadError] = useState(null);
 
-  function load() {
-    listTenants()
-      .then((t) => {
-        setTenants(t);
-        setLoadError(null);
-      })
-      .catch((err) => {
-        const message = getErrorMessage(err);
-        setLoadError(message);
-        toast.error(message);
-      });
-  }
-
-  // `toast` is a plain object re-created every render (not memoized by
-  // ToastContext), so listing it here would refetch on every render.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(load, []);
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function handleCreate(e) {
     e.preventDefault();
@@ -88,21 +80,7 @@ export default function TenantsPage() {
   if (!tenants) {
     return (
       <AppShell title="Tenants">
-        {loadError ? (
-          <div className="rounded-2xl bg-white shadow-sm border border-slate-200 px-8 py-10 max-w-md w-full mx-auto text-center">
-            <p className="text-sm font-semibold text-red-600">Couldn't load data</p>
-            <p className="mt-2 text-sm text-slate-500">{loadError}</p>
-            <button
-              type="button"
-              onClick={load}
-              className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
-            >
-              Try again
-            </button>
-          </div>
-        ) : (
-          <PageLoading />
-        )}
+        {loadError ? <LoadError message={loadError} onRetry={() => load()} /> : <PageLoading />}
       </AppShell>
     );
   }

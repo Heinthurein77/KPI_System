@@ -1,9 +1,11 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import AppShell from "../../components/layout/AppShell";
 import PageLoading from "../../components/ui/PageLoading";
+import LoadError from "../../components/ui/LoadError";
 import EmptyState from "../../components/ui/EmptyState";
 import { getPlatformAuditLog } from "../../api/platform";
 import { getErrorMessage } from "../../api/errors";
+import { useApi } from "../../hooks/useApi";
 
 const ROLE_LABELS = {
   super_admin: "Super Admin",
@@ -35,30 +37,35 @@ function formatTimestamp(iso) {
 }
 
 export default function PlatformAuditLogPage() {
-  const [entries, setEntries] = useState(null);
-  const [error, setError] = useState(null);
   const [query, setQuery] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
+  // Load-more failures surface inline without wiping the rows already on
+  // screen (the initial load goes through the hook's error/LoadError).
+  const [moreError, setMoreError] = useState(null);
+
+  // Shared load lifecycle (F-M1) for the first page; loadMore appends
+  // via the hook's setData.
+  const fetcher = useCallback(() => getPlatformAuditLog(PAGE_SIZE), []);
+  const { data: entries, setData: setEntries, error, load } = useApi(fetcher, {
+    onSuccess: (rows) => setHasMore(rows.length === PAGE_SIZE),
+  });
 
   useEffect(() => {
-    getPlatformAuditLog(PAGE_SIZE)
-      .then((rows) => {
-        setEntries(rows);
-        setHasMore(rows.length === PAGE_SIZE);
-      })
-      .catch((err) => setError(getErrorMessage(err)));
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadMore() {
     if (!entries || loadingMore) return;
     setLoadingMore(true);
+    setMoreError(null);
     try {
       const rows = await getPlatformAuditLog(PAGE_SIZE, entries.length);
       setEntries([...entries, ...rows]);
       setHasMore(rows.length === PAGE_SIZE);
     } catch (err) {
-      setError(getErrorMessage(err));
+      setMoreError(getErrorMessage(err));
     } finally {
       setLoadingMore(false);
     }
@@ -67,7 +74,7 @@ export default function PlatformAuditLogPage() {
   if (error) {
     return (
       <AppShell title="Platform Audit Log">
-        <div className="rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{error}</div>
+        <LoadError message={error} onRetry={() => load()} />
       </AppShell>
     );
   }
@@ -90,6 +97,10 @@ export default function PlatformAuditLogPage() {
         Platform-level actions only — tenant deletions and platform logins. Tenant activity never appears here;
         each tenant&apos;s own audit log lives in its admin portal.
       </p>
+
+      {moreError && (
+        <div className="mb-4 rounded-lg bg-red-50 border border-red-200 px-4 py-3 text-sm text-red-700">{moreError}</div>
+      )}
 
       <div className="mb-4 flex items-center justify-between gap-3">
         <div className="relative w-full max-w-xs">

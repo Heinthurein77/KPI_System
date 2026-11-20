@@ -1,29 +1,23 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import AppShell from "../../components/layout/AppShell";
 import ConfirmDialog from "../../components/ui/ConfirmDialog";
 import { downloadImportTemplate, uploadImport } from "../../api/import";
 import { getErrorMessage } from "../../api/errors";
 import { MONTH_NAMES_EN } from "../../utils/months";
-
-function downloadBlob(blob, filename) {
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
-}
+import { downloadBlob } from "../../utils/download";
+import { useAppConfig } from "../../hooks/useAppConfig";
 
 // The only period the M6 admin-creation gate allows right now: during the
-// grace week (days 1..SUBMISSION_GRACE_DAYS, default 7) the previous month;
-// from day 8 on, the current month. The backend stays the authority and
-// rejects anything else with a clear message (shown via getErrorMessage).
-function allowedImportPeriod(now = new Date()) {
+// grace week (days 1..SUBMISSION_GRACE_DAYS, read from the server via
+// /api/app-config — S-M3) the previous month; from day graceDays + 1 on,
+// the current month. The backend stays the authority and rejects anything
+// else with a clear message (shown via getErrorMessage). `now` defaults
+// to the browser clock and `graceDays` to 7 only until the server config
+// loads.
+function allowedImportPeriod(now = new Date(), graceDays = 7) {
   let year = now.getFullYear();
   let month = now.getMonth() + 1;
-  const graceWeek = now.getDate() <= 7;
+  const graceWeek = now.getDate() <= graceDays;
   if (graceWeek) {
     month -= 1;
     if (month === 0) {
@@ -43,6 +37,17 @@ export default function BulkImportPage() {
   const [result, setResult] = useState(null); // final import result
   const [confirmImport, setConfirmImport] = useState(false);
   const [period, setPeriod] = useState(() => allowedImportPeriod());
+
+  // S-M3: once the server config loads, re-derive the allowed period from
+  // the server date + grace length (the user never picks a period here —
+  // the select offers only the allowed one — so overwriting is safe).
+  const appConfig = useAppConfig();
+  const configAppliedRef = useRef(false);
+  useEffect(() => {
+    if (!appConfig.loaded || configAppliedRef.current) return;
+    configAppliedRef.current = true;
+    setPeriod(allowedImportPeriod(appConfig.today, appConfig.graceDays));
+  }, [appConfig]);
 
   async function handleTemplate() {
     setError("");
@@ -140,10 +145,12 @@ export default function BulkImportPage() {
         )}
 
         <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <h3 className="mb-3 text-base font-semibold text-slate-900">1. Choose file</h3>
+          <h3 className="mb-3 text-base font-semibold text-slate-900" id="bulk-file-label">1. Choose file</h3>
           <div className="flex flex-wrap items-center gap-3">
             <input
               ref={fileRef}
+              id="bulk-file"
+              aria-labelledby="bulk-file-label"
               type="file"
               accept=".xlsx"
               onChange={handleFileChange}
@@ -152,9 +159,11 @@ export default function BulkImportPage() {
             {fileName && <span className="text-sm text-slate-500">{fileName}</span>}
           </div>
 
-          <h3 className="mb-3 mt-6 text-base font-semibold text-slate-900">2. Target period</h3>
+          <h3 className="mb-3 mt-6 text-base font-semibold text-slate-900" id="bulk-period-label">2. Target period</h3>
           <div className="flex flex-wrap items-center gap-3">
             <select
+              id="bulk-period"
+              aria-labelledby="bulk-period-label"
               value={`${period.year}-${period.month}`}
               onChange={(e) => {
                 const [y, m] = e.target.value.split("-").map(Number);
@@ -168,7 +177,7 @@ export default function BulkImportPage() {
             </select>
             <span className="text-xs text-slate-500">
               {period.graceWeek
-                ? "Days 1–7 (grace week): imports target the previous month. The current month opens on day 8."
+                ? `Days 1–${appConfig.graceDays} (grace week): imports target the previous month. The current month opens on day ${appConfig.graceDays + 1}.`
                 : "Imports target the current month. The previous month's grace window has closed."}
             </span>
           </div>

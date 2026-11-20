@@ -7,7 +7,6 @@ import {
   markNotificationRead,
   updateNotificationSettings,
 } from "../../api/notifications";
-import { getErrorMessage } from "../../api/errors";
 
 const POLL_INTERVAL_MS = 60000;
 
@@ -88,7 +87,12 @@ export default function NotificationBell() {
       try {
         await markNotificationRead(n.id);
       } catch {
-        // fall through — navigation still works
+        // The server never recorded the read: keep the unread badge (the
+        // 60 s poll re-syncs) and still navigate — a failed write must
+        // never clear the badge locally.
+        setOpen(false);
+        if (n.link) navigate(n.link);
+        return;
       }
       setItems((prev) => prev.map((x) => (x.id === n.id ? { ...x, is_read: true } : x)));
       setUnreadCount((c) => Math.max(0, c - 1));
@@ -100,9 +104,11 @@ export default function NotificationBell() {
   async function handleMarkAllRead() {
     try {
       await markAllNotificationsRead();
-    } catch (err) {
-      // surface only real failures, silently ignore otherwise
-      if (getErrorMessage(err, "")) return;
+    } catch {
+      // Failed write: leave every item unread — the bell is the user's
+      // only signal for approvals, so it must never claim "all read"
+      // when the server never recorded it.
+      return;
     }
     setItems((prev) => prev.map((x) => ({ ...x, is_read: true })));
     setUnreadCount(0);

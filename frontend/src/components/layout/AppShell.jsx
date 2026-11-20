@@ -1,7 +1,7 @@
 import { useState } from "react";
 import Sidebar from "./Sidebar";
 import Topbar from "./Topbar";
-import { APP_VERSION, APP_COMMIT } from "../../version";
+import { APP_COMMIT } from "../../version";
 
 export default function AppShell({ title, children }) {
   const [navOpen, setNavOpen] = useState(false);
@@ -17,9 +17,10 @@ export default function AppShell({ title, children }) {
         {/* M3: release identity — answers "what version is live?" without
             asking in chat. The commit is baked in at build time (see
             vite.config.js); "dev" means the build had no git checkout and
-            no VITE_APP_COMMIT build arg. */}
+            no VITE_APP_COMMIT build arg. The version is deliberately not
+            shown: nothing ever bumps it, so it permanently read v0.0.0. */}
         <footer className="shrink-0 border-t border-slate-200 bg-white px-4 py-1.5 text-center text-[11px] text-slate-400">
-          KPI Approval System · v{APP_VERSION} · {APP_COMMIT}
+          KPI Approval System · {APP_COMMIT}
         </footer>
       </div>
     </div>

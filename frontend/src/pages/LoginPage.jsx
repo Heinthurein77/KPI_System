@@ -6,7 +6,10 @@ export default function LoginPage() {
   const { user, login } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
-  const [orgSlug, setOrgSlug] = useState("");
+  // Prefill the org slug from the last successful login (S-m6): a
+  // transient 401 no longer wipes it, so the user isn't forced to retype
+  // it after e.g. a password change elsewhere bumped token_version.
+  const [orgSlug, setOrgSlug] = useState(() => localStorage.getItem("tenant_slug") ?? "");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);

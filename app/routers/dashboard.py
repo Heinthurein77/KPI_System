@@ -19,6 +19,24 @@ from app.services import submission_grace
 router = APIRouter(prefix="/api", tags=["dashboard"])
 
 
+# ---------------------------------------------------------------- app-config
+# S-M3 (senior review 2026-11-20): the frontend hardcoded the 7-day grace
+# and read it off the browser clock, while the backend reads
+# SUBMISSION_GRACE_DAYS and the Asia/Yangon date. One minimal read-only
+# endpoint exposes both, on the existing session auth — no new auth
+# surface. The grace rule itself is unchanged; only where the value
+# comes from moves server-side.
+
+
+@router.get("/app-config")
+def get_app_config(user=Depends(get_current_user)):
+    return {
+        "submission_grace_days": settings.SUBMISSION_GRACE_DAYS,
+        "today": app_today().isoformat(),
+        "timezone": settings.TIMEZONE,
+    }
+
+
 def current_month_period(today: date | None = None) -> tuple[int, str]:
     today = today or app_today()
     return today.year, MONTH_NAMES[today.month - 1]

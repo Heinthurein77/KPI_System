@@ -5,7 +5,7 @@ import EmployeeCombobox from "../../components/ui/EmployeeCombobox";
 import EmployeeTrendView from "../../components/ui/EmployeeTrendView";
 import { useAuth } from "../../context/AuthContext";
 import { listUsers } from "../../api/admin";
-import { getErrorMessage } from "../../api/errors";
+import { useApi } from "../../hooks/useApi";
 
 export default function UserKpiTrendPage() {
   const { id } = useParams();
@@ -14,22 +14,24 @@ export default function UserKpiTrendPage() {
   const isDeptAdmin = currentUser.role === "dept_admin";
 
   const [roster, setRoster] = useState(null);
-  const [error, setError] = useState(null);
 
-  // The roster of employees this admin can browse trends for — same scoping
-  // as the "Trend" icon's visibility on the Users page.
+  // Shared load lifecycle (F-M1): the roster of employees this admin can
+  // browse trends for — same scoping as the "Trend" icon's visibility on
+  // the Users page.
+  const { error, load } = useApi(listUsers, {
+    onSuccess: (d) => {
+      // Tenant admins review employees AND dept admins, so both appear;
+      // tenant admins themselves are not KPI owners and stay hidden.
+      // Dept admins see employees only.
+      const selectable = d.users
+        .filter((u) => u.role !== "tenant_admin" && (!isDeptAdmin || u.role === "employee"))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setRoster(selectable);
+    },
+  });
+
   useEffect(() => {
-    listUsers()
-      .then((d) => {
-        // Tenant admins review employees AND dept admins, so both appear;
-        // tenant admins themselves are not KPI owners and stay hidden.
-        // Dept admins see employees only.
-        const selectable = d.users
-          .filter((u) => u.role !== "tenant_admin" && (!isDeptAdmin || u.role === "employee"))
-          .sort((a, b) => a.name.localeCompare(b.name));
-        setRoster(selectable);
-      })
-      .catch((err) => setError(getErrorMessage(err)));
+    load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

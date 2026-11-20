@@ -7,6 +7,8 @@ import { getBlobErrorMessage, getErrorMessage } from "../../api/errors";
 import { useAuth } from "../../context/AuthContext";
 import { useToast } from "../../context/ToastContext";
 import { MONTHS } from "../../utils/months";
+import { downloadBlob } from "../../utils/download";
+import { useApi } from "../../hooks/useApi";
 
 function safeFilePart(value) {
   return value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
@@ -24,27 +26,32 @@ export default function KpiDownloadPage() {
   const [year, setYear] = useState(now.getFullYear());
   const [downloading, setDownloading] = useState(false);
 
+  // Shared load lifecycle (F-M1): the roster is derived from the fetched
+  // users in onSuccess; a failed load yields an empty roster (as before)
+  // instead of an endless spinner.
+  const { load } = useApi(listUsers, {
+    onSuccess: (data) => {
+      // A Department Admin is scoped to employees in their own team; a Tenant
+      // Admin can also export a Department Admin's self-assessment report.
+      const eligibleRoles = currentUser.role === "dept_admin" ? ["employee"] : ["employee", "dept_admin"];
+      const eligible = data.users
+        .filter((person) => eligibleRoles.includes(person.role))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      setRoster(eligible);
+      setEmployeeId((previous) =>
+        eligible.some((person) => String(person.id) === String(previous))
+          ? previous
+          : String(eligible[0]?.id ?? "")
+      );
+    },
+    onError: (_message, err) => {
+      setRoster([]);
+      toast.error(getErrorMessage(err, "Could not load people for the report."));
+    },
+  });
+
   useEffect(() => {
-    listUsers()
-      .then((data) => {
-        // A Department Admin is scoped to employees in their own team; a Tenant
-        // Admin can also export a Department Admin's self-assessment report.
-        const eligibleRoles = currentUser.role === "dept_admin" ? ["employee"] : ["employee", "dept_admin"];
-        const eligible = data.users
-          .filter((person) => eligibleRoles.includes(person.role))
-          .sort((a, b) => a.name.localeCompare(b.name));
-        setRoster(eligible);
-        setEmployeeId((previous) =>
-          eligible.some((person) => String(person.id) === String(previous))
-            ? previous
-            : String(eligible[0]?.id ?? "")
-        );
-      })
-      .catch((err) => {
-        setRoster([]);
-        toast.error(getErrorMessage(err, "Could not load people for the report."));
-      });
-    // `toast` is recreated by its provider each render; including it would re-fetch indefinitely.
+    load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -86,18 +93,14 @@ export default function KpiDownloadPage() {
         : reportType === "annual"
           ? await downloadEmployeeAnnualKpiReport(employee.id, year)
           : await downloadEmployeeKpiReport(employee.id, month, year);
-      const url = URL.createObjectURL(file);
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = isPdf
-        ? `kpi-appraisal-${safeFilePart(employee.name)}-${year}.pdf`
-        : reportType === "annual"
-          ? `kpi-report-${safeFilePart(employee.name)}-${year}-annual.xlsx`
-          : `kpi-report-${safeFilePart(employee.name)}-${year}-${month.toLowerCase()}.xlsx`;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 0);
+      downloadBlob(
+        file,
+        isPdf
+          ? `kpi-appraisal-${safeFilePart(employee.name)}-${year}.pdf`
+          : reportType === "annual"
+            ? `kpi-report-${safeFilePart(employee.name)}-${year}-annual.xlsx`
+            : `kpi-report-${safeFilePart(employee.name)}-${year}-${month.toLowerCase()}.xlsx`
+      );
       const label = isPdf ? "Annual appraisal PDF" : reportType === "annual" ? "Annual" : "Monthly";
       toast.success(`${label} report for ${employee.name} downloaded.`);
     } catch (err) {

@@ -1,12 +1,13 @@
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import ErrorCard from "../components/ui/ErrorCard";
+import PageLoading from "../components/ui/PageLoading";
 
 export default function ProtectedRoute({ roles, children }) {
   const { user, loading } = useAuth();
   const location = useLocation();
 
-  if (loading) return null;
+  if (loading) return <PageLoading />;
   if (!user) return <Navigate to="/login" replace />;
 
   // Users with a forced password change (admin-created, admin-reset,

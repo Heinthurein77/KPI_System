@@ -5,37 +5,15 @@ import KpiCard from "../ui/KpiCard";
 import ConfirmDialog from "../ui/ConfirmDialog";
 import EmptyState from "../ui/EmptyState";
 import PageLoading from "../ui/PageLoading";
+import LoadError from "../ui/LoadError";
 import { STYLES as STATUS_STYLES, LABELS as STATUS_LABELS } from "../ui/statusMeta";
 import { employeeSaveScores, employeeSubmit } from "../../api/kpi";
 import { getErrorMessage } from "../../api/errors";
 import { MONTHS } from "../../utils/months";
-
-// How often every dashboard re-checks its current period in the
-// background. Shared cadence with the admin boards in DashboardPage.jsx:
-// 5 minutes is long enough that a background tick never surprises anyone
-// mid-edit, and short enough that the other side's changes show up
-// without a manual refresh. Skipped while the tab is hidden.
-const DASHBOARD_POLL_INTERVAL_MS = 5 * 60 * 1000;
+import { DASHBOARD_POLL_INTERVAL_MS, useApi } from "../../hooks/useApi";
+import { useAppConfig } from "../../hooks/useAppConfig";
 import { useToast } from "../../context/ToastContext";
 import { useAuth } from "../../context/AuthContext";
-
-// Shown when the initial data load fails (instead of an endless spinner).
-// Lets the user retry the failed request.
-function LoadError({ message, onRetry }) {
-  return (
-    <div className="rounded-2xl bg-white shadow-sm border border-slate-200 px-8 py-10 max-w-md w-full mx-auto text-center">
-      <p className="text-sm font-semibold text-red-600">Couldn't load data</p>
-      <p className="mt-2 text-sm text-slate-500">{message}</p>
-      <button
-        type="button"
-        onClick={onRetry}
-        className="mt-6 inline-flex items-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition"
-      >
-        Try again
-      </button>
-    </div>
-  );
-}
 
 const TARGET_EXCEEDED_MESSAGE = "Target ထက်ကျော်နေပါ၍ပြန်ထည့်ရန်";
 const WEIGHT_TOTAL_MESSAGE = "Weight စုစုပေါင်းသည် 100% ဖြစ်ရပါမည်။ (100 ထက် ကျော်လွန်နေပါသည် သို့မဟုတ် 100 မပြည့်သေးပါ)";
@@ -44,20 +22,72 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   const toast = useToast();
   const { user } = useAuth();
   const isDeptAdmin = user?.role === "dept_admin";
-  const [data, setData] = useState(null);
   const [scores, setScores] = useState({});
   const [comments, setComments] = useState({});
   const initialCommentsRef = useRef({});
   const initialScoresRef = useRef({});
   const [error, setError] = useState(null);
-  const [loadError, setLoadError] = useState(null);
   const [invalidScoreId, setInvalidScoreId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [params, setParams] = useState({});
   const paramsRef = useRef(params);
   const firstNavRef = useRef(true);
-  const loadIdRef = useRef(0);
+  // S-M3: the grace window (length + server day) comes from the backend —
+  // the grace shortcut and banner below must never hardcode 7 or trust
+  // the browser clock. Until the config loads, the local date + default
+  // 7-day grace apply (same as before).
+  const appConfig = useAppConfig();
+  // Shared load lifecycle (F-M1): stale-response guard, error/retry and
+  // silent background ticks live in useApi now. The per-load work that
+  // used to sit inside load() — seeding the form from the fetched
+  // submissions and restoring an autosaved draft — runs as onSuccess.
+  const { data, error: loadError, load } = useApi(fetcher, {
+    onError: (message) => toast.error(message),
+    onSuccess: (d) => {
+      const initial = {};
+      const initialComments = {};
+      d.submissions.forEach((s) => {
+        initial[s.id] = s.self_score ?? "";
+        initialComments[s.id] = s.self_score_comment ?? "";
+      });
+      setScores(initial);
+      setComments(initialComments);
+      initialScoresRef.current = initial;
+      initialCommentsRef.current = initialComments;
+      // M16: restore an autosaved draft for this period, if one
+      // exists. Only editable rows are restored (a row submitted or
+      // approved since the draft was saved keeps its server value),
+      // and the server values stay the "initial" baseline, so a
+      // restored draft still counts as unsaved edits and the
+      // background tick will not wipe it.
+      const draft = readDraft(d.active_year, d.active_period);
+      if (draft) {
+        const restoredScores = { ...initial };
+        const restoredComments = { ...initialComments };
+        let restored = false;
+        for (const s of d.submissions) {
+          const editable =
+            d.is_current_period &&
+            d.is_month_end &&
+            (s.status === "draft" || s.status === "rejected");
+          if (!editable) continue;
+          if (draft.scores && draft.scores[s.id] !== undefined) {
+            restoredScores[s.id] = draft.scores[s.id];
+            restored = true;
+          }
+          if (draft.comments && draft.comments[s.id] !== undefined) {
+            restoredComments[s.id] = draft.comments[s.id];
+            restored = true;
+          }
+        }
+        if (restored) {
+          setScores(restoredScores);
+          setComments(restoredComments);
+        }
+      }
+    },
+  });
   // Latest-render mirrors so the background tick (which closes over the
   // first render) always sees current form state, not stale state.
   const liveRef = useRef({ scores: {}, comments: {}, saving: false, confirmSubmit: false });
@@ -90,67 +120,6 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
     } catch {
       // Best-effort.
     }
-  }
-
-  function load(nextParams, { silent = false } = {}) {
-    // Guard against out-of-order responses: switching the period while a
-    // previous request is still in flight must not let a stale response
-    // overwrite the newer one.
-    const requestId = ++loadIdRef.current;
-    fetcher(nextParams)
-      .then((d) => {
-        if (loadIdRef.current !== requestId) return;
-        setData(d);
-        setLoadError(null);
-        const initial = {};
-        const initialComments = {};
-        d.submissions.forEach((s) => {
-          initial[s.id] = s.self_score ?? "";
-          initialComments[s.id] = s.self_score_comment ?? "";
-        });
-        setScores(initial);
-        setComments(initialComments);
-        initialScoresRef.current = initial;
-        initialCommentsRef.current = initialComments;
-        // M16: restore an autosaved draft for this period, if one
-        // exists. Only editable rows are restored (a row submitted or
-        // approved since the draft was saved keeps its server value),
-        // and the server values stay the "initial" baseline, so a
-        // restored draft still counts as unsaved edits and the
-        // background tick will not wipe it.
-        const draft = readDraft(d.active_year, d.active_period);
-        if (draft) {
-          const restoredScores = { ...initial };
-          const restoredComments = { ...initialComments };
-          let restored = false;
-          for (const s of d.submissions) {
-            const editable =
-              d.is_current_period &&
-              d.is_month_end &&
-              (s.status === "draft" || s.status === "rejected");
-            if (!editable) continue;
-            if (draft.scores && draft.scores[s.id] !== undefined) {
-              restoredScores[s.id] = draft.scores[s.id];
-              restored = true;
-            }
-            if (draft.comments && draft.comments[s.id] !== undefined) {
-              restoredComments[s.id] = draft.comments[s.id];
-              restored = true;
-            }
-          }
-          if (restored) {
-            setScores(restoredScores);
-            setComments(restoredComments);
-          }
-        }
-      })
-      .catch((err) => {
-        if (loadIdRef.current !== requestId) return;
-        if (silent) return; // background tick: keep the old board, retry next tick
-        const message = getErrorMessage(err);
-        setLoadError(message);
-        toast.error(message);
-      });
   }
 
   // True when the employee has typed something not yet saved. A background
@@ -260,8 +229,10 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
 
   // Grace-week shortcut: when the current month's set has not opened yet
   // (rollover banner above), the previous month is still fillable until
-  // day 7 — but nothing on this empty view says so. Offer a one-click jump
-  // to it instead of stranding the employee on the empty current month.
+  // the grace window ends — but nothing on this empty view says so. Offer
+  // a one-click jump to it instead of stranding the employee on the empty
+  // current month. The grace length and the current day come from the
+  // server (useAppConfig, S-M3), never the browser clock.
   // data.months comes from the backend (full English month names).
   // Fall back to the one shared frontend copy (utils/months) if the
   // backend ever omits it — never a second local copy of the list.
@@ -270,8 +241,9 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   const prevIdx = activeIdx > 0 ? activeIdx - 1 : 11;
   const gracePrevYear = activeIdx === 0 ? data.active_year - 1 : data.active_year;
   const gracePrevPeriod = monthList[prevIdx];
+  const serverDay = appConfig.today ? appConfig.today.getDate() : new Date().getDate();
   const showGraceShortcut =
-    !!data.rollover_on && !isFutureLocked && activeIdx >= 0 && new Date().getDate() <= 7;
+    !!data.rollover_on && !isFutureLocked && activeIdx >= 0 && serverDay <= appConfig.graceDays;
 
   function handleApply(nextParams) {
     paramsRef.current = nextParams;
@@ -514,7 +486,7 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
                 ? new Date(`${data.grace_ends_on}T00:00:00`).toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })
                 : "the end of the grace period"}
             </span>{" "}
-            (7 days after month-end). After that, this month closes.
+            ({appConfig.graceDays} days after month-end). After that, this month closes.
           </p>
         </div>
       )}

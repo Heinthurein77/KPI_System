@@ -7,7 +7,7 @@ and role gating.
 """
 
 from app.models.audit_log import AuditLog
-from app.models.kpi_submission import KPISubmission, KPIStatus
+from app.models.kpi_submission import KPIStatus
 from app.models.user import UserRole
 from app.tests.factories import (
     auth_headers,

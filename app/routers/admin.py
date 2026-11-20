@@ -3,7 +3,6 @@
 # split on next touch: the next router that belongs here goes in a new
 # module under app/routers/ instead of another endpoint inline.
 # Behaviour must stay identical when that split happens.
-from datetime import date
 from decimal import Decimal
 import logging
 

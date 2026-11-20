@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { accounts, loginAs } from "./helpers.js";
+import { accounts } from "./helpers.js";
+
+// Runs authenticated as the dept admin from the saved auth state
+// (auth.setup.js) instead of logging in — the login endpoint is
+// rate-limited and the suite has more logins than the limit allows.
+test.use({ storageState: "e2e/.auth/dept-admin.json" });
 
 // Templates happy path (PM review 2026-11-12, finding M9): the Add
 // Custom KPI modal is the most-changed flow in the app, so it gets a
@@ -16,13 +21,14 @@ const API_BASE = process.env.E2E_API_BASE_URL || "http://localhost:8000";
 
 test("add custom KPI happy path: dept admin assigns a KPI to a fresh employee", async ({
   page,
+  browser,
 }) => {
   const stamp = Date.now();
   const metricName = `E2E Custom KPI ${stamp}`;
   const employeeName = `E2E KPI Employee ${stamp}`;
   const employeeEmail = `e2e-kpi-emp-${stamp}@example.test`;
 
-  await loginAs(page, accounts.deptAdmin);
+  // The page starts authenticated (storageState above), so no loginAs.
 
   // The API client sends X-Tenant-Slug on every request (from
   // localStorage); page.request does not, so pass it explicitly or the
@@ -33,7 +39,7 @@ test("add custom KPI happy path: dept admin assigns a KPI to a fresh employee", 
     data: {
       name: employeeName,
       email: employeeEmail,
-      password: "TestPass123!",
+      password: accounts.password,
       role: "employee",
     },
   });
@@ -68,8 +74,10 @@ test("add custom KPI happy path: dept admin assigns a KPI to a fresh employee", 
     ).toBeVisible();
   } finally {
     // Cleanup: delete the template (dept admin may), then the employee
-    // (tenant-admin-only on the backend, so re-login as tenant admin
-    // first), so reruns start clean.
+    // (tenant-admin-only on the backend). The employee delete runs in a
+    // separate tenant-admin context: signing out this page would revoke
+    // the dept-admin session the saved auth state was built from, and
+    // every later spec reusing that state would land on /login instead.
     const listed = await page.request.get(`${API_BASE}/api/admin/templates`, {
       headers: tenantHeaders,
     });
@@ -86,17 +94,14 @@ test("add custom KPI happy path: dept admin assigns a KPI to a fresh employee", 
         );
       }
     }
-    // loginAs starts from /login, which redirects an already-logged-in
-    // session to /dashboard (no #orgSlug to fill) — sign out first.
-    const signOut = page.getByTitle("Sign out");
-    if (await signOut.count()) {
-      await signOut.click();
-      await page.waitForURL(/\/login/);
-    }
-    await loginAs(page, accounts.tenantAdmin);
-    await page.request.delete(`${API_BASE}/api/admin/users/${employee.id}`, {
+    const tenantAdminContext = await browser.newContext({
+      storageState: "e2e/.auth/tenant-admin.json",
+    });
+    const tenantAdminPage = await tenantAdminContext.newPage();
+    await tenantAdminPage.request.delete(`${API_BASE}/api/admin/users/${employee.id}`, {
       headers: tenantHeaders,
     });
+    await tenantAdminContext.close();
   }
 
   // The template is gone from the list after cleanup.

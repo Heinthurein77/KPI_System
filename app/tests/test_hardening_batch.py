@@ -140,7 +140,7 @@ def test_failed_import_rolls_back_users(db):
     assert parsed.ok
 
     # Sabotage the KPI step so the import blows up after the users were added.
-    real_create = bulk_import_service.kpi_service.create_custom_employee_kpi
+    _real_create = bulk_import_service.kpi_service.create_custom_employee_kpi
 
     def _boom(*args, **kwargs):
         raise RuntimeError("simulated mid-import failure")

@@ -795,7 +795,7 @@ def test_period_weight_rejects_invalid_period_and_year(db, client):
 
 def test_period_weight_forbidden_for_employee(db, client):
     tenant = make_tenant(db)
-    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    _admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
     employee = make_user(db, tenant, UserRole.EMPLOYEE)
     other = make_user(db, tenant, UserRole.EMPLOYEE, name="Other Emp")
     resp = _period_weight(client, other.id, employee, tenant)

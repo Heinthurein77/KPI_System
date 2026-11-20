@@ -24,7 +24,6 @@ database is needed.
 """
 
 import os
-import re
 import shutil
 import subprocess
 from datetime import datetime, timedelta

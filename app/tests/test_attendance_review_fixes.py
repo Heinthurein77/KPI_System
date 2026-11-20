@@ -8,7 +8,7 @@ no department), m20 (export 404s), m7 (sole-admin guard), m8
 notification offset paging).
 """
 
-from datetime import date as date_type, datetime, time as time_type, timedelta, timezone
+from datetime import date as date_type, datetime, timedelta, timezone
 
 import jwt
 
@@ -336,7 +336,7 @@ def test_check_in_and_out_store_seconds(client, db):
 
 def test_dept_admin_without_department_sees_only_self(client, db):
     tenant = make_tenant(db)
-    admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    _admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
     dept = make_department(db, tenant)
     alice = make_user(db, tenant, UserRole.EMPLOYEE, department=dept, name="Alice Aung")
     # Legacy/NULL data: a dept admin with no department.

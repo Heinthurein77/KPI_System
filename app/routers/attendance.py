@@ -31,10 +31,8 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 
-from app.core.config import settings
 from app.core.deps import (
     RoleChecker,
-    get_current_user,
     require_tenant_admin,
     require_tenant_member,
 )

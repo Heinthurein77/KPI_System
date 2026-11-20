@@ -591,7 +591,6 @@ def _smtp_on():
 def test_create_user_sends_welcome_email(db, client):
     from unittest.mock import patch
 
-    from app.core.config import settings
 
     tenant = make_tenant(db)
     admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
@@ -664,7 +663,6 @@ def test_create_user_returns_before_slow_welcome_email(db, client):
     import time
     from unittest.mock import patch
 
-    from app.core.config import settings
     from app.services import email_service
 
     tenant = make_tenant(db)
@@ -702,7 +700,6 @@ def test_create_user_succeeds_when_mail_server_down(db, client):
     import time
     from unittest.mock import patch
 
-    from app.core.config import settings
     from app.models.user import User
     from app.services import email_service
 

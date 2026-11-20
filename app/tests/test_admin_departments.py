@@ -287,7 +287,7 @@ def test_rename_department_not_found(db, client):
 
 def test_rename_department_forbidden_for_dept_admin(db, client):
     tenant = make_tenant(db)
-    admin = _tenant_admin(db, tenant)
+    _admin = _tenant_admin(db, tenant)
     dept = make_department(db, tenant, name="Sales")
     da = make_user(db, tenant, UserRole.DEPT_ADMIN, department=dept)
 

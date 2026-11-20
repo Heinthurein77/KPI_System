@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import date
-from io import BytesIO
 from pathlib import Path
 
 from fpdf import FPDF

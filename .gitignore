@@ -7,3 +7,9 @@ venv/
 kpi_system.db
 kpi_system.db.*
 .pytest_cache/
+
+# Playwright saved auth state (session cookies for the scratch e2e DB)
+frontend/e2e/.auth/
+
+# Dev log files (were tracked; untracked 2026-11-20, T-m6)
+*.log

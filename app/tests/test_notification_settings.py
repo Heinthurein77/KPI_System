@@ -5,29 +5,15 @@ In-app notifications are always kept; only the SMTP email copy is affected.
 
 from unittest.mock import MagicMock, patch
 
-from app.models.notification import Notification
 from app.models.user import UserRole
 from app.services import email_service
 from app.tests.factories import (
     auth_headers,
     make_department,
+    make_notification,
     make_tenant,
     make_user,
 )
-
-
-def _make_notification(db, tenant, user):
-    n = Notification(
-        tenant_id=tenant.id,
-        user_id=user.id,
-        type="kpi_submitted",
-        title="Test title",
-        message="Test message",
-        link=None,
-    )
-    db.add(n)
-    db.commit()
-    return n
 
 
 def _configured_settings(**overrides):
@@ -91,7 +77,7 @@ def test_email_skipped_when_user_opted_out(db):
     tenant, user = _setup(db)
     user.email_notifications = False
     db.commit()
-    n = _make_notification(db, tenant, user)
+    n = make_notification(db, tenant, user)
 
     s = _configured_settings()
     with patch.object(email_service, "settings", s):
@@ -103,7 +89,7 @@ def test_email_skipped_when_user_opted_out(db):
 def test_email_sent_when_user_opted_in(db):
     tenant, user = _setup(db)
     assert user.email_notifications is True
-    n = _make_notification(db, tenant, user)
+    n = make_notification(db, tenant, user)
 
     s = _configured_settings()
     with patch.object(email_service, "settings", s):

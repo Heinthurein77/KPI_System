@@ -42,17 +42,14 @@ Batch the day's commits, verify once, push once, deploy once.
   or deploy the same day means the train left early — the next batch
   waits for the next day unless it is a production-down hotfix.
 
-## [Unreleased]
+## 2026-11-16 — `06d64dd`
+
+Pushed to remote main 2026-11-16 (the `dfec917` / `1a0e732` commits
+this section once called "local only — not yet pushed" are ancestors
+of `06d64dd`, so that status note came off per its own instruction).
+Deploy status lives in the server deploy log — see "Deploy log" above.
 
 - Attendance holiday announcements: holidays now have names (settings editor: date + name per holiday, range-add kept); a banner on the Attendance page shows holidays in the next 7 days to every role, and saving a changed holiday list sends one bell notification (`attendance_holiday`, link `/attendance`) to every active tenant user except the saving admin. Legacy plain-date holiday lists still read and work with no migration. New tests: `app/tests/test_attendance_holidays.py`.
-
-> **Status (2026-11-13): local only — the commits in this section
-> (`dfec917`, `1a0e732`) are not yet pushed, have had no CI run (N13),
-> and are not deployed. They become a release only after the push +
-> deploy (see the release process above). Do not read done-tense entries
-> here as "live" — that is the N14 fix, and it stays in place until the
-> push lands, when this note comes off and the section gets a dated
-> release heading.
 
 - Backup job watched: `scripts/backup-db.sh` now emits the same timestamped START / SUCCESS / FAILURE lines as the other cron jobs, and `scripts/check-cron-logs.sh` watches all three jobs (N1). New tests: `app/tests/test_check_cron_logs.py`.
 - Platform audit-log reader: new `GET /api/platform/audit-log` endpoint (super_admin-only, platform-scoped rows only) + `/platform/audit-log` page in the platform portal, linked from the sidebar and the Tenants page (N3).

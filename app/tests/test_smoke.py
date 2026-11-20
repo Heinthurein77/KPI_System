@@ -1,4 +1,10 @@
-from app.tests.factories import auth_headers, make_department, make_tenant, make_user
+from app.tests.factories import (
+    DEFAULT_PASSWORD,
+    auth_headers,
+    make_department,
+    make_tenant,
+    make_user,
+)
 from app.models.user import UserRole
 
 
@@ -14,7 +20,7 @@ def test_login_flow(db, client):
 
     resp = client.post(
         "/api/auth/login",
-        json={"email": user.email, "password": "Password123!"},
+        json={"email": user.email, "password": DEFAULT_PASSWORD},
         headers={"X-Tenant-Slug": tenant.slug},
     )
     assert resp.status_code == 200

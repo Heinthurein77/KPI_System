@@ -184,7 +184,7 @@ def test_export_employee_sees_only_self(client, db):
 
 
 def test_export_tenant_isolation(client, db):
-    fx = _setup(client, db)
+    _fx = _setup(client, db)
     other_tenant = make_tenant(db, name="Other", slug="other")
     other_admin = make_user(db, other_tenant, UserRole.TENANT_ADMIN, name="Other Admin")
     _, rows = _export(client, other_admin, other_tenant)
@@ -256,3 +256,77 @@ def test_export_invalid_month(client, db):
         headers=auth_headers(fx["admin"], fx["tenant"]),
     )
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Formula-injection guard wiring (T-m1): the attendance export must route
+# user strings through the shared guard in app/services/excel_safe.py,
+# not just the KPI export. Proven two ways — behaviourally (hostile
+# strings come out neutralised) and by wiring (the service's _safe name
+# is actually called with the raw strings).
+# ---------------------------------------------------------------------------
+
+
+def test_attendance_export_sanitizes_formula_like_user_strings():
+    from app.services.attendance_export_service import build_attendance_detail_report
+
+    entries = [
+        {
+            "date": "2026-11-02",
+            "employee_name": "=2+2",
+            "department_name": "+cmd",
+            "role": "@mention",
+            "check_in": "09:00",
+            "check_out": "17:00",
+            "status": "-x",
+        },
+        {
+            "date": "2026-11-03",
+            "employee_name": "Normal Name",
+            "department_name": "Sales",
+            "role": "employee",
+            "check_in": "09:00",
+            "check_out": "17:00",
+            "status": "present",
+        },
+    ]
+
+    output = build_attendance_detail_report(entries, 2026, 11)
+    sheet = load_workbook(BytesIO(output.getvalue()), data_only=True)["Attendance Detail"]
+    assert sheet["B5"].value == "'=2+2"
+    assert sheet["C5"].value == "'+cmd"
+    assert sheet["D5"].value == "'@mention"
+    assert sheet["G5"].value == "'-x"
+    # Ordinary strings pass through untouched.
+    assert sheet["B6"].value == "Normal Name"
+    assert sheet["G6"].value == "present"
+
+
+def test_attendance_export_routes_values_through_shared_guard(monkeypatch):
+    from app.services import attendance_export_service
+    from app.services.excel_safe import safe_cell_value
+
+    seen = []
+
+    def recording_safe(value):
+        seen.append(value)
+        return safe_cell_value(value)
+
+    monkeypatch.setattr(attendance_export_service, "_safe", recording_safe)
+
+    entries = [
+        {
+            "date": "2026-11-02",
+            "employee_name": "=2+2",
+            "department_name": "Sales",
+            "role": "employee",
+            "check_in": "09:00",
+            "check_out": "17:00",
+            "status": "present",
+        }
+    ]
+    output = attendance_export_service.build_attendance_detail_report(entries, 2026, 11)
+
+    assert "=2+2" in seen
+    sheet = load_workbook(BytesIO(output.getvalue()), data_only=True)["Attendance Detail"]
+    assert sheet["B5"].value == "'=2+2"

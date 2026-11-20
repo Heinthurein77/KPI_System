@@ -11,7 +11,6 @@ Rating buckets mirror the app's own dashboard rating:
   >  75  → "Performance"
 """
 
-from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel

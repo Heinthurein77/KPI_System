@@ -22,7 +22,6 @@ would lock the whole office out at 09:00.
 import time
 
 from slowapi import Limiter
-from slowapi.util import get_remote_address
 
 from app.core.proxy import trusted_client_ip
 

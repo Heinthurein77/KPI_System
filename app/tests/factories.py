@@ -7,15 +7,23 @@ a specific user/role/tenant combination in one step; a handful of dedicated
 auth tests exercise the real login endpoints end-to-end separately.
 """
 
+import itertools
+
 from app.core.security import create_session_token, hash_password
 from app.models.department import Department
 from app.models.kpi_submission import KPISubmission, KPIStatus
 from app.models.kpi_template import KPITemplate
+from app.models.notification import Notification
 from app.models.tenant import Tenant, TenantStatus
 from app.core.months import MONTH_NAMES
 from app.models.user import User, UserRole
 
 DEFAULT_PASSWORD = "Password123!"
+
+# Monotonic counter so default emails are unique per make_user call: the
+# old deterministic "{name}.{role}@example.com" collided whenever two
+# default users shared a name+role in one test (unique-email violation).
+_user_counter = itertools.count(1)
 
 
 def open_fillable_period(today=None) -> tuple[int, str]:
@@ -63,7 +71,9 @@ def make_user(
     is_active=True,
     password=DEFAULT_PASSWORD,
 ) -> User:
-    email = email or f"{name.lower().replace(' ', '.')}.{role.value}@example.com"
+    email = email or (
+        f"{name.lower().replace(' ', '.')}.{role.value}-{next(_user_counter)}@example.com"
+    )
     user = User(
         tenant_id=tenant.id if tenant else None,
         name=name,
@@ -113,7 +123,7 @@ def make_submission(
     tenant: Tenant,
     employee: User,
     template: KPITemplate,
-    year=2026,
+    year: int | None = None,
     period="January",
     status=KPIStatus.DRAFT,
     self_score=None,
@@ -121,6 +131,13 @@ def make_submission(
     final_score=None,
     department: Department | None = None,
 ) -> KPISubmission:
+    # Default year is the current year, not a hardcoded 2026: a hardcoded
+    # default silently became "last year" once the calendar moved on, and
+    # grace/rollover logic treats last-year submissions differently.
+    if year is None:
+        from app.core.timezone import today as _app_today
+
+        year = _app_today().year
     submission = KPISubmission(
         tenant_id=tenant.id,
         employee_id=employee.id,
@@ -137,6 +154,31 @@ def make_submission(
     db.commit()
     db.refresh(submission)
     return submission
+
+
+def make_notification(
+    db,
+    tenant: Tenant,
+    user: User,
+    type: str = "kpi_submitted",
+    title: str = "Test title",
+    message: str = "Test message",
+    link: str | None = None,
+) -> Notification:
+    """Shared notification builder (was copy-pasted as `_make_notification`
+    in test_email_service.py and test_notification_settings.py, differing
+    only by `link`)."""
+    notification = Notification(
+        tenant_id=tenant.id,
+        user_id=user.id,
+        type=type,
+        title=title,
+        message=message,
+        link=link,
+    )
+    db.add(notification)
+    db.commit()
+    return notification
 
 
 def auth_headers(user: User, tenant: Tenant | None = None) -> dict[str, str]:

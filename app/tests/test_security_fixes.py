@@ -5,7 +5,6 @@ proxy peer. TestClient's peer is configurable via ``client=(host, port)``,
 so the negative test uses a public-IP peer with a forged header.
 """
 
-from datetime import date as date_type
 
 from fastapi.testclient import TestClient
 

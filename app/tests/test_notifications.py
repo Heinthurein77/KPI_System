@@ -5,7 +5,6 @@ from sqlalchemy import select
 
 from app.models.notification import Notification
 from app.models.user import UserRole
-from app.models.kpi_submission import KPIStatus
 from app.services import kpi_service
 from app.tests.factories import (
     auth_headers,

@@ -19,7 +19,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.core.deps import get_current_user, require_dept_admin
+from app.core.deps import require_dept_admin
 from app.core.rate_limit import UPLOAD_RATE_LIMIT, limiter
 from app.core.timezone import today as app_today
 from app.database import get_db

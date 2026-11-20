@@ -269,7 +269,7 @@ def build_employee_annual_kpi_report(
             score["status"].strip() if score else "No finalized KPI scores",
         ]
         for column_number, value in enumerate(values, start=1):
-            summary.cell(row=row_number, column=column_number, value=value)
+            summary.cell(row=row_number, column=column_number, value=_safe(value))
         if row_number % 2 == 0:
             for cell in summary[row_number]:
                 cell.fill = _ALTERNATE_FILL

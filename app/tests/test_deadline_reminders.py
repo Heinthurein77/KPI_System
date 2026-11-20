@@ -8,7 +8,6 @@ reminder per user per period), and the disabled flag.
 from datetime import date
 from unittest.mock import patch
 
-import pytest
 
 from app.models.kpi_submission import KPIStatus
 from app.models.notification import Notification
@@ -66,7 +65,7 @@ def test_never_started_without_templates_gets_no_reminder(db):
     dept = make_department(db, tenant)
     dept_empty = make_department(db, tenant, name="Empty Dept")
     emp_idle = make_user(db, tenant, UserRole.EMPLOYEE, name="Idle Person", department=dept)
-    emp_no_kpis = make_user(db, tenant, UserRole.EMPLOYEE, name="No KPIs", department=dept_empty)
+    _emp_no_kpis = make_user(db, tenant, UserRole.EMPLOYEE, name="No KPIs", department=dept_empty)
     make_template(db, tenant, department=dept)
     # emp_idle has an applicable template but no submissions -> reminded.
     # emp_no_kpis has neither -> no nag.
@@ -166,7 +165,7 @@ def test_sync_email_failure_retries_next_run(db):
 
     tenant, emp_draft, emp_rejected, _, _ = _setup(db)
     failing = emp_draft.email
-    real_send_one = email_service._send_one
+    _real_send_one = email_service._send_one
 
     def flaky(to_email, subject, body, link):
         if to_email == failing:

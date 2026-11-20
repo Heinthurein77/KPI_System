@@ -6,26 +6,15 @@ raises — a mail failure must not break a KPI workflow.
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
-from app.models.notification import Notification
 from app.models.user import UserRole
 from app.services import email_service
-from app.tests.factories import make_department, make_tenant, make_user
-
-
-def _make_notification(db, tenant, user):
-    n = Notification(
-        tenant_id=tenant.id,
-        user_id=user.id,
-        type="kpi_submitted",
-        title="Test title",
-        message="Test message",
-        link="/dashboard?year=2026&period=October",
-    )
-    db.add(n)
-    db.commit()
-    return n
+from app.tests.factories import (
+    make_department,
+    make_notification,
+    make_tenant,
+    make_user,
+)
 
 
 def _configured_settings(**overrides):
@@ -47,7 +36,7 @@ def test_send_skipped_when_smtp_not_configured(db):
     tenant = make_tenant(db)
     dept = make_department(db, tenant)
     user = make_user(db, tenant, UserRole.EMPLOYEE, department=dept, email="real@example.com")
-    n = _make_notification(db, tenant, user)
+    n = make_notification(db, tenant, user, link="/dashboard?year=2026&period=October")
 
     s = _configured_settings()
     s.smtp_configured = False
@@ -61,7 +50,7 @@ def test_send_email_via_smtp(db):
     tenant = make_tenant(db)
     dept = make_department(db, tenant)
     user = make_user(db, tenant, UserRole.EMPLOYEE, department=dept, email="real@example.com")
-    n = _make_notification(db, tenant, user)
+    n = make_notification(db, tenant, user, link="/dashboard?year=2026&period=October")
 
     with patch.object(email_service, "settings", _configured_settings()):
         with patch("smtplib.SMTP") as mock_smtp_cls:
@@ -89,7 +78,7 @@ def test_send_failure_never_raises(db):
     tenant = make_tenant(db)
     dept = make_department(db, tenant)
     user = make_user(db, tenant, UserRole.EMPLOYEE, department=dept, email="real@example.com")
-    n = _make_notification(db, tenant, user)
+    n = make_notification(db, tenant, user, link="/dashboard?year=2026&period=October")
 
     with patch.object(email_service, "settings", _configured_settings()):
         with patch("smtplib.SMTP", side_effect=OSError("network down")):
@@ -106,7 +95,7 @@ def test_inactive_user_gets_no_email(db):
     tenant = make_tenant(db)
     dept = make_department(db, tenant)
     user = make_user(db, tenant, UserRole.EMPLOYEE, department=dept, email="real@example.com", is_active=False)
-    n = _make_notification(db, tenant, user)
+    n = make_notification(db, tenant, user, link="/dashboard?year=2026&period=October")
 
     with patch.object(email_service, "settings", _configured_settings()):
         with patch.object(email_service, "_send_in_background") as mock_bg:

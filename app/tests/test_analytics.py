@@ -89,7 +89,6 @@ def test_trend_returns_monthly_points(client, db):
     from the run date instead of hardcoding October/September (which
     broke as soon as the calendar moved into November).
     """
-    from datetime import date as _date
 
     from app.tests.factories import MONTH_NAMES
 

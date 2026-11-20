@@ -16,6 +16,7 @@ name: CI
 
 on:
   push:
+  pull_request:
 
 jobs:
   backend:
@@ -30,9 +31,14 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt -r requirements-dev.txt
-      - name: Backend tests
+      - name: Python lint (ruff, E9+F only — see pyproject.toml)
+        run: ruff check app scripts
+      - name: Dependency audit (pip-audit, no known vulns at HEAD)
+        run: pip-audit -r requirements.txt -r requirements-dev.txt
+      - name: Backend tests (with coverage report, no fail threshold)
         run: >-
           python -m pytest app/tests/ -q
+          --cov=app --cov-report=term-missing
           --deselect app/tests/test_combined_score.py::test_weighted_average_across_mixed_weights
           --deselect app/tests/test_combined_score.py::test_target_zero_or_none_is_skipped_but_counts_toward_total_count
           --deselect app/tests/test_combined_score.py::test_attainment_capped_at_default_max_cap_120
@@ -64,3 +70,57 @@ jobs:
       - name: Build
         run: npm run build
         working-directory: frontend
+
+  # T-M2: the migration chain against real Postgres — the SQLite suite
+  # never exercises the migrations, and Postgres-only DDL (real enum
+  # types) otherwise fails only on deploy. Runs `alembic upgrade head`
+  # plus the Postgres parity test in test_migration_chain.py, which
+  # compares the migrated schema against the SQLAlchemy models.
+  postgres-migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: kpi
+          POSTGRES_PASSWORD: kpi
+          POSTGRES_DB: kpi_system
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready -U kpi
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://kpi:kpi@localhost:5432/kpi_system
+      MIGRATION_CHAIN_POSTGRES_URL: postgresql+psycopg://kpi:kpi@localhost:5432/kpi_system
+      SECRET_KEY: ci-only-not-a-real-secret
+      ENVIRONMENT: development
+      CORS_ORIGINS: http://testserver
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Migrate a scratch Postgres database to head
+        run: python -m alembic upgrade head
+      - name: Migration-chain tests (incl. Postgres schema parity)
+        run: python -m pytest app/tests/test_migration_chain.py -q
+
+  # T-m3: the pre-deploy smoke test — boots the stack against a scratch
+  # Postgres and hits /readyz + /login, so a bad build or migration is
+  # caught before deploy. Docker is preinstalled on ubuntu-latest.
+  smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run scripts/smoke-test.sh
+        run: ./scripts/smoke-test.sh
+

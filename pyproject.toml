@@ -1,0 +1,14 @@
+# Ruff config (T-m3, 2026-11-20 senior review): the Python lint gate.
+#
+# Deliberately narrow: only runtime-error rules (E9) and Pyflakes (F) —
+# unused imports and undefined names, the class of failure that broke
+# CI on the tracker side in 2026-11-19 (pyflakes on dead imports). Style
+# rules (E501, W605, ...) are NOT enabled: the repo never had a Python
+# linter, so turning them on would flag hundreds of pre-existing lines
+# and force a whole-repo reformat. Widen the selection only with a
+# dedicated cleanup pass.
+[tool.ruff]
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E9", "F"]

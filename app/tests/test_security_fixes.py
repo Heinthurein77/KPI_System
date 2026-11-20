@@ -130,9 +130,16 @@ def test_attendance_settings_patch_and_leave_are_audited(client, db):
     tenant, _, admin, emp = _att_setup(db)
     _set_office_wifi(client, admin, tenant)
     assert "attendance_settings_updated" in _audit_actions(client, admin, tenant)
+    from datetime import timedelta
+
+    from app.core.timezone import today as app_today
+
+    # Relative date, not a hardcoded one: the old literal 2026-11-20
+    # collided with a same-day check-in once the calendar reached it.
+    leave_date = app_today() + timedelta(days=7)
     resp = client.post(
         "/api/attendance/leave",
-        json={"record_date": "2026-11-20"},
+        json={"record_date": leave_date.isoformat()},
         headers=auth_headers(emp, tenant),
     )
     assert resp.status_code == 201, resp.text
@@ -167,9 +174,16 @@ def test_delete_checkin_record_is_rejected_but_leave_delete_works(client, db):
     )
     assert resp.status_code == 400, resp.text
     # A leave record can still be deleted, and the delete is audited.
+    # Leave is a different day from today's check-in above, so no
+    # same-day record conflict (see the hardcoded-date note above).
+    from datetime import timedelta
+
+    from app.core.timezone import today as app_today
+
+    leave_date = app_today() + timedelta(days=7)
     resp = client.post(
         "/api/attendance/leave",
-        json={"record_date": "2026-11-20"},
+        json={"record_date": leave_date.isoformat()},
         headers=auth_headers(emp, tenant),
     )
     leave_id = resp.json()["id"]

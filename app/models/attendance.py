@@ -207,6 +207,13 @@ class AttendanceRecord(Base):
     check_in: Mapped[time_type | None] = mapped_column(Time, nullable=True)
     check_out: Mapped[time_type | None] = mapped_column(Time, nullable=True)
     status: Mapped[str] = mapped_column(String(10), nullable=False, default="present")
+    # S-15 (security review 2026-11-25): leave approval. NULL for
+    # non-leave records and for legacy leave rows (created before approval
+    # existed — treated as approved). "pending" for employee self-marked
+    # leave until a dept/tenant admin approves; "approved"/"rejected"
+    # after review. Pending/rejected leave counts as absent in summaries
+    # and exports — only approved (or legacy) leave counts as leave.
+    leave_approval: Mapped[str | None] = mapped_column(String(20), nullable=True)
     # Minutes after office start on check-in. Recorded for info only —
     # late never reduces the attendance percentage.
     late_minutes: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

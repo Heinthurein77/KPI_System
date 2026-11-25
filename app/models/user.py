@@ -1,6 +1,6 @@
 from __future__ import annotations
 import enum
-from sqlalchemy import Enum, ForeignKey, Index, Integer, String, Boolean, UniqueConstraint, text
+from sqlalchemy import Enum, ForeignKey, Index, Integer, String, Boolean, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.database import Base
 
@@ -38,6 +38,13 @@ class User(Base):
     # Bumped on every password change/reset; session JWTs carry the version
     # they were issued at, so old tokens stop working immediately.
     token_version: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # S-02 (security review 2026-11-25): TOTP/MFA. The secret is encrypted
+    # at rest (see app/core/security.py encrypt_totp_secret); recovery codes
+    # are stored as a JSON list of hashes, single-use. New columns — the
+    # coordinator consolidates the Alembic migration for this pass.
+    totp_secret_encrypted: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    totp_recovery_codes: Mapped[str | None] = mapped_column(Text, nullable=True)
     position: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
     tenant_id: Mapped[int | None] = mapped_column(

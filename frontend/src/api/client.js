@@ -64,7 +64,7 @@ client.interceptors.response.use(
       // request once before giving up — the 1h access token expiring
       // mid-session must not throw the user to the login page when the
       // refresh token is still valid. Skip when the failing request is
-      // itself a login/TOTP/refresh/setup attempt or we're already on a
+      // itself a login/TOTP/refresh attempt or we're already on a
       // login page, so failed logins still show their error message.
       // Platform admins go to their own login — org credentials don't
       // work there and vice versa.
@@ -78,9 +78,8 @@ client.interceptors.response.use(
       const isLoginRequest = /\/auth\/login\/?$/.test(url);
       const isTotpRequest = /\/auth\/login\/totp\/?$/.test(url);
       const isRefreshRequest = /\/auth\/refresh\/?$/.test(url);
-      const isSetupRequest = /\/auth\/setup-password\/?$/.test(url);
       const isPlatform = pathname.startsWith("/platform");
-      if (!onLoginPage && !isLoginRequest && !isTotpRequest && !isRefreshRequest && !isSetupRequest) {
+      if (!onLoginPage && !isLoginRequest && !isTotpRequest && !isRefreshRequest) {
         if (error.config && !error.config._retry) {
           try {
             await refreshSession();

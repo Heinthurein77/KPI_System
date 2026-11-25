@@ -23,7 +23,6 @@ from app.core.rate_limit import (
 )
 from app.core.timezone import today as app_today
 from app.core.security import (
-    create_password_setup_token,
     hash_password,
     validate_password_length,
     verify_password,
@@ -591,15 +590,8 @@ def create_user(
     # sender — it just never delays or fails the create.
     tenant = db.get(Tenant, user.tenant_id)
     if settings.smtp_configured:
-        # S-05: the welcome email carries a one-time set-password link,
-        # never the password — the admin-chosen password is only usable
-        # until first login (must_change_password), and the link lets the
-        # user set their own password without the admin ever sharing one.
         email_service.send_welcome_email(
-            email,
-            target.name,
-            org_name=tenant.name if tenant else None,
-            setup_token=create_password_setup_token(target.id, target.token_version or 0),
+            email, target.name, payload.password, org_name=tenant.name if tenant else None
         )
         # M-15: log the user id, never the email address.
         logger.info("Welcome email queued in background (user %s)", target.id)

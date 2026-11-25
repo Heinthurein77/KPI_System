@@ -29,7 +29,6 @@ from app.core.security import (
     consume_recovery_code,
     create_session_token,
     create_totp_pending_token,
-    decode_password_setup_token,
     decode_session_token,
     decode_totp_pending_token,
     decrypt_totp_secret,
@@ -59,7 +58,6 @@ from app.schemas.auth import (
     ChangePasswordRequest,
     LoginRequest,
     LoginResponse,
-    SetupPasswordRequest,
     TotpDisableRequest,
     TotpEnrollResponse,
     TotpLoginRequest,
@@ -422,56 +420,6 @@ def change_password(
     # cookie so the SPA doesn't keep sending it. The user logs in again.
     clear_session_cookie(response, secure=_request_is_secure(request))
     clear_refresh_cookie(response, secure=_request_is_secure(request))
-
-
-@router.post("/setup-password", status_code=status.HTTP_204_NO_CONTENT)
-@limiter.limit(PASSWORD_RATE_LIMIT)
-def setup_password(
-    request: Request,
-    payload: SetupPasswordRequest,
-    db: Session = Depends(get_db),
-):
-    """Set a password via the one-time welcome link (S-05). No login
-    needed — the signed token is the credential, so it is validated
-    strictly: valid signature, unexpired, purpose password_setup, and the
-    token_version snapshot must still match (any password change/reset
-    since the link was issued kills it). Single-use: the account must
-    still have must_change_password set, and setting the password clears
-    it, so a replayed link fails. A wrong/expired/replayed link answers
-    the same generic 400 as an unknown user, so the endpoint cannot be
-    used to probe accounts."""
-    claims = decode_password_setup_token(payload.token)
-    user = db.get(User, claims.user_id) if claims is not None else None
-    if (
-        claims is None
-        or user is None
-        or not user.must_change_password
-        or (user.token_version or 0) != claims.token_version
-    ):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid or expired setup link.")
-    try:
-        validate_password_length(payload.new_password)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    if verify_password(payload.new_password, user.password_hash):
-        raise HTTPException(
-            status.HTTP_400_BAD_REQUEST, "New password must differ from the current password."
-        )
-    try:
-        validate_password_complexity(payload.new_password)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    user.password_hash = hash_password(payload.new_password)
-    user.must_change_password = False
-    user.token_version = (user.token_version or 0) + 1
-    db.query(RefreshToken).filter(RefreshToken.user_id == user.id).delete(synchronize_session=False)
-    audit_service.log(
-        db, user, "password_setup", "user", user.id, user.name,
-        f"Password set via one-time setup link by {user.name}.",
-        department_id=user.department_id,
-    )
-    db.commit()
-
 
 # ---------------------------------------------------------------------------
 # TOTP enrolment + management (S-02). Enrolment is open to SUPER_ADMIN and

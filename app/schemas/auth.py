@@ -72,10 +72,3 @@ class ChangePasswordRequest(BaseModel):
     current_password: str = Field(max_length=128)
     new_password: str = Field(max_length=128)
 
-
-class SetupPasswordRequest(BaseModel):
-    """S-05: set a password via the one-time welcome link. Same 400
-    contract as ChangePasswordRequest — length/complexity are enforced in
-    the handler, not the schema."""
-    token: str = Field(max_length=1024)
-    new_password: str = Field(max_length=128)

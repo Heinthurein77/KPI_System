@@ -11,7 +11,6 @@ import PageLoading from "../components/ui/PageLoading";
 // stay eager so the first paint never waits on a chunk.
 import LoginPage from "../pages/LoginPage";
 import PlatformLoginPage from "../pages/platform/PlatformLoginPage";
-import SetupPasswordPage from "../pages/SetupPasswordPage";
 
 const DashboardPage = lazy(() => import("../pages/DashboardPage"));
 const ChangePasswordPage = lazy(() => import("../pages/ChangePasswordPage"));
@@ -43,7 +42,6 @@ export default function AppRoutes() {
       <Routes>
         <Route path="/login" element={<LoginPage />} />
         <Route path="/platform/login" element={<PlatformLoginPage />} />
-        <Route path="/setup-password" element={<SetupPasswordPage />} />
         <Route path="/" element={<HomeRedirect />} />
 
         {/* User Portal (Employee self-assessment, Dept Admin's own KPI) */}

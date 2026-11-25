@@ -53,13 +53,6 @@ REFRESH_COOKIE_NAME = "refresh_token"
 TOTP_PENDING_COOKIE_NAME = "totp_pending"
 TOTP_PENDING_EXPIRE_MINUTES = 5
 
-# S-05 (security review 2026-11-25): one-time password-setup link for new
-# users. The welcome email carries this signed token (72h) instead of a
-# plaintext initial password. Single-use: the endpoint only honours it
-# while must_change_password is set, and setting the password clears that
-# flag, so a second use of the same link fails.
-PASSWORD_SETUP_EXPIRE_HOURS = 72
-
 # bcrypt only uses the first 72 bytes of the input.
 _MAX_PASSWORD_BYTES = 72
 
@@ -333,45 +326,6 @@ def decode_totp_pending_token(token: str) -> SessionClaims | None:
         except (TypeError, ValueError):
             return None
     return SessionClaims(user_id=user_id, tenant_id=tenant_id, token_version=0)
-
-
-def create_password_setup_token(user_id: int, token_version: int = 0) -> str:
-    """Signed one-time set-password token (S-05). Expires in 72h; the
-    endpoint additionally requires must_change_password (single-use:
-    setting the password clears the flag) and checks the token_version
-    snapshot, so any password change/reset in the meantime kills the link.
-    """
-    expire = datetime.now(timezone.utc) + timedelta(hours=PASSWORD_SETUP_EXPIRE_HOURS)
-    payload = {
-        "sub": str(user_id),
-        "purpose": "password_setup",
-        "token_version": token_version,
-        "exp": expire,
-    }
-    return jwt.encode(payload, settings.SECRET_KEY, algorithm=JWT_ALGORITHM)
-
-
-def decode_password_setup_token(token: str) -> SessionClaims | None:
-    """Decode a password-setup token; returns the claims, or None unless
-    the token is valid, unexpired, and has the password_setup purpose."""
-    try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[JWT_ALGORITHM])
-    except jwt.PyJWTError:
-        return None
-    if payload.get("purpose") != "password_setup":
-        return None
-    sub = payload.get("sub")
-    if sub is None:
-        return None
-    try:
-        user_id = int(sub)
-    except (TypeError, ValueError):
-        return None
-    try:
-        token_version = int(payload.get("token_version", 0))
-    except (TypeError, ValueError):
-        return None
-    return SessionClaims(user_id=user_id, tenant_id=None, token_version=token_version)
 
 
 # ---------------------------------------------------------------------------

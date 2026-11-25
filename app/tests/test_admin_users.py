@@ -5,7 +5,7 @@ POST /api/admin/users, POST /api/admin/users/{id}/toggle-active.
 
 from contextlib import contextmanager
 
-from app.models.user import User, UserRole
+from app.models.user import UserRole
 from app.tests.factories import auth_headers, make_department, make_tenant, make_user
 def _user_payload(**overrides):
     payload = {
@@ -606,19 +606,11 @@ def test_create_user_sends_welcome_email(db, client):
             headers=auth_headers(admin, tenant),
         )
     assert resp.status_code == 200
-    # S-05: the welcome email carries a one-time set-password link token,
-    # never the admin-chosen password; the API response itself never does.
-    mock_welcome.assert_called_once()
-    args, kwargs = mock_welcome.call_args
-    assert args == ("welcome@example.com", "New Hire")
-    assert kwargs["org_name"] == "Acme"
-    token = kwargs["setup_token"]
-    assert isinstance(token, str) and token
-    from app.core.security import decode_password_setup_token
-
-    claims = decode_password_setup_token(token)
-    assert claims is not None
-    assert db.get(User, claims.user_id).email == "welcome@example.com"
+    # The welcome email carries the admin-chosen password and the login
+    # link (user-requested); the API response itself never does.
+    mock_welcome.assert_called_once_with(
+        "welcome@example.com", "New Hire", "InitPass123!", org_name="Acme"
+    )
     assert "InitPass123!" not in resp.text
 
 

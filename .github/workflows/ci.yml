@@ -38,8 +38,11 @@ jobs:
       - name: Install dependencies
         # S-11: install from the lockfile, not the (now pinned)
         # requirements files — the lockfile is the reproducible set.
+        # setuptools is NOT in the lock (pip freeze excludes it) — it
+        # comes from the runner image, and pip-audit flags its old
+        # bundled version, so upgrade it here too (2026-11-25).
         run: |
-          python -m pip install --upgrade pip
+          python -m pip install --upgrade pip setuptools
           pip install -r requirements.lock
       - name: Python lint (ruff — see pyproject.toml)
         run: ruff check app scripts

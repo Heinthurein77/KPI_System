@@ -12,15 +12,22 @@ than 2h as STALE; and flag a job with no run inside its max age (daily
 The backup script must emit the same timestamped START / SUCCESS /
 FAILURE lines as the two Python jobs (M20), or the watcher has nothing to
 grep for. Since N11 the script redirects itself into backups/backup.log,
-so tests read that file, not the script's stdout. Since N9 the dump is
-validated (non-empty + pg_restore --list) before SUCCESS. Since N10 the
-credential travels via a 0600 --env-file, never on a command line.
+so tests read that file, not the script's stdout.
+
+Since the 2026-11-25 Neon → server migration the script dumps the local
+`db` container (`docker compose exec -T db pg_dump`), encrypts the dump
+(AES-256-CBC, BACKUP_PASSPHRASE from .env, via `openssl -pass env:`),
+and every run restore-verifies it into a scratch database, comparing the
+migration version + row counts with live. That replaces the old N9
+`pg_restore --list` TOC check and the old N10 `--env-file` credential
+path (the Neon DATABASE_URL is no longer used at all).
 
 Log fixtures use times relative to now — the watcher judges recency
 against the wall clock, so fixed dates would rot. The backup-script
 tests run a *copy* of the script in a temp dir (the script cds to its
 own parent dir) with a stub `docker` on PATH, so no real Docker or
-database is needed.
+database is needed. `openssl` is the real host binary (the encryption
+path is exercised for real).
 """
 
 import os
@@ -67,7 +74,7 @@ def _backup_ok(now=None):
     return [
         f"{_fmt(now - timedelta(hours=3))} INFO Database backup job starting.\n",
         f"{_fmt(now - timedelta(hours=3) + timedelta(seconds=5))} INFO Database backup job succeeded:"
-        " wrote ./backups/kpi-backup-2026-11-12_0200.dump (1.2M)\n",
+        " wrote ./backups/kpi-backup-2026-11-12_0200.dump.enc (1.2M), restore-verified against live\n",
     ]
 
 
@@ -193,7 +200,7 @@ def test_watcher_no_recent_run_is_stale(tmp_path):
     lines = [
         f"{_fmt(now - timedelta(days=3))} INFO Database backup job starting.\n",
         f"{_fmt(now - timedelta(days=3) + timedelta(seconds=5))} INFO Database backup job succeeded:"
-        " wrote ./backups/kpi-backup-old.dump (1.2M)\n",
+        " wrote ./backups/kpi-backup-old.dump.enc (1.2M), restore-verified against live\n",
     ]
     _write_logs(tmp_path, backup_lines=lines)
     result = _run_watcher(tmp_path)
@@ -203,45 +210,58 @@ def test_watcher_no_recent_run_is_stale(tmp_path):
 
 
 # --- backup-db.sh itself: run a copy in a temp "app root" ----------
+# (rewritten 2026-11-25 for the local-DB script: `docker compose exec`
+# instead of `docker run`, BACKUP_PASSPHRASE instead of DATABASE_URL,
+# scratch-restore verification instead of `pg_restore --list`.)
 
 FAKE_DOCKER = """#!/bin/sh
-# Stub docker: emulate `docker run ... sh -c 'pg_dump ...'` and
-# `docker run ... pg_restore --list ...` for backup-db.sh tests.
-# pg_dump run: create the dump file named in the args (content 'fake
-# dump', or empty when FAKE_DUMP_EMPTY=1), exit $FAKE_DOCKER_EXIT.
-# pg_restore run: exit $FAKE_VALIDATE_EXIT when set, else fail on a
-# missing/empty dump and succeed otherwise (like the real --list).
-# Records every invocation's argv to $FAKE_ARGV_LOG when set (N10 test).
+# Stub docker: emulate `docker compose exec -T db <cmd>` for backup-db.sh.
+# pg_dump: print 'fake dump' to stdout (the script redirects it to the
+#   dump file), or nothing when FAKE_DUMP_EMPTY=1; exit $FAKE_DOCKER_EXIT.
+# pg_restore (reads the decrypted dump on stdin): consume stdin, exit
+#   $FAKE_VALIDATE_EXIT when set, else 0.
+# psql -t -A -c "SELECT ...": print the fingerprint
+#   0025_attendance_status_check|19|87|11, or $FAKE_RESTORE_COUNTS when
+#   the target database is kpi_restore_test (lets a test fake a mismatch).
+# psql DROP/CREATE DATABASE: exit 0.
+# Records every invocation's argv to $FAKE_ARGV_LOG when set.
 if [ -n "${FAKE_ARGV_LOG:-}" ]; then
   echo "$@" >> "$FAKE_ARGV_LOG"
 fi
-# The dump filename: in the pg_restore run it is in the argv; in the
-# pg_dump run it arrives via $DUMP_FILE in the --env-file (the container
-# expands it from the environment, like the real docker does).
-dump=$(echo "$@" | grep -o 'kpi-backup-[^ "]*[.]dump' | head -n 1)
-if [ -z "$dump" ]; then
-  prev=""
-  for a in "$@"; do
-    if [ "$prev" = "--env-file" ]; then env_file="$a"; fi
-    prev="$a"
-  done
-  if [ -n "${env_file:-}" ] && [ -f "$env_file" ]; then
-    dump=$(grep '^DUMP_FILE=' "$env_file" | cut -d= -f2-)
-  fi
-fi
 case "$*" in
+  *pg_dump*)
+    if [ "${FAKE_DUMP_EMPTY:-0}" = 1 ]; then
+      exit ${FAKE_DOCKER_EXIT:-0}
+    fi
+    printf 'fake dump'
+    exit ${FAKE_DOCKER_EXIT:-0}
+    ;;
   *pg_restore*)
+    cat >/dev/null
     if [ -n "${FAKE_VALIDATE_EXIT:-}" ]; then exit "$FAKE_VALIDATE_EXIT"; fi
-    [ -n "$dump" ] && [ -s "backups/$dump" ] && exit 0 || exit 1
+    exit 0
+    ;;
+  *psql*)
+    db=""
+    prev=""
+    for a in "$@"; do
+      if [ "$prev" = "-d" ]; then db="$a"; fi
+      prev="$a"
+    done
+    case "$*" in
+      *SELECT*)
+        if [ "$db" = "kpi_restore_test" ] && [ -n "${FAKE_RESTORE_COUNTS:-}" ]; then
+          printf '%s' "$FAKE_RESTORE_COUNTS"
+        else
+          printf '0025_attendance_status_check|19|87|11'
+        fi
+        exit 0
+        ;;
+    esac
+    exit 0
     ;;
 esac
-mkdir -p backups
-if [ "${FAKE_DUMP_EMPTY:-0}" = 1 ]; then
-  : > "backups/$dump"
-else
-  printf 'fake dump' > "backups/$dump"
-fi
-exit ${FAKE_DOCKER_EXIT:-0}
+exit 0
 """
 
 
@@ -259,7 +279,9 @@ def staged_backup(tmp_path):
     docker.write_text(FAKE_DOCKER)
     docker.chmod(0o755)
     (app_root / ".env").write_text(
-        "DATABASE_URL=postgresql+psycopg://user:pass@host/db\n"
+        "POSTGRES_USER=kpi\n"
+        "POSTGRES_DB=kpi_system\n"
+        "BACKUP_PASSPHRASE=test-backup-passphrase\n"
     )
     return app_root, bin_dir
 
@@ -286,8 +308,11 @@ def test_backup_script_emits_start_success_lines(staged_backup):
     log = _backup_log(app_root)
     assert "Database backup job starting." in log
     assert "Database backup job succeeded: wrote" in log
+    assert "restore-verified against live" in log
     assert "Database backup job FAILED" not in log
-    assert list((app_root / "backups").glob("kpi-backup-*.dump"))
+    assert list((app_root / "backups").glob("kpi-backup-*.dump.enc"))
+    # No plaintext dump left behind (encryption is not optional).
+    assert not list((app_root / "backups").glob("kpi-backup-*.dump"))
 
 
 def test_backup_script_emits_failure_line_on_pg_dump_failure(staged_backup):
@@ -296,20 +321,20 @@ def test_backup_script_emits_failure_line_on_pg_dump_failure(staged_backup):
     assert result.returncode != 0
     log = _backup_log(app_root)
     assert "Database backup job starting." in log
-    assert "Database backup job FAILED." in log
+    assert "Database backup job FAILED: pg_dump failed" in log
     assert "job succeeded" not in log
 
 
-def test_backup_script_emits_failure_line_when_database_url_missing(staged_backup):
+def test_backup_script_emits_failure_line_when_backup_passphrase_missing(staged_backup):
     app_root, bin_dir = staged_backup
-    (app_root / ".env").unlink()
+    (app_root / ".env").write_text("POSTGRES_USER=kpi\nPOSTGRES_DB=kpi_system\n")
     result = _run_backup(app_root, bin_dir)
     assert result.returncode != 0
     log = _backup_log(app_root)
-    assert "Database backup job FAILED: DATABASE_URL not found in .env" in log
+    assert "Database backup job FAILED: BACKUP_PASSPHRASE not set in .env" in log
 
 
-# --- N9: dump validation -------------------------------------------
+# --- verification: the scratch restore must match live -------------
 
 def test_backup_script_fails_on_empty_dump(staged_backup):
     app_root, bin_dir = staged_backup
@@ -320,16 +345,28 @@ def test_backup_script_fails_on_empty_dump(staged_backup):
     assert "job succeeded" not in log
 
 
-def test_backup_script_fails_when_validation_fails(staged_backup):
+def test_backup_script_fails_when_scratch_restore_fails(staged_backup):
     app_root, bin_dir = staged_backup
     result = _run_backup(app_root, bin_dir, {"FAKE_VALIDATE_EXIT": "1"})
     assert result.returncode != 0
     log = _backup_log(app_root)
-    assert "Database backup job FAILED: dump failed validation" in log
+    assert "Database backup job FAILED: scratch restore failed" in log
     assert "job succeeded" not in log
 
 
-# --- N10: credential never on a command line -----------------------
+def test_backup_script_fails_when_scratch_counts_differ(staged_backup):
+    app_root, bin_dir = staged_backup
+    result = _run_backup(
+        app_root, bin_dir,
+        {"FAKE_RESTORE_COUNTS": "0025_attendance_status_check|19|87|10"},
+    )
+    assert result.returncode != 0
+    log = _backup_log(app_root)
+    assert "Database backup job FAILED: scratch DB does not match live" in log
+    assert "job succeeded" not in log
+
+
+# --- passphrase never on a command line ----------------------------
 
 def test_backup_script_keeps_credentials_off_the_command_line(staged_backup, tmp_path):
     app_root, bin_dir = staged_backup
@@ -337,17 +374,10 @@ def test_backup_script_keeps_credentials_off_the_command_line(staged_backup, tmp
     result = _run_backup(app_root, bin_dir, {"FAKE_ARGV_LOG": str(argv_log)})
     assert result.returncode == 0, result.stdout + result.stderr
     argv = argv_log.read_text()
-    # The URI / password must never appear in any docker invocation.
-    assert "pass@host" not in argv
-    assert "postgresql://user:pass" not in argv
-    # ...but the credential must still reach the container via --env-file.
-    tokens = argv.split()
-    assert "--env-file" in tokens
-    env_path = tokens[tokens.index("--env-file") + 1]
-    # The temp env file is cleaned up on exit (EXIT trap).
-    assert not Path(env_path).exists()
-    # ...and the backup itself still worked.
-    assert list((app_root / "backups").glob("kpi-backup-*.dump"))
+    # The passphrase must never appear in any docker invocation.
+    assert "test-backup-passphrase" not in argv
+    # ...and the backup itself still worked (encrypted, verified).
+    assert list((app_root / "backups").glob("kpi-backup-*.dump.enc"))
 
 
 # --- N11: log lands in the repo's backups/ from any cwd ------------

@@ -27,9 +27,9 @@ class TotpLoginRequest(BaseModel):
 
 
 class TotpEnrollResponse(BaseModel):
-    # Shown ONCE at enrolment: the SPA displays the otpauth:// URL as
-    # text for manual entry (no qrcode.react dependency in the frontend)
-    # and the raw secret alongside it.
+    # Shown ONCE at enrolment: the SPA displays the otpauth:// URL as a
+    # QR code (qrcode.react) with the raw secret alongside it for manual
+    # entry.
     secret: str
     otpauth_url: str
 

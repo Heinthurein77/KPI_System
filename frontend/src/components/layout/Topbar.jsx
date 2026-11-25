@@ -36,6 +36,27 @@ export default function Topbar({ title, onMenuClick }) {
             notifications API 401s for them — and the global 401 handler would
             bounce them to /login. They have no notifications anyway. */}
         {user?.role !== "super_admin" && <NotificationBell />}
+        {/* TOTP enrolment is super/tenant admin only (backend
+            TOTP_ELIGIBLE_ROLES) — hide the link for everyone else; the
+            page itself shows them a not-available note if reached
+            directly. Account actions live here in the Topbar, next to
+            Change password, rather than in a new sidebar section. */}
+        {(user?.role === "super_admin" || user?.role === "tenant_admin") && (
+          <Link
+            to="/account/security"
+            title="Two-factor authentication"
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-2.5 sm:px-3.5 py-2 text-sm font-medium text-slate-600 shadow-sm hover:bg-slate-50 hover:text-slate-900 transition"
+          >
+            <svg className="h-4 w-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z"
+              />
+            </svg>
+            <span className="hidden sm:inline">Two-factor authentication</span>
+          </Link>
+        )}
         <Link
           to="/account/password"
           title="Change password"

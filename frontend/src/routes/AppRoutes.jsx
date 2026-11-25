@@ -14,6 +14,7 @@ import PlatformLoginPage from "../pages/platform/PlatformLoginPage";
 
 const DashboardPage = lazy(() => import("../pages/DashboardPage"));
 const ChangePasswordPage = lazy(() => import("../pages/ChangePasswordPage"));
+const SecurityPage = lazy(() => import("../pages/SecurityPage"));
 const MyKpiPage = lazy(() => import("../pages/MyKpiPage"));
 const MyKpiTrendPage = lazy(() => import("../pages/MyKpiTrendPage"));
 const AttendancePage = lazy(() => import("../pages/AttendancePage"));
@@ -82,6 +83,19 @@ export default function AppRoutes() {
           element={
             <ProtectedRoute>
               <ChangePasswordPage />
+            </ProtectedRoute>
+          }
+        />
+        {/* Bug 1: TOTP enrolment UI. No roles here on purpose — the page
+            itself shows the not-available note for employees / dept
+            admins (a roles=[...] route would show them a bare 403
+            card instead). The nav link is only shown to eligible
+            roles (see Topbar). */}
+        <Route
+          path="/account/security"
+          element={
+            <ProtectedRoute>
+              <SecurityPage />
             </ProtectedRoute>
           }
         />

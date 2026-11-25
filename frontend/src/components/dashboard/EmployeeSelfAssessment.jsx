@@ -31,7 +31,11 @@ export default function EmployeeSelfAssessment({ fetcher, emptyTitle = "No KPI r
   const [saving, setSaving] = useState(false);
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [confirmWithdraw, setConfirmWithdraw] = useState(false);
-  const [params, setParams] = useState({});
+  // Seed from initialParams (same as AdminDashboard): a direct visit to
+  // /my-kpi?year=&period= or /dashboard?year=&period= must fetch that
+  // month on mount, not the backend default — the mount effect below
+  // loads `params` once, and the navKey effect skips its first run.
+  const [params, setParams] = useState(initialParams);
   const paramsRef = useRef(params);
   const firstNavRef = useRef(true);
   // S-M3: the grace window (length + server day) comes from the backend —

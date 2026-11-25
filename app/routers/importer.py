@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.core.deps import require_dept_admin
-from app.core.rate_limit import UPLOAD_RATE_LIMIT, limiter
+from app.core.rate_limit import UPLOAD_RATE_LIMIT, _authenticated_user_key, limiter
 from app.core.timezone import today as app_today
 from app.core.validation import validate_year_period
 from app.database import get_db
@@ -64,7 +64,7 @@ def download_import_template(
 
 
 @router.post("/upload")
-@limiter.limit(UPLOAD_RATE_LIMIT)
+@limiter.limit(UPLOAD_RATE_LIMIT, key_func=_authenticated_user_key)
 async def upload_import(
     request: Request,
     dry_run: bool = True,

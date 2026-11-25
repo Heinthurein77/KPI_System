@@ -175,7 +175,21 @@ def visible_submissions_query(user: User):
     if user.role == UserRole.TENANT_ADMIN:
         return query
     if user.role == UserRole.DEPT_ADMIN:
-        return query.where(KPISubmission.department_id == user.department_id)
+        if user.department_id is None:
+            # S-08: a dept admin with no department sees only themself —
+            # department_id == None would render as IS NULL and match
+            # every NULL-department row. Mirrors attendance
+            # _visible_user_ids.
+            return query.where(KPISubmission.employee_id == user.id)
+        # S-06: dept admins see their department's EMPLOYEES only — peer
+        # dept-admins' submissions are sideways-visible performance data,
+        # not reports. (A dept admin's own KPI lives in /my-kpi.)
+        return query.where(
+            KPISubmission.department_id == user.department_id,
+            KPISubmission.employee_id.in_(
+                select(User.id).where(User.role == UserRole.EMPLOYEE)
+            ),
+        )
     return query.where(KPISubmission.employee_id == user.id)
 
 
@@ -269,7 +283,13 @@ def get_submission_scoped(db: Session, user: User, submission_id: int) -> KPISub
 
     if user.role == UserRole.EMPLOYEE and submission.employee_id != user.id:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Not your submission.")
-    if user.role == UserRole.DEPT_ADMIN and submission.department_id != user.department_id:
+    if user.role == UserRole.DEPT_ADMIN and (
+        # S-08: explicit None guard — without it, a NULL-department
+        # dept admin and a NULL-department submission compare equal
+        # (None == None) and the scoping check passes.
+        user.department_id is None
+        or submission.department_id != user.department_id
+    ):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Submission outside your department.")
     # Nobody may review their own KPI submission — a Dept Admin's own KPI skips
     # department review entirely and goes straight to the Tenant Admin.
@@ -1016,7 +1036,7 @@ def final_approve(
             user_id=submission.employee_id,
             type="kpi_final_approved",
             title=f"Your {submission.month_or_quarter} {submission.year} KPI was approved",
-            message=f"{reviewer.name} gave final approval at {fmt_score(submission.final_score)}.",
+            message=f"{reviewer.name} gave final approval. See your dashboard for the result.",
             link=f"/dashboard?year={submission.year}&period={submission.month_or_quarter}",
         )
     else:
@@ -1156,7 +1176,7 @@ def tenant_admin_override(
             user_id=submission.employee_id,
             type="kpi_overridden",
             title=f"Your {submission.month_or_quarter} {submission.year} KPI was overridden",
-            message=f"{admin.name} overrode your KPI score to {fmt_score(final_score)}.",
+            message=f"{admin.name} overrode your KPI score. See your dashboard for the result.",
             link=f"/dashboard?year={submission.year}&period={submission.month_or_quarter}",
         )
     else:
@@ -1174,13 +1194,29 @@ def reject_submission(
     expected_period: str | None = None,
 ) -> None:
     _assert_period_match(submission, expected_year, expected_period)
-    if submission.status not in (KPIStatus.PENDING_DEPT_APPROVAL, KPIStatus.PENDING_FINAL_APPROVAL):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Submission is not in a reviewable state.")
+    # M-10: reject is restricted to the stage the caller owns. A dept
+    # admin may only reject a submission awaiting department review —
+    # once it has passed to final approval it is out of their hands.
+    # A tenant admin owns the whole tenant workflow, so they may reject
+    # from either pending stage (the existing behaviour for tenant
+    # admins, pinned by test_reject_submission_allowed_from_pending_statuses).
+    if reviewer.role == UserRole.DEPT_ADMIN:
+        allowed_statuses = [KPIStatus.PENDING_DEPT_APPROVAL]
+    else:
+        allowed_statuses = [
+            KPIStatus.PENDING_DEPT_APPROVAL,
+            KPIStatus.PENDING_FINAL_APPROVAL,
+        ]
+    if submission.status not in allowed_statuses:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Submission is not in a reviewable state for your role.",
+        )
     # C2: atomic conditional-UPDATE claim, so a reject racing an approve
     # has a deterministic outcome — only the first caller wins.
     _claim_submission(
         db, submission,
-        [KPIStatus.PENDING_DEPT_APPROVAL, KPIStatus.PENDING_FINAL_APPROVAL],
+        allowed_statuses,
         "Submission is not in a reviewable state.",
     )
     submission.status = KPIStatus.REJECTED

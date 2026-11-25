@@ -12,7 +12,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 from app.core.config import settings
 from app.core.deps import get_current_user, require_dept_admin, require_tenant_admin
-from app.core.validation import validate_year_period
+from app.core.validation import validate_year, validate_year_period
 from app.core.rate_limit import (
     ADMIN_WRITE_RATE_LIMIT,
     EXPORT_RATE_LIMIT,
@@ -57,7 +57,7 @@ from app.schemas.user import (
     UserOut,
     UserSummaryOut,
 )
-from app.services import audit_service, email_service, kpi_export_service, kpi_service, recurring_service
+from app.services import audit_service, email_service, kpi_export_service, kpi_service, notification_service, recurring_service
 from app.services import submission_grace
 from app.services.audit_service import fmt_score
 
@@ -101,6 +101,12 @@ def create_department(
 
     department = Department(name=name, tenant_id=user.tenant_id)
     db.add(department)
+    db.flush()  # assigns department.id for the audit row below
+    # S-09: department create was unaudited.
+    audit_service.log(
+        db, user, "department_created", "department", department.id, name,
+        f'Department "{name}" created.',
+    )
     db.commit()
     return department
 
@@ -123,7 +129,13 @@ def rename_department(
     )
     if existing is not None:
         raise HTTPException(400, f'A department named "{name}" already exists.')
+    old_name = department.name
     department.name = name
+    # S-09: department rename was unaudited.
+    audit_service.log(
+        db, user, "department_renamed", "department", department.id, name,
+        f'Department renamed: "{old_name}" → "{name}".',
+    )
     db.commit()
     return department
 
@@ -179,12 +191,24 @@ def list_users(
     limit = min(max(limit, 1), 500)
     offset = max(offset, 0)
     if user.role == UserRole.DEPT_ADMIN:
-        users = db.scalars(
-            select(User)
-            .where(User.department_id == user.department_id, User.tenant_id == user.tenant_id)
-            .limit(limit)
-            .offset(offset)
-        ).all()
+        if user.department_id is None:
+            # S-08: a dept admin with no department sees only themself —
+            # department_id == None would render as IS NULL and match
+            # every NULL-department user.
+            users = [user]
+        else:
+            # M-09: department-scoped but role-filtered — peer
+            # dept-admin accounts are not listed (same fix as S-06).
+            users = db.scalars(
+                select(User)
+                .where(
+                    User.department_id == user.department_id,
+                    User.tenant_id == user.tenant_id,
+                    User.role == UserRole.EMPLOYEE,
+                )
+                .limit(limit)
+                .offset(offset)
+            ).all()
         departments = []
         roles = [UserRole.EMPLOYEE]
     else:
@@ -212,8 +236,13 @@ def _check_user_data_scope(user: User, target: User, what: str) -> None:
     elif user.role == UserRole.DEPT_ADMIN:
         # Dept admins may view their own trend/data in addition to
         # their department's employees.
+        # S-08: explicit None guard — without it a NULL-department
+        # dept admin and a NULL-department target compare equal
+        # (None == None) and the scoping check passes.
         if target.id != user.id and (
-            target.department_id != user.department_id or target.role != UserRole.EMPLOYEE
+            user.department_id is None
+            or target.department_id != user.department_id
+            or target.role != UserRole.EMPLOYEE
         ):
             raise HTTPException(403, f"Cannot view {what} outside your department.")
     elif user.role != UserRole.TENANT_ADMIN:
@@ -324,6 +353,10 @@ def get_user_submissions_for_period(
 
     _check_user_data_scope(user, target, "KPI data")
 
+    # M-38: shared year/period validation (2000–2100, real month name) —
+    # out-of-range values used to silently return empty results.
+    validate_year_period(year, period)
+
     submissions = db.scalars(
         select(KPISubmission)
         .options(
@@ -365,12 +398,17 @@ def export_employee_kpi_report(
     The export is read-only and uses the existing final-score calculation,
     with the same tenant and department access scope as existing KPI views.
     """
-    if month not in MONTH_NAMES:
-        raise HTTPException(422, f"month must be one of: {', '.join(MONTH_NAMES)}")
+    # M-38: shared year/period validation (2000–2100, real month name),
+    # replacing the hand-rolled month check below.
+    validate_year_period(year, month)
 
     target = get_tenant_scoped_or_404(db, User, employee_id, user.tenant_id, "User not found.")
     if user.role == UserRole.DEPT_ADMIN and (
-        target.department_id != user.department_id or target.role != UserRole.EMPLOYEE
+        # S-08: explicit None guard — a NULL-department caller must not
+        # match a NULL-department target (None == None).
+        not user.department_id
+        or target.department_id != user.department_id
+        or target.role != UserRole.EMPLOYEE
     ):
         raise HTTPException(403, "Cannot export KPI data outside your department.")
 
@@ -389,6 +427,15 @@ def export_employee_kpi_report(
     report = kpi_export_service.build_employee_kpi_report(
         target, submissions, year, month, combined_final_score(submissions)
     )
+    # S-09: a PII/score export leaves an accountability trail.
+    audit_service.log(
+        db, user, "kpi_export", "kpi_export", target.id,
+        f"{target.name} — {month} {year}",
+        f"Monthly KPI export for {target.name} ({month} {year}).",
+        department_id=target.department_id,
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
     filename = f"employee-kpi-{target.id}-{year}-{month.lower()}.xlsx"
     return StreamingResponse(
         report,
@@ -407,9 +454,19 @@ def export_employee_annual_kpi_report(
     user: User = Depends(require_dept_admin),
 ):
     """Download one employee's full-year KPI workbook, scoped like monthly exports."""
+    # M-38: shared year validation (2000–2100) — this endpoint takes no
+    # period, so the year half of validate_year_period is applied via
+    # validate_year directly (ValueError → 422, same as the pair form).
+    try:
+        validate_year(year)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     target = get_tenant_scoped_or_404(db, User, employee_id, user.tenant_id, "User not found.")
     if user.role == UserRole.DEPT_ADMIN and (
-        target.department_id != user.department_id or target.role != UserRole.EMPLOYEE
+        # S-08: explicit None guard — see the monthly export above.
+        not user.department_id
+        or target.department_id != user.department_id
+        or target.role != UserRole.EMPLOYEE
     ):
         raise HTTPException(403, "Cannot export KPI data outside your department.")
 
@@ -445,6 +502,15 @@ def export_employee_annual_kpi_report(
     report = kpi_export_service.build_employee_annual_kpi_report(
         target, submissions, year, MONTH_NAMES, monthly_scores
     )
+    # S-09: a PII/score export leaves an accountability trail.
+    audit_service.log(
+        db, user, "kpi_annual_export", "kpi_export", target.id,
+        f"{target.name} — {year}",
+        f"Annual KPI export for {target.name} ({year}).",
+        department_id=target.department_id,
+        ip_address=request.client.host if request.client else None,
+    )
+    db.commit()
     filename = f"employee-kpi-annual-{target.id}-{year}.xlsx"
     return StreamingResponse(
         report,
@@ -557,11 +623,18 @@ def _is_last_other_admin(db: Session, tenant_id: int, caller_id: int, target: Us
 
 
 @router.post("/users/{user_id}/toggle-active", response_model=UserOut)
-def toggle_user_active(user_id: int, db: Session = Depends(get_db), user: User = Depends(require_dept_admin)):
+@limiter.limit(ADMIN_WRITE_RATE_LIMIT, key_func=_authenticated_user_key)
+def toggle_user_active(
+    request: Request, user_id: int, db: Session = Depends(get_db), user: User = Depends(require_dept_admin)
+):
     target = get_tenant_scoped_or_404(db, User, user_id, user.tenant_id, "User not found.")
 
     if user.role == UserRole.DEPT_ADMIN and (
-        target.department_id != user.department_id or target.role != UserRole.EMPLOYEE
+        # S-08: explicit None guard — a NULL-department caller must not
+        # match a NULL-department target (None == None).
+        not user.department_id
+        or target.department_id != user.department_id
+        or target.role != UserRole.EMPLOYEE
     ):
         raise HTTPException(403, "Cannot manage users outside your department.")
 
@@ -607,6 +680,17 @@ def reset_user_password(
     ):
         raise HTTPException(403, "You can only reset passwords for employees in your department.")
 
+    # M-02: a tenant admin may not reset a fellow tenant admin's
+    # password — that is reserved to the platform admin. (The platform
+    # admin cannot call this tenant-scoped endpoint at all, so in
+    # practice a fellow-admin reset currently has no path — see the
+    # Track 2 report; a platform reset endpoint is a coordinator
+    # decision. Resetting a dept admin or employee is unchanged.)
+    if target.role == UserRole.TENANT_ADMIN and target.id != user.id:
+        raise HTTPException(
+            403, "Only the platform admin can reset another tenant admin's password."
+        )
+
     try:
         validate_password_length(payload.password)
     except ValueError as exc:
@@ -619,12 +703,31 @@ def reset_user_password(
         f"Password reset by {user.name} ({user.role.value}).",
         department_id=target.department_id,
     )
+    # M-02: the affected user is notified (in-app + email via the
+    # existing notification pipeline) so a silent reset is visible to
+    # them. The notification is created before the commit and the email
+    # is sent after it, like every other workflow notification.
+    emailed = notification_service.notify_user(
+        db,
+        tenant_id=user.tenant_id,
+        user_id=target.id,
+        type="password_reset",
+        title="Your password was reset",
+        message=(
+            f"Your KPI account password was reset by {user.name}. "
+            "Sign in with the new password — you will be asked to change it."
+        ),
+        link="/login",
+    )
     db.commit()
+    email_service.send_for_notifications(db, emailed)
     return target
 
 
 @router.put("/users/{user_id}", response_model=UserOut)
+@limiter.limit(ADMIN_WRITE_RATE_LIMIT, key_func=_authenticated_user_key)
 def edit_user(
+    request: Request,
     user_id: int,
     payload: UpdateUserRequest,
     db: Session = Depends(get_db),
@@ -672,6 +775,16 @@ def edit_user(
     if target.role in (UserRole.DEPT_ADMIN, UserRole.EMPLOYEE) and target.department_id is None:
         raise HTTPException(400, "Department Admins and Employees must belong to a department.")
     if payload.password:
+        # M-01: an admin changing their OWN password must prove they
+        # know the current one — same 400 as POST /api/auth/change-
+        # password on a wrong one. Changing another user's password
+        # never needs it (that path is covered by the admin's own auth
+        # plus the user_password_changed audit row below).
+        if target.id == user.id and (
+            not payload.current_password
+            or not verify_password(payload.current_password, user.password_hash)
+        ):
+            raise HTTPException(400, "Current password is incorrect.")
         try:
             validate_password_length(payload.password)
         except ValueError as exc:
@@ -679,6 +792,9 @@ def edit_user(
         target.password_hash = hash_password(payload.password)
         target.must_change_password = True
         target.token_version = (target.token_version or 0) + 1
+        password_changed = True
+    else:
+        password_changed = False
     # B-M5: department scoping goes stale on transfer. KPISubmission and
     # AttendanceRecord both carry a denormalised department_id frozen at
     # creation, and dept-admin visibility filters on it — so moving the
@@ -709,12 +825,23 @@ def edit_user(
         + ".",
         department_id=target.department_id,
     )
+    if password_changed:
+        # M-01: a password change is a distinct audit event, not just
+        # part of the generic user_updated row.
+        audit_service.log(
+            db, user, "user_password_changed", "user", target.id, target.name,
+            f"Password changed by {user.name} ({user.role.value}).",
+            department_id=target.department_id,
+        )
     db.commit()
     return target
 
 
 @router.delete("/users/{user_id}")
-def delete_user(user_id: int, db: Session = Depends(get_db), user: User = Depends(require_tenant_admin)):
+@limiter.limit(ADMIN_WRITE_RATE_LIMIT, key_func=_authenticated_user_key)
+def delete_user(
+    request: Request, user_id: int, db: Session = Depends(get_db), user: User = Depends(require_tenant_admin)
+):
     """Tenant Admin can delete any user in their tenant — including their
     KPI history — except the last other tenant admin (m7 sole-admin
     guard: at least two admins must remain) and their own currently-
@@ -765,13 +892,20 @@ def list_templates(
         ).all()
         departments = []
         # Dept Admins may only target their own Employees.
-        team = db.scalars(
-            select(User).where(
-                User.department_id == user.department_id,
-                User.tenant_id == user.tenant_id,
-                User.role == UserRole.EMPLOYEE,
-            )
-        ).all()
+        # S-08: a dept admin with no department has no employees in
+        # scope (department_id == None would render as IS NULL and
+        # match every NULL-department user).
+        team = (
+            []
+            if user.department_id is None
+            else db.scalars(
+                select(User).where(
+                    User.department_id == user.department_id,
+                    User.tenant_id == user.tenant_id,
+                    User.role == UserRole.EMPLOYEE,
+                )
+            ).all()
+        )
     else:
         kpi_templates = db.scalars(
             select(KPITemplate)
@@ -834,7 +968,13 @@ def get_employee_period_weight(
     # Access rules mirror create_custom_template.
     if user.role == UserRole.DEPT_ADMIN:
         # Dept Admins may only view their own Employees.
-        if employee.role != UserRole.EMPLOYEE or employee.department_id != user.department_id:
+        # S-08: explicit None guard — a NULL-department caller must not
+        # match a NULL-department target (None == None).
+        if (
+            not user.department_id
+            or employee.role != UserRole.EMPLOYEE
+            or employee.department_id != user.department_id
+        ):
             raise HTTPException(403, "Cannot view period weights for an employee outside your department.")
     else:
         # Tenant Admin may target any Employee or Dept Admin, but not another
@@ -920,6 +1060,13 @@ def create_template(
     payload: CreateTemplateRequest, db: Session = Depends(get_db), user: User = Depends(require_dept_admin)
 ):
     if user.role == UserRole.DEPT_ADMIN:
+        # S-08: a dept admin with no department must not create a
+        # company-wide (department_id=None) metric — without this guard
+        # resolved_department_id is None and the template is tenant-wide.
+        if user.department_id is None:
+            raise HTTPException(
+                403, "A department admin without a department cannot create KPI metrics."
+            )
         resolved_department_id = user.department_id
     elif payload.department_id is not None:
         resolved_department_id = get_tenant_scoped_or_404(
@@ -986,7 +1133,13 @@ def create_custom_template(
 
     if user.role == UserRole.DEPT_ADMIN:
         # Dept Admins may only assign custom KPIs to their own Employees.
-        if employee.role != UserRole.EMPLOYEE or employee.department_id != user.department_id:
+        # S-08: explicit None guard — a NULL-department caller must not
+        # match a NULL-department target (None == None).
+        if (
+            not user.department_id
+            or employee.role != UserRole.EMPLOYEE
+            or employee.department_id != user.department_id
+        ):
             raise HTTPException(403, "Cannot create a custom KPI for an employee outside your department.")
     else:
         # Tenant Admin may target any Employee or Dept Admin, but not another Tenant
@@ -1029,7 +1182,13 @@ def create_custom_template_with_rebalance(
 
     if user.role == UserRole.DEPT_ADMIN:
         # Dept Admins may only assign custom KPIs to their own Employees.
-        if employee.role != UserRole.EMPLOYEE or employee.department_id != user.department_id:
+        # S-08: explicit None guard — a NULL-department caller must not
+        # match a NULL-department target (None == None).
+        if (
+            not user.department_id
+            or employee.role != UserRole.EMPLOYEE
+            or employee.department_id != user.department_id
+        ):
             raise HTTPException(403, "Cannot create a custom KPI for an employee outside your department.")
     else:
         # Tenant Admin may target any Employee or Dept Admin, but not another Tenant
@@ -1065,7 +1224,11 @@ def create_custom_template_with_rebalance(
                 raise HTTPException(
                     400, "Weight adjustments must target the same employee's KPI templates."
                 )
-            if user.role == UserRole.DEPT_ADMIN and template.department_id != user.department_id:
+            # S-08: explicit None guard — a NULL-department caller must
+            # not match a NULL-department (tenant-wide) template.
+            if user.role == UserRole.DEPT_ADMIN and (
+                not user.department_id or template.department_id != user.department_id
+            ):
                 raise HTTPException(
                     403, "Cannot manage templates outside your department."
                 )
@@ -1133,7 +1296,10 @@ def update_template_weight(
             "custom templates support inline weight rebalancing.",
         )
 
-    if user.role == UserRole.DEPT_ADMIN and template.department_id != user.department_id:
+    # S-08: explicit None guard — see the rebalance guard above.
+    if user.role == UserRole.DEPT_ADMIN and (
+        not user.department_id or template.department_id != user.department_id
+    ):
         raise HTTPException(
             403, "Cannot manage templates outside your department."
         )
@@ -1187,7 +1353,9 @@ def rename_template(
         # assigned to them personally.
         if template.employee_id == user.id:
             raise HTTPException(403, "You cannot rename a KPI metric assigned to you.")
-        if template.department_id != user.department_id:
+        # S-08: explicit None guard — a NULL-department caller must
+        # not match a NULL-department (tenant-wide) template.
+        if user.department_id is None or template.department_id != user.department_id:
             raise HTTPException(
                 403, "Cannot manage metrics outside your department."
             )
@@ -1256,6 +1424,15 @@ def run_recurring_kpis(
     result = recurring_service.materialise_recurring_for_period(
         db, payload.year, payload.period, tenant_id=user.tenant_id
     )
+    # S-09: the recurring-KPI run was unaudited.
+    audit_service.log(
+        db, user, "recurring_kpis_run", "recurring_kpi", user.tenant_id,
+        f"{payload.year} {payload.period}",
+        f"Recurring KPIs materialised for {payload.period} {payload.year}: "
+        f"{result.created_count} created, {result.skipped_count} skipped"
+        + (f" ({len(result.errors)} error(s))." if result.errors else "."),
+    )
+    db.commit()
     return {
         "year": result.year,
         "period": result.period,
@@ -1282,7 +1459,9 @@ def delete_template(template_id: int, db: Session = Depends(get_db), user: User 
     if template.employee_id == user.id:
         raise HTTPException(403, "You cannot delete a KPI metric assigned to you.")
 
-    if template.department_id != user.department_id:
+    # S-08: explicit None guard — a NULL-department caller must not
+    # match a NULL-department (tenant-wide) template.
+    if user.department_id is None or template.department_id != user.department_id:
         raise HTTPException(403, "Cannot manage metrics outside your department.")
 
     submissions = db.scalars(select(KPISubmission).where(KPISubmission.kpi_template_id == template_id)).all()

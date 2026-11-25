@@ -290,6 +290,11 @@ def test_annual_pdf_filename_sanitizes_evil_employee_name(client, db):
 
 
 def test_export_filename_does_not_leak_other_department_name(client, db):
+    # M-28 (security review 2026-11-25): an out-of-scope department is
+    # 404, not a headers-only 200 — the old 200-vs-404 difference let a
+    # caller probe which in-tenant departments exist, and the filename
+    # only ever omitted the name. A 404 carries no Content-Disposition
+    # at all, so nothing can leak.
     tenant = make_tenant(db)
     sales = make_department(db, tenant, name="Sales")
     eng = make_department(db, tenant, name="Engineering")
@@ -303,8 +308,9 @@ def test_export_filename_does_not_leak_other_department_name(client, db):
         params={"year": today.year, "month": today.month, "department_id": sales.id},
         headers=auth_headers(dadmin, tenant),
     )
-    assert resp.status_code == 200, resp.text
-    assert "sales" not in resp.headers["content-disposition"].lower()
+    assert resp.status_code == 404, resp.text
+    assert "sales" not in resp.text.lower()
+    assert "content-disposition" not in {k.lower() for k in resp.headers}
 
 
 # ---------------------------------------------------------------- m6 / m9

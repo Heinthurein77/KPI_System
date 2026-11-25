@@ -21,6 +21,11 @@ from app.services import kpi_service
 
 router = APIRouter(prefix="/api/kpi", tags=["kpi"])
 
+# M-40: per-user write limit for the KPI endpoints (bulk-approve was
+# the only limited one). 20/minute is generous for form saves — a
+# human cannot save faster — but bounds a scripted flood.
+KPI_WRITE_RATE_LIMIT = "20/minute"
+
 
 def _own_submissions_for_period(db: Session, user: User, year: int, period: str) -> list[KPISubmissionOut]:
     submissions = db.scalars(
@@ -33,7 +38,9 @@ def _own_submissions_for_period(db: Session, user: User, year: int, period: str)
 
 
 @router.post("/employee/save")
+@limiter.limit(KPI_WRITE_RATE_LIMIT, key_func=_authenticated_user_key)
 def employee_save_scores(
+    request: Request,
     payload: SaveScoresRequest,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -60,7 +67,9 @@ def employee_save_scores(
 
 
 @router.post("/employee/submit")
+@limiter.limit(KPI_WRITE_RATE_LIMIT, key_func=_authenticated_user_key)
 def employee_submit(
+    request: Request,
     payload: SubmitRequest,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -92,7 +101,9 @@ def employee_submit(
 
 
 @router.post("/employee/withdraw")
+@limiter.limit(KPI_WRITE_RATE_LIMIT, key_func=_authenticated_user_key)
 def employee_withdraw(
+    request: Request,
     payload: WithdrawRequest,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
@@ -131,7 +142,9 @@ def bulk_approve(
 
 
 @router.post("/{submission_id}/dept-save", response_model=KPISubmissionOut)
+@limiter.limit(KPI_WRITE_RATE_LIMIT, key_func=_authenticated_user_key)
 def dept_save(
+    request: Request,
     submission_id: int,
     payload: DeptSaveRequest,
     db: Session = Depends(get_db),
@@ -146,7 +159,9 @@ def dept_save(
 
 
 @router.post("/{submission_id}/dept-approve", response_model=KPISubmissionOut)
+@limiter.limit(KPI_WRITE_RATE_LIMIT, key_func=_authenticated_user_key)
 def dept_approve(
+    request: Request,
     submission_id: int,
     payload: DeptApproveRequest,
     db: Session = Depends(get_db),
@@ -161,7 +176,9 @@ def dept_approve(
 
 
 @router.post("/{submission_id}/final-approve", response_model=KPISubmissionOut)
+@limiter.limit(KPI_WRITE_RATE_LIMIT, key_func=_authenticated_user_key)
 def final_approve(
+    request: Request,
     submission_id: int,
     payload: FinalApproveRequest,
     db: Session = Depends(get_db),
@@ -176,7 +193,9 @@ def final_approve(
 
 
 @router.post("/{submission_id}/override", response_model=KPISubmissionOut)
+@limiter.limit(KPI_WRITE_RATE_LIMIT, key_func=_authenticated_user_key)
 def tenant_admin_override(
+    request: Request,
     submission_id: int,
     payload: OverrideRequest,
     db: Session = Depends(get_db),
@@ -191,7 +210,9 @@ def tenant_admin_override(
 
 
 @router.post("/{submission_id}/reject", response_model=KPISubmissionOut)
+@limiter.limit(KPI_WRITE_RATE_LIMIT, key_func=_authenticated_user_key)
 def reject(
+    request: Request,
     submission_id: int,
     payload: RejectRequest,
     db: Session = Depends(get_db),

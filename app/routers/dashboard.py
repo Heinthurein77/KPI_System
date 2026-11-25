@@ -330,6 +330,14 @@ def dashboard(
         # it off their team list. They cannot approve their own KPI; it skips
         # department review and goes straight to the Tenant Admin.
         query = query.where(KPISubmission.employee_id != user.id)
+        # S-06 (defence in depth — visible_submissions_query already
+        # restricts to EMPLOYEE rows): peer dept-admins' submissions
+        # must never appear on the team board.
+        query = query.where(
+            KPISubmission.employee_id.in_(
+                select(User.id).where(User.role == UserRole.EMPLOYEE)
+            )
+        )
 
     submissions = db.scalars(query).unique().all()
     submissions.sort(key=lambda s: (s.employee.name, s.kpi_template.metric_name))

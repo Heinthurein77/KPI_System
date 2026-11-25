@@ -71,7 +71,14 @@ def build_annual_report(db: Session, tenant_id: int, employee_id: int, year: int
     if employee is None:
         raise LookupError("Employee not found")
     department = (
-        db.scalar(select(Department).where(Department.id == employee.department_id))
+        # M-11: tenant-filtered lookup — a bare db.get(Department, id)
+        # would return another tenant's department row.
+        db.scalar(
+            select(Department).where(
+                Department.id == employee.department_id,
+                Department.tenant_id == tenant_id,
+            )
+        )
         if employee.department_id
         else None
     )

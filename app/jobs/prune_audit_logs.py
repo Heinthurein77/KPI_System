@@ -24,10 +24,12 @@ would make old reminders re-fire. Reminder rows therefore accumulate
 at ~1 per user per period — see docs/neon-usage-check.md.
 """
 
+import json
 import logging
 import os
 import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from sqlalchemy import delete, select
 
@@ -43,19 +45,78 @@ logger = logging.getLogger("kpi_system.jobs")
 DEFAULT_RETENTION_DAYS = 180
 DEFAULT_NOTIFICATION_RETENTION_DAYS = 90
 BATCH_SIZE = 5000
+# S-10: pruned audit rows are archived to JSONL first — a prune must
+# never be the thing that destroys audit evidence. Path from
+# AUDIT_LOG_ARCHIVE_PATH, else audit-log-archive.jsonl in the working
+# directory (the server cron runs from ~/kpi-app). Callers (tests) may
+# pass archive_path explicitly. NOTE: the file is append-only and is
+# NOT git-tracked — add it to .gitignore / set the env var on the
+# server so a local run does not leave a stray file in the repo.
+DEFAULT_ARCHIVE_PATH = "audit-log-archive.jsonl"
 
 
-def prune_audit_logs(db, retention_days: int) -> int:
-    """Delete audit_logs older than retention_days. Returns the deleted count."""
+def _archive_rows(rows: list[AuditLog], archive_path: str | Path) -> None:
+    """Append one JSON object per audit row to the archive file.
+
+    The archived row carries the hash-chain fields too, so an archived
+    row can still be verified against its neighbours.
+    """
+    path = Path(archive_path)
+    if path.parent != Path(".") and str(path.parent):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(
+                json.dumps(
+                    {
+                        "id": row.id,
+                        "tenant_id": row.tenant_id,
+                        "actor_id": row.actor_id,
+                        "actor_name": row.actor_name,
+                        "actor_role": row.actor_role,
+                        "department_id": row.department_id,
+                        "action": row.action,
+                        "entity_type": row.entity_type,
+                        "entity_id": row.entity_id,
+                        "entity_label": row.entity_label,
+                        "summary": row.summary,
+                        "created_at": row.created_at.isoformat() if row.created_at else None,
+                        "previous_hash": row.previous_hash,
+                        "entry_hash": row.entry_hash,
+                        "ip_address": row.ip_address,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
+
+
+def _resolve_archive_path(archive_path: str | Path | None) -> str:
+    if archive_path is not None:
+        return str(archive_path)
+    return os.environ.get("AUDIT_LOG_ARCHIVE_PATH", DEFAULT_ARCHIVE_PATH)
+
+
+def prune_audit_logs(
+    db, retention_days: int, archive_path: str | Path | None = None
+) -> int:
+    """Delete audit_logs older than retention_days — archiving each
+    batch to JSONL first (S-10). Returns the deleted count."""
     cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    archive = _resolve_archive_path(archive_path)
     total = 0
     while True:
-        ids = db.scalars(select(AuditLog.id).where(AuditLog.created_at < cutoff).limit(BATCH_SIZE)).all()
-        if not ids:
+        rows = db.scalars(
+            select(AuditLog).where(AuditLog.created_at < cutoff).limit(BATCH_SIZE)
+        ).all()
+        if not rows:
             break
-        db.execute(delete(AuditLog).where(AuditLog.id.in_(ids)))
+        _archive_rows(rows, archive)
+        db.execute(delete(AuditLog).where(AuditLog.id.in_([r.id for r in rows])))
         db.commit()
-        total += len(ids)
+        total += len(rows)
+    if total:
+        logger.info("Archived %s pruned audit log row(s) to %s.", total, archive)
     return total
 
 
@@ -151,11 +212,13 @@ def main() -> int:
     finally:
         db.close()
     logger.info(
-        "Audit-log prune job succeeded: pruned %s audit log rows older than %s days, "
+        "Audit-log prune job succeeded: pruned %s audit log rows older than %s days "
+        "(archived to %s), "
         "%s notifications older than %s days "
         "(deadline_reminder rows kept), "
         "and %s expired revoked-token rows.",
         deleted, retention_days,
+        _resolve_archive_path(None),
         notifications_deleted, notification_retention_days,
         revoked_deleted,
     )

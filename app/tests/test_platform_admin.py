@@ -3,6 +3,7 @@ is deliberately separate from the tenant login and only ever matches rows
 where tenant_id IS NULL — a normal tenant-scoped user's credentials, even if
 otherwise correct, must never succeed against it."""
 
+
 from app.models.audit_log import AuditLog
 from app.models.tenant import TenantStatus
 from app.models.user import UserRole
@@ -139,8 +140,10 @@ def test_delete_tenant_writes_audit_row(db, client):
     """Tenant delete is the most destructive action in the system, so it
     must leave a durable audit row. It is logged platform-scoped (the
     acting admin has tenant_id NULL — migration 0024), which is what lets
-    the record survive the tenant it describes: a row logged under the
-    tenant's own id would cascade-delete with it (pinned below)."""
+    the record survive the tenant it describes. Since the S-10 fix
+    (2026-11-25) a row logged under the tenant's own id ALSO survives:
+    audit_logs.tenant_id is ON DELETE SET NULL, not CASCADE (pinned
+    below)."""
     admin = _platform_admin(db)
     tenant = make_tenant(db, name="Doomed", slug="doomed", status=TenantStatus.SUSPENDED)
 
@@ -196,11 +199,12 @@ def test_platform_actor_audit_row_has_null_tenant_id(db):
 
 
 def test_tenant_delete_audit_row_under_tenant_id_does_not_survive(db, client):
-    """Pins why the tenant delete is logged platform-scoped (tenant_id
-    NULL) rather than under the deleted tenant's own id: audit_logs
-    .tenant_id is ON DELETE CASCADE by design — a tenant-scoped row dies
-    with its tenant. That is the documented behaviour for tenant history;
-    the deletion record itself survives because it is platform-scoped."""
+    """S-10 (security review 2026-11-25): audit_logs.tenant_id is now ON
+    DELETE SET NULL, not CASCADE — a tenant-scoped audit row SURVIVES
+    its tenant's deletion with tenant_id nulled, instead of being erased
+    with it. The deletion record itself is still logged platform-scoped
+    (tenant_id NULL from the start). Both rows remain after the delete.
+    """
     admin = _platform_admin(db)
     tenant = make_tenant(db, name="Acme", slug="acme-cascade", status=TenantStatus.SUSPENDED)
     tenant_admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
@@ -214,12 +218,16 @@ def test_tenant_delete_audit_row_under_tenant_id_does_not_survive(db, client):
 
     resp = client.delete(f"/api/platform/tenants/{tenant.id}", headers=auth_headers(admin))
     assert resp.status_code == 200
-    # The tenant-scoped row cascaded away; the platform-scoped deletion
-    # record the endpoint itself wrote is the one that remains.
+    # The tenant-scoped row survives with tenant_id nulled (S-10); the
+    # platform-scoped deletion record the endpoint itself wrote is the
+    # second row.
     rows = db.query(AuditLog).all()
-    assert len(rows) == 1
-    assert rows[0].tenant_id is None
-    assert rows[0].action == "tenant_deleted"
+    assert len(rows) == 2
+    assert all(r.tenant_id is None for r in rows)
+    assert {r.action for r in rows} == {"tenant_deleted"}
+    summaries = {r.summary for r in rows}
+    assert "Tenant deleted by platform admin." in summaries
+    assert any("slug=acme-cascade" in s for s in summaries)
 
 
 # ---------- Platform login audit (M7 — migration 0024) ----------

@@ -52,41 +52,60 @@ class UserSummaryOut(BaseModel):
 
 
 class CreateUserRequest(BaseModel):
-    name: str
-    email: str
+    name: str = Field(max_length=MAX_NAME_CHARS)
+    email: str = Field(max_length=MAX_EMAIL_CHARS)
     password: str = Field(min_length=8, max_length=128)
     role: UserRole
     department_id: int | None = None
-    position: str | None = None
+    position: str | None = Field(default=None, max_length=MAX_POSITION_CHARS)
 
     @field_validator("name")
     @classmethod
     def _name_not_blank(cls, v: str) -> str:
         # B-m2: an empty/whitespace-only user name must 422 here, like
         # the rename/edit paths already reject it — never persisted.
-        v = v.strip()
-        if not v:
-            raise ValueError("User name cannot be empty.")
-        return v
+        return _validate_display_name(v)
 
     @field_validator("email")
     @classmethod
     def _email_valid(cls, v: str) -> str:
         return _normalize_email(v)
+
+    @field_validator("position")
+    @classmethod
+    def _position_normalised(cls, v: str | None) -> str | None:
+        return _normalize_position(v)
 
 
 class UpdateUserRequest(BaseModel):
-    name: str
-    email: str
+    name: str = Field(max_length=MAX_NAME_CHARS)
+    email: str = Field(max_length=MAX_EMAIL_CHARS)
     role: UserRole
     department_id: int | None = None
-    position: str | None = None
+    position: str | None = Field(default=None, max_length=MAX_POSITION_CHARS)
     password: str | None = Field(default=None, min_length=8, max_length=128)
+    # M-01: required only when an admin changes their OWN password via
+    # PUT /users/{id} — proves the caller knows the current password
+    # (same 400 as POST /api/auth/change-password on a wrong one).
+    # Changing another user's password never needs it.
+    current_password: str | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, v: str) -> str:
+        # M-34: the update path reused no name validator at all, so a
+        # blank/whitespace-only name was stored — same rule as create.
+        return _validate_display_name(v)
 
     @field_validator("email")
     @classmethod
     def _email_valid(cls, v: str) -> str:
         return _normalize_email(v)
+
+    @field_validator("position")
+    @classmethod
+    def _position_normalised(cls, v: str | None) -> str | None:
+        return _normalize_position(v)
 
 
 class ResetPasswordRequest(BaseModel):
@@ -94,4 +113,9 @@ class ResetPasswordRequest(BaseModel):
 
 
 class CreateDepartmentRequest(BaseModel):
-    name: str
+    name: str = Field(max_length=MAX_DEPARTMENT_NAME_CHARS)
+
+    @field_validator("name")
+    @classmethod
+    def _name_not_blank(cls, v: str) -> str:
+        return _validate_display_name(v, field="department name")

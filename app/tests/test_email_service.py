@@ -113,7 +113,7 @@ def test_send_welcome_email_content(db):
                 side_effect=lambda payloads: email_service._run_sender(payloads),
             ):
                 email_service.send_welcome_email(
-                    "new@example.com", "New Hire", initial_password="Secret123!", org_name="Acme Corp"
+                    "new@example.com", "New Hire", org_name="Acme Corp", setup_token="tok123"
                 )
 
             mock_smtp.send_message.assert_called_once()
@@ -122,8 +122,12 @@ def test_send_welcome_email_content(db):
             assert sent["Subject"] == "[KPI] Your KPI account is ready"
             body = sent.get_content()
             assert "https://kpi.example.com/login" in body
+            assert "https://kpi.example.com/setup-password?token=tok123" in body
             assert "new@example.com" in body
-            assert "Secret123!" in body  # user-requested: password + link are emailed
+            # S-05: the welcome email never carries a password — only the
+            # one-time setup link.
+            assert "Secret123!" not in body
+            assert "Initial password" not in body
             assert "New Hire" in body
             assert "Organization: Acme Corp" in body
 
@@ -139,10 +143,14 @@ def test_send_welcome_email_link_omitted_without_base_url(db):
                 side_effect=lambda payloads: email_service._run_sender(payloads),
             ):
                 email_service.send_welcome_email(
-                    "new@example.com", "New Hire", initial_password="Secret123!"
+                    "new@example.com", "New Hire", org_name="Acme Corp", setup_token="tok123"
                 )
             body = mock_smtp.send_message.call_args[0][0].get_content()
-            assert "Secret123!" in body  # password kept even without a link
+            # S-05: without a base URL there is no setup link to give, and
+            # the password is still never written in the email.
+            assert "setup-password" not in body
+            assert "Secret123!" not in body
+            assert "Initial password" not in body
             assert "Login:" not in body
 
 
@@ -150,11 +158,11 @@ def test_send_welcome_email_sync_reports_success_and_failure(db):
     with patch.object(email_service, "settings", _configured_settings()):
         with patch("smtplib.SMTP") as mock_smtp_cls:
             assert email_service.send_welcome_email_sync(
-                "ok@example.com", "Ok User", "Pass123!"
+                "ok@example.com", "Ok User", org_name="Acme Corp", setup_token="tok1"
             ) is True
             mock_smtp_cls.return_value.send_message.side_effect = RuntimeError("smtp down")
             assert email_service.send_welcome_email_sync(
-                "bad@example.com", "Bad User", "Pass123!"
+                "bad@example.com", "Bad User", org_name="Acme Corp", setup_token="tok2"
             ) is False
 
 

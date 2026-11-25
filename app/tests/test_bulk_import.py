@@ -362,14 +362,19 @@ def test_execute_sends_welcome_emails(db, dept_admin):
     assert mock_welcome.call_count == 2
     sent_to = {c.args[0] for c in mock_welcome.call_args_list}
     assert sent_to == {"aung@example.com", "may@example.com"}
-    passwords = [c.args[2] for c in mock_welcome.call_args_list]
-    assert all(isinstance(p, str) and len(p) >= 8 for p in passwords)
-    assert len(set(passwords)) == 2  # unique per user
+    # S-05: each welcome email carries a one-time setup-link token, never
+    # a password — unique per user, decoding to that user's id.
+    from app.core.security import decode_password_setup_token
+
+    tokens = [c.kwargs["setup_token"] for c in mock_welcome.call_args_list]
+    assert all(isinstance(t, str) and t for t in tokens)
+    assert len(set(tokens)) == 2  # unique per user
     for c in mock_welcome.call_args_list:
+        claims = decode_password_setup_token(c.kwargs["setup_token"])
+        assert claims is not None
+        assert db.get(User, claims.user_id).email == c.args[0]
         assert c.kwargs["org_name"] == "Acme"
     assert result.email_failures == []
-    # API responses never carry passwords — only the email does.
-    assert not any(p in str(result) for p in passwords)
 
 
 def test_execute_welcome_email_failure_reported_not_rolled_back(db, dept_admin):
@@ -379,7 +384,7 @@ def test_execute_welcome_email_failure_reported_not_rolled_back(db, dept_admin):
     parsed = bulk_import_service.parse_import_file(_valid_contents(), db, tenant.id)
     assert parsed.ok
 
-    def _send(to_email, name, password, org_name=None):
+    def _send(to_email, name, org_name=None, setup_token=None):
         return to_email != "may@example.com"
 
     with patch("app.services.bulk_import_service.email_service.send_welcome_email_sync",

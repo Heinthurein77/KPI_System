@@ -8,6 +8,10 @@ kpi_system.db
 kpi_system.db.*
 .pytest_cache/
 
+# Audit-log prune archives (S-10: audit_service prunes to this file; the
+# history lives in the archive, not in git)
+audit-log-archive.jsonl
+
 # Playwright saved auth state (session cookies for the scratch e2e DB)
 frontend/e2e/.auth/
 

@@ -60,8 +60,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.months import MONTH_NAMES
-from app.core.security import hash_password
+from app.core.security import create_password_setup_token, hash_password
 from app.core.timezone import today as app_today
+from app.core.validation import CONTROL_CHARACTERS
 from app.models.tenant import Tenant
 from app.models.user import User, UserRole
 from app.services import audit_service, email_service, kpi_service
@@ -449,12 +450,11 @@ def execute_import(
 
     try:
         created_users: dict[str, User] = {}
-        # Plaintext initial passwords, kept in memory only for the welcome
-        # emails below: hashed immediately, never stored, never returned.
-        initial_passwords: dict[str, str] = {}
         for imp_user in parsed.users:
+            # S-05: a unique random password per user, hashed immediately
+            # and never stored, returned, or emailed — the user signs in
+            # via the one-time set-password link in their welcome email.
             initial_password = generate_initial_password()
-            initial_passwords[imp_user.email] = initial_password
             user = User(
                 tenant_id=dept_admin.tenant_id,
                 name=imp_user.name,
@@ -515,8 +515,8 @@ def execute_import(
 
     # Welcome emails, sent synchronously AFTER the commit so a delivery
     # failure can be reported per user without ever rolling back the
-    # import. Each email carries that user's initial password and the
-    # login link (see email_service.send_welcome_email_sync).
+    # import. Each email carries that user's one-time set-password link
+    # (S-05) and the login link — never the generated initial password.
     tenant = db.get(Tenant, dept_admin.tenant_id)
     org_name = tenant.name if tenant else None
     email_failures: list[str] = []
@@ -524,8 +524,11 @@ def execute_import(
         sent = email_service.send_welcome_email_sync(
             imp_user.email,
             imp_user.name,
-            initial_passwords[imp_user.email],
             org_name=org_name,
+            setup_token=create_password_setup_token(
+                created_users[imp_user.email].id,
+                created_users[imp_user.email].token_version or 0,
+            ),
         )
         if not sent:
             email_failures.append(imp_user.email)

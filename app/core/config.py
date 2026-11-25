@@ -37,9 +37,39 @@ class Settings(BaseSettings):
     # URL(s)). Defaults to the local Vite dev server.
     CORS_ORIGINS: str = "http://localhost:5173"
 
+    @field_validator("CORS_ORIGINS")
+    @classmethod
+    def _cors_no_wildcard(cls, v: str) -> str:
+        # M-08 (security review 2026-11-25): "*" with allow_credentials=True
+        # would let ANY site call the API with the user's session cookies.
+        # Reject it at startup instead of silently serving a wildcard —
+        # the operator must name the exact frontend origin(s). Enforced in
+        # every environment: there is no safe use of "*" with credentials.
+        if "*" in [o.strip() for o in v.split(",") if o.strip()]:
+            raise ValueError(
+                "CORS_ORIGINS must not contain '*': credentials are enabled, "
+                "so name the exact frontend origin(s)."
+            )
+        return v
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
+
+    # Trusted proxy peers for X-Forwarded-For / X-Forwarded-Proto
+    # (M-12): the app only honours forwarding headers from these peers.
+    # Default is loopback plus the Docker bridge space Caddy lives on
+    # (the compose network hands Caddy an address in 172.16.0.0/12).
+    # On the server, pin this to the actual Caddy peer — the compose
+    # network CIDR (see `docker network inspect <project>_default`) or
+    # the Caddy container's address — so no other container on the host
+    # can forge X-Forwarded-For and defeat the Attendance WiFi gate or
+    # the per-IP login limit. Comma-separated CIDRs.
+    TRUSTED_PROXY_CIDRS: str = "127.0.0.0/8,::1/128,172.16.0.0/12"
+
+    @property
+    def trusted_proxy_networks(self) -> list[str]:
+        return [c.strip() for c in self.TRUSTED_PROXY_CIDRS.split(",") if c.strip()]
 
     # Falls back to local SQLite when DATABASE_URL is not set (e.g. Neon.tech Postgres URL)
     DATABASE_URL: str | None = None

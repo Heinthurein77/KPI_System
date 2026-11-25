@@ -68,6 +68,30 @@ def test_update_settings_toggles_preference(client, db):
     assert resp.json() == {"email_enabled": True}
 
 
+def test_update_settings_is_audited(db, client):
+    # S-09: toggling notification emails is an audit event — a silent
+    # toggle could hide workflow notifications from the user.
+    from sqlalchemy import select
+
+    from app.models.audit_log import AuditLog
+
+    tenant, user = _setup(db)
+    resp = client.put(
+        "/api/notifications/settings",
+        json={"email_enabled": False},
+        headers=auth_headers(user, tenant),
+    )
+    assert resp.status_code == 200, resp.text
+    row = db.scalars(
+        select(AuditLog).where(
+            AuditLog.action == "notification_settings_updated",
+            AuditLog.entity_id == user.id,
+        )
+    ).first()
+    assert row is not None
+    assert "False" in row.summary
+
+
 def test_settings_require_auth(client, db):
     assert client.get("/api/notifications/settings").status_code == 401
     assert client.put("/api/notifications/settings", json={"email_enabled": False}).status_code == 401

@@ -17,6 +17,7 @@ import { formatHoliday, normalizeHolidays, validateHolidayRows } from "../utils/
 import { middayLabel } from "../utils/time";
 import { downloadBlob } from "../utils/download";
 import {
+  approveLeave,
   checkIn,
   checkOut,
   deleteAttendanceRecord,
@@ -27,6 +28,7 @@ import {
   getAttendanceSummary,
   getAttendanceToday,
   markLeave,
+  rejectLeave,
   updateAttendanceRecord,
   updateAttendanceSettings,
 } from "../api/attendance";
@@ -54,6 +56,32 @@ function StatusPill({ status }) {
       }`}
     >
       {STATUS_LABEL[status] || status}
+    </span>
+  );
+}
+
+// S-15: leave approval state, shown next to the Leave pill. Pending leave
+// counts as an absence until an admin approves it.
+const LEAVE_APPROVAL_PILL = {
+  pending: "bg-amber-50 text-amber-700 ring-1 ring-amber-600/20",
+  approved: "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-600/20",
+  rejected: "bg-rose-50 text-rose-700 ring-1 ring-rose-600/20",
+};
+const LEAVE_APPROVAL_LABEL = {
+  pending: "Pending approval",
+  approved: "Approved",
+  rejected: "Rejected",
+};
+
+function LeaveApprovalBadge({ approval }) {
+  if (!approval) return null;
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${
+        LEAVE_APPROVAL_PILL[approval] || "bg-slate-100 text-slate-600"
+      }`}
+    >
+      {LEAVE_APPROVAL_LABEL[approval] || approval}
     </span>
   );
 }
@@ -315,8 +343,14 @@ export default function AttendancePage() {
     setNotice("");
     setBusy(true);
     try {
-      await markLeave(leaveDate);
-      setNotice(`Leave recorded for ${leaveDate}. · ခွင့်မှတ်ပြီးပြီ။`);
+      const created = await markLeave(leaveDate);
+      // S-15: an employee's own leave is pending until an admin approves
+      // it — say so in the notice instead of implying it is final.
+      setNotice(
+        created?.leave_approval === "pending"
+          ? `Leave recorded for ${leaveDate} — pending approval. · ခွင့်မှတ်ပြီးပြီ၊ အတည်ပြုဖို့စောင့်နေတယ်။`
+          : `Leave recorded for ${leaveDate}. · ခွင့်မှတ်ပြီးပြီ။`
+      );
       setLeaveDate("");
       await load();
     } catch (e) {
@@ -373,10 +407,41 @@ export default function AttendancePage() {
 
   // Edit/Delete buttons for a leave row, shared by the own-records table
   // and the per-person records modal. Delete is tenant-admin-only on the
-  // backend, so the button is hidden for everyone else.
+  // backend, so the button is hidden for everyone else. S-15: admins also
+  // get Approve/Reject here for pending leave that is not their own —
+  // the backend enforces the same rules (no self-review, own dept only).
   function leaveActions(r) {
+    const canReview =
+      (isAdmin || isDeptAdmin) &&
+      r.status === "leave" &&
+      r.leave_approval === "pending" &&
+      r.employee_id !== user?.id;
     return (
       <span className="inline-flex gap-1.5">
+        {canReview && (
+          <>
+            <button
+              type="button"
+              onClick={() => handleReviewLeave(r, true)}
+              disabled={recordBusy}
+              title={`Approve leave day ${r.record_date}`}
+              aria-label={`Approve leave day ${r.record_date}`}
+              className="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 shadow-sm transition hover:bg-emerald-100 disabled:opacity-40"
+            >
+              Approve
+            </button>
+            <button
+              type="button"
+              onClick={() => handleReviewLeave(r, false)}
+              disabled={recordBusy}
+              title={`Reject leave day ${r.record_date}`}
+              aria-label={`Reject leave day ${r.record_date}`}
+              className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-semibold text-rose-700 shadow-sm transition hover:bg-rose-100 disabled:opacity-40"
+            >
+              Reject
+            </button>
+          </>
+        )}
         <button
           type="button"
           onClick={() => openEditLeave(r)}
@@ -399,6 +464,27 @@ export default function AttendancePage() {
         )}
       </span>
     );
+  }
+
+  async function handleReviewLeave(record, approve) {
+    if (recordBusy) return;
+    setError("");
+    setNotice("");
+    setRecordBusy(true);
+    try {
+      await (approve ? approveLeave(record.id) : rejectLeave(record.id));
+      setNotice(
+        approve
+          ? `Leave approved for ${record.record_date}.`
+          : `Leave rejected for ${record.record_date}.`
+      );
+      await load();
+      if (viewingPerson) await refreshPersonSummary(viewingPerson);
+    } catch (e) {
+      setError(getErrorMessage(e));
+    } finally {
+      setRecordBusy(false);
+    }
   }
 
   // Departments present in the loaded report rows (sorted by name).
@@ -661,6 +747,7 @@ export default function AttendancePage() {
                     Check-out <span className="font-semibold tabular-nums text-slate-900">{record.check_out || "—"}</span>
                   </span>
                   <StatusPill status={record.status} />
+                  {record.status === "leave" && <LeaveApprovalBadge approval={record.leave_approval} />}
                   {!record.check_out && record.status !== "leave" && (
                     <span className="text-xs text-slate-400">Not checked out yet</span>
                   )}
@@ -754,7 +841,12 @@ export default function AttendancePage() {
                       <td className="px-4 py-2.5 tabular-nums text-slate-900">{r.record_date}</td>
                       <td className="px-4 py-2.5 tabular-nums text-slate-700">{r.check_in || "—"}</td>
                       <td className="px-4 py-2.5 tabular-nums text-slate-700">{r.check_out || "—"}</td>
-                      <td className="px-4 py-2.5"><StatusPill status={r.status} /></td>
+                      <td className="px-4 py-2.5">
+                        <span className="inline-flex flex-wrap items-center gap-1.5">
+                          <StatusPill status={r.status} />
+                          {r.status === "leave" && <LeaveApprovalBadge approval={r.leave_approval} />}
+                        </span>
+                      </td>
                       <td className="px-4 py-2.5 text-right">
                         {r.status === "leave" && leaveActions(r)}
                       </td>
@@ -956,7 +1048,12 @@ export default function AttendancePage() {
                         <td className="px-4 py-2.5 tabular-nums text-slate-900">{r.record_date}</td>
                         <td className="px-4 py-2.5 tabular-nums text-slate-700">{r.check_in || "—"}</td>
                         <td className="px-4 py-2.5 tabular-nums text-slate-700">{r.check_out || "—"}</td>
-                        <td className="px-4 py-2.5"><StatusPill status={r.status} /></td>
+                        <td className="px-4 py-2.5">
+                          <span className="inline-flex flex-wrap items-center gap-1.5">
+                            <StatusPill status={r.status} />
+                            {r.status === "leave" && <LeaveApprovalBadge approval={r.leave_approval} />}
+                          </span>
+                        </td>
                         <td className="px-4 py-2.5 text-right">
                           {r.status === "leave" && leaveActions(r)}
                         </td>

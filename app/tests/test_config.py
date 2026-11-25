@@ -73,3 +73,20 @@ def test_ignored_env_vars_are_surfaced(monkeypatch):
     assert "SECRET_KEY" not in flagged
     assert "HOME" not in flagged
     assert "PATH" not in flagged
+
+
+# --------------------------------------------------------------------- M-08
+
+
+def test_cors_wildcard_is_rejected(monkeypatch):
+    # M-08: "*" with allow_credentials=True would let ANY site call the
+    # API with the user's session cookies — rejected at startup.
+    with pytest.raises(ValidationError, match="must not contain"):
+        build(monkeypatch, CORS_ORIGINS="*")
+    with pytest.raises(ValidationError, match="must not contain"):
+        build(monkeypatch, CORS_ORIGINS="http://localhost:5173, *")
+
+
+def test_cors_named_origins_are_accepted(monkeypatch):
+    s = build(monkeypatch, CORS_ORIGINS="http://localhost:5173, https://kpi.example.com")
+    assert s.cors_origins_list == ["http://localhost:5173", "https://kpi.example.com"]

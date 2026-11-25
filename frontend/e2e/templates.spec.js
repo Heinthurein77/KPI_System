@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { accounts } from "./helpers.js";
+import { accounts, apiHeaders } from "./helpers.js";
 
 // Runs authenticated as the dept admin from the saved auth state
 // (auth.setup.js) instead of logging in — the login endpoint is
@@ -32,8 +32,9 @@ test("add custom KPI happy path: dept admin assigns a KPI to a fresh employee", 
 
   // The API client sends X-Tenant-Slug on every request (from
   // localStorage); page.request does not, so pass it explicitly or the
-  // backend cannot resolve the tenant (400).
-  const tenantHeaders = { "X-Tenant-Slug": accounts.slug };
+  // backend cannot resolve the tenant (400). Mutations also need the
+  // CSRF header (M-37) — apiHeaders reads it from the page's cookies.
+  const tenantHeaders = await apiHeaders(page);
   const created = await page.request.post(`${API_BASE}/api/admin/users`, {
     headers: tenantHeaders,
     data: {
@@ -99,7 +100,7 @@ test("add custom KPI happy path: dept admin assigns a KPI to a fresh employee", 
     });
     const tenantAdminPage = await tenantAdminContext.newPage();
     await tenantAdminPage.request.delete(`${API_BASE}/api/admin/users/${employee.id}`, {
-      headers: tenantHeaders,
+      headers: await apiHeaders(tenantAdminPage),
     });
     await tenantAdminContext.close();
   }

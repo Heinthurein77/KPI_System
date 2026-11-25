@@ -24,6 +24,21 @@ if (import.meta.env.VITE_API_BASE_URL === undefined && import.meta.env.PROD) {
 
 const client = axios.create({ baseURL: API_BASE_URL, withCredentials: true });
 
+// S-03: one in-flight silent refresh, shared by every request that 401s
+// at the same time — a burst of requests after the 1h access token
+// expires costs one refresh, not N. The promise is cleared in `finally`
+// so a later expiry can refresh again.
+let refreshPromise = null;
+
+function refreshSession() {
+  if (!refreshPromise) {
+    refreshPromise = client.post("/api/auth/refresh").finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
+}
+
 client.interceptors.request.use((config) => {
   // Session auth travels in the httpOnly cookie (set by the server on login),
   // so no Authorization header is needed — and JS can never read the token.
@@ -38,24 +53,21 @@ client.interceptors.request.use((config) => {
 
 client.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
     if (!error.response) {
       // Request never got a response at all: wrong base URL, CORS block, DNS
       // failure, or the server is down — distinct from a 4xx/5xx the API returned.
       error.message = `Could not reach the API at ${API_BASE_URL}. Check the base URL and CORS configuration.`;
     } else if (error.response.status === 401) {
-      // Session expired, token revoked, or account disabled mid-session:
-      // send the user back to sign in. The session cookie itself is
-      // httpOnly, so only the server can clear it — a fresh login replaces
-      // it. The tenant slug is deliberately KEPT here: it is only the
-      // routing hint the login form needs, and wiping it on any transient
-      // 401 (e.g. a token_version bump from a password change elsewhere)
-      // forced the user to retype their org slug. Only a genuine
-      // tenant-context failure clears it (see the 400 branch below).
-      // Skip when the failing request is itself a login attempt or we're
-      // already on a login page, so failed logins still show their error
-      // message. Platform admins go to their own login — org credentials
-      // don't work there and vice versa.
+      // Session expired, token revoked, or account disabled mid-session.
+      // S-03: try ONE silent rotating refresh and retry the original
+      // request once before giving up — the 1h access token expiring
+      // mid-session must not throw the user to the login page when the
+      // refresh token is still valid. Skip when the failing request is
+      // itself a login/TOTP/refresh/setup attempt or we're already on a
+      // login page, so failed logins still show their error message.
+      // Platform admins go to their own login — org credentials don't
+      // work there and vice versa.
       // NOTE: this must depend on the current path ONLY. A logged-out visitor
       // has no tenant slug either, and the old `|| !tenant_slug` clause sent
       // every such visitor (e.g. opening /dashboard) to /platform/login
@@ -64,8 +76,25 @@ client.interceptors.response.use(
       const pathname = window.location.pathname;
       const onLoginPage = /\/login\/?$/.test(pathname);
       const isLoginRequest = /\/auth\/login\/?$/.test(url);
+      const isTotpRequest = /\/auth\/login\/totp\/?$/.test(url);
+      const isRefreshRequest = /\/auth\/refresh\/?$/.test(url);
+      const isSetupRequest = /\/auth\/setup-password\/?$/.test(url);
       const isPlatform = pathname.startsWith("/platform");
-      if (!onLoginPage && !isLoginRequest) {
+      if (!onLoginPage && !isLoginRequest && !isTotpRequest && !isRefreshRequest && !isSetupRequest) {
+        if (error.config && !error.config._retry) {
+          try {
+            await refreshSession();
+            error.config._retry = true;
+            return client(error.config);
+          } catch {
+            // Refresh failed — the session is dead; fall through to login.
+          }
+        }
+        // The tenant slug is deliberately KEPT here: it is only the
+        // routing hint the login form needs, and wiping it on any transient
+        // 401 (e.g. a token_version bump from a password change elsewhere)
+        // forced the user to retype their org slug. Only a genuine
+        // tenant-context failure clears it (see the 400 branch below).
         window.location.href = isPlatform ? "/platform/login" : "/login";
       }
     } else if (error.response.status === 400) {

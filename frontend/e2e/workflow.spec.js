@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { accounts, openFillablePeriod } from "./helpers.js";
+import { accounts, apiHeaders, openFillablePeriod } from "./helpers.js";
 
 // Core KPI workflow (T-M1): the actual submit → dept-approve →
 // final-approve flow, which previously had zero browser coverage.
@@ -28,8 +28,11 @@ const DEPARTMENT = "General";
 const tenantHeaders = { "X-Tenant-Slug": accounts.slug };
 
 async function resetTemplate(page) {
+  // Mutations in this helper go through page.request (no Origin), so
+  // they need the CSRF header — see apiHeaders in helpers.js (M-37).
+  const headers = await apiHeaders(page);
   const listed = await page.request.get(`${API_BASE}/api/admin/templates`, {
-    headers: tenantHeaders,
+    headers,
   });
   expect(listed.ok()).toBeTruthy();
   const templates = await listed.json();
@@ -39,13 +42,13 @@ async function resetTemplate(page) {
   if (mine) {
     const deleted = await page.request.delete(
       `${API_BASE}/api/admin/templates/${mine.id}`,
-      { headers: tenantHeaders },
+      { headers },
     );
     expect(deleted.ok()).toBeTruthy();
   }
 
   const depts = await page.request.get(`${API_BASE}/api/admin/departments`, {
-    headers: tenantHeaders,
+    headers,
   });
   expect(depts.ok()).toBeTruthy();
   const deptList = await depts.json();
@@ -53,7 +56,7 @@ async function resetTemplate(page) {
   expect(dept, `seed department ${DEPARTMENT} must exist`).toBeTruthy();
 
   const created = await page.request.post(`${API_BASE}/api/admin/templates`, {
-    headers: tenantHeaders,
+    headers,
     data: {
       metric_name: METRIC,
       target: 100,
@@ -65,8 +68,9 @@ async function resetTemplate(page) {
 }
 
 async function deleteTemplate(page) {
+  const headers = await apiHeaders(page);
   const listed = await page.request.get(`${API_BASE}/api/admin/templates`, {
-    headers: tenantHeaders,
+    headers,
   });
   if (!listed.ok()) return;
   const templates = await listed.json();
@@ -75,7 +79,7 @@ async function deleteTemplate(page) {
   );
   if (mine) {
     await page.request.delete(`${API_BASE}/api/admin/templates/${mine.id}`, {
-      headers: tenantHeaders,
+      headers,
     });
   }
 }

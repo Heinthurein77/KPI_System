@@ -9,6 +9,7 @@ from app.core.deps import get_current_user
 from app.database import get_db
 from app.models.notification import Notification
 from app.models.user import User
+from app.services import audit_service
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
@@ -51,7 +52,16 @@ def update_notification_settings(
     user: User = Depends(get_current_user),
 ):
     """Toggle workflow notification emails (in-app notifications are unaffected)."""
+    # S-09: a settings change that controls whether the user receives
+    # email is an auditable event — a silent toggle could hide workflow
+    # notifications from the user.
+    old = user.email_notifications
     user.email_notifications = payload.email_enabled
+    audit_service.log(
+        db, user, "notification_settings_updated", "user", user.id, user.name,
+        f"Notification emails changed from {old} to {payload.email_enabled} by {user.name}.",
+        department_id=user.department_id,
+    )
     db.commit()
     db.refresh(user)
     return NotificationSettingsOut(email_enabled=user.email_notifications)

@@ -50,3 +50,19 @@ export function openFillablePeriod(now = new Date()) {
   if (now.getMonth() === 0) return { year: now.getFullYear() - 1, period: "December" };
   return { year: now.getFullYear(), period: MONTHS[now.getMonth() - 1] };
 }
+
+/** M-37: headers for raw API calls from a spec. The backend rejects a
+ * headerless cookie-authenticated mutation without an X-CSRF-Token, and
+ * Playwright's page.request sends no Origin — so a raw POST/DELETE
+ * carrying the session cookie 403s unless the double-submit token goes
+ * with it. Read the csrf_token cookie from the page's context and send
+ * it back as the header (the value only has to match the cookie — the
+ * server keeps no copy). GETs don't need it, but the same headers are
+ * harmless for them. */
+export async function apiHeaders(page) {
+  const cookies = await page.context().cookies();
+  const csrf = cookies.find((c) => c.name === "csrf_token");
+  const headers = { "X-Tenant-Slug": accounts.slug };
+  if (csrf) headers["X-CSRF-Token"] = csrf.value;
+  return headers;
+}

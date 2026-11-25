@@ -26,6 +26,18 @@ export function markLeave(recordDate) {
     .then((r) => r.data);
 }
 
+export function approveLeave(recordId) {
+  return client
+    .post(`/api/attendance/leave/${recordId}/approve`)
+    .then((r) => r.data);
+}
+
+export function rejectLeave(recordId) {
+  return client
+    .post(`/api/attendance/leave/${recordId}/reject`)
+    .then((r) => r.data);
+}
+
 export function updateAttendanceRecord(recordId, recordDate) {
   return client
     .patch(`/api/attendance/records/${recordId}`, { record_date: recordDate })

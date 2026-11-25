@@ -144,6 +144,10 @@ class AttendanceRecordOut(BaseModel):
     check_in: str | None = None
     check_out: str | None = None
     status: str
+    # S-15: leave approval state — None for non-leave records and legacy
+    # leave rows (which count as approved); "pending"/"approved"/
+    # "rejected" for leave recorded after approval existed.
+    leave_approval: str | None = None
     # NOTE: late_minutes is recorded in the DB but deliberately NOT exposed
     # here (user decision — removed from UI + export too).
 

@@ -278,6 +278,18 @@ def test_leave_marks_day_and_counts_as_absent(client, db):
     )
     assert resp.status_code == 201, resp.text
     assert resp.json()["status"] == "leave"
+    # S-15: an employee's own leave is pending until an admin approves it —
+    # until then it counts as an absence, not leave.
+    summary = client.get(
+        "/api/attendance/summary", params={"year": year, "month": month},
+        headers=auth_headers(employee, tenant),
+    ).json()
+    assert summary["leave"] == 0
+    record_id = resp.json()["id"]
+    assert client.post(
+        f"/api/attendance/leave/{record_id}/approve",
+        headers=auth_headers(admin, tenant),
+    ).status_code == 200
     summary = client.get(
         "/api/attendance/summary", params={"year": year, "month": month},
         headers=auth_headers(employee, tenant),

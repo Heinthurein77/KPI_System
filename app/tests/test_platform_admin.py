@@ -3,6 +3,7 @@ is deliberately separate from the tenant login and only ever matches rows
 where tenant_id IS NULL — a normal tenant-scoped user's credentials, even if
 otherwise correct, must never succeed against it."""
 
+from sqlalchemy import select
 
 from app.models.audit_log import AuditLog
 from app.models.tenant import TenantStatus
@@ -350,3 +351,77 @@ def test_platform_audit_log_paging_and_limit_clamp(db, client):
     assert under.status_code == 200
     assert len(under.json()) == 1
     assert under.json()[0]["action"] == "tenant_deleted"
+
+
+# ---------------------------------------------------------------------------
+# M-02 remainder: platform reset of a tenant admin's password (2026-11-25).
+# The tenant endpoint deliberately 403s this; this endpoint is the only path.
+# ---------------------------------------------------------------------------
+
+
+def test_platform_resets_tenant_admin_password(db, client):
+    platform = make_user(db, None, UserRole.SUPER_ADMIN, email="root-reset@platform.example.com")
+    tenant = make_tenant(db)
+    target = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    old_version = target.token_version or 0
+
+    resp = client.post(
+        f"/api/platform/users/{target.id}/reset-password",
+        json={"password": "ResetPass123!"},
+        headers=auth_headers(platform),
+    )
+    assert resp.status_code == 200, resp.text
+    db.refresh(target)
+    assert target.must_change_password is True
+    assert (target.token_version or 0) == old_version + 1
+
+    # The new password works at the tenant login.
+    resp = client.post(
+        "/api/auth/login",
+        json={"email": target.email, "password": "ResetPass123!"},
+        headers={"X-Tenant-Slug": tenant.slug},
+    )
+    assert resp.status_code == 200, resp.text
+
+    # The reset is audited (platform-scoped row).
+    row = db.scalars(
+        select(AuditLog).where(
+            AuditLog.action == "user_password_reset", AuditLog.entity_id == target.id
+        )
+    ).first()
+    assert row is not None
+    assert row.actor_id == platform.id
+
+
+def test_platform_reset_rejects_non_tenant_admin(db, client):
+    platform = make_user(db, None, UserRole.SUPER_ADMIN, email="root-reset2@platform.example.com")
+    tenant = make_tenant(db)
+    employee = make_user(db, tenant, UserRole.EMPLOYEE)
+    resp = client.post(
+        f"/api/platform/users/{employee.id}/reset-password",
+        json={"password": "ResetPass123!"},
+        headers=auth_headers(platform),
+    )
+    assert resp.status_code == 400, resp.text
+
+
+def test_platform_reset_rejects_unknown_user(db, client):
+    platform = make_user(db, None, UserRole.SUPER_ADMIN, email="root-reset3@platform.example.com")
+    resp = client.post(
+        "/api/platform/users/999999/reset-password",
+        json={"password": "ResetPass123!"},
+        headers=auth_headers(platform),
+    )
+    assert resp.status_code == 404, resp.text
+
+
+def test_platform_reset_rejects_tenant_admin_caller(db, client):
+    tenant = make_tenant(db)
+    caller = make_user(db, tenant, UserRole.TENANT_ADMIN)
+    target = make_user(db, tenant, UserRole.TENANT_ADMIN, email="other-admin@example.com")
+    resp = client.post(
+        f"/api/platform/users/{target.id}/reset-password",
+        json={"password": "ResetPass123!"},
+        headers=auth_headers(caller, tenant),
+    )
+    assert resp.status_code in (401, 403), resp.text

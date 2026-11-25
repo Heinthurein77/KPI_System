@@ -46,6 +46,26 @@ def _att_setup(db):
     return tenant, dept, admin, emp
 
 
+def _leave_day_in_current_month(exclude=None):
+    """A day inside the current month (S-15 leave window: leave can
+    only be marked within the current month), other than `exclude`.
+    The old `today + 7 days` crossed into next month near month-end."""
+    from datetime import timedelta
+
+    from app.core.timezone import today as app_today
+
+    today = app_today()
+    for delta in range(1, 8):
+        day = today + timedelta(days=delta)
+        if day.month == today.month and day != exclude:
+            return day
+    for delta in range(1, 8):
+        day = today - timedelta(days=delta)
+        if day.month == today.month and day != exclude:
+            return day
+    return today
+
+
 # ---------------------------------------------------------------- M4
 
 
@@ -135,13 +155,11 @@ def test_attendance_settings_patch_and_leave_are_audited(client, db):
     tenant, _, admin, emp = _att_setup(db)
     _set_office_wifi(client, admin, tenant)
     assert "attendance_settings_updated" in _audit_actions(client, admin, tenant)
-    from datetime import timedelta
-
-    from app.core.timezone import today as app_today
-
     # Relative date, not a hardcoded one: the old literal 2026-11-20
     # collided with a same-day check-in once the calendar reached it.
-    leave_date = app_today() + timedelta(days=7)
+    # Inside the current month (S-15 leave window) — today + 7 days
+    # crosses into next month near month-end.
+    leave_date = _leave_day_in_current_month()
     resp = client.post(
         "/api/attendance/leave",
         json={"record_date": leave_date.isoformat()},
@@ -181,11 +199,9 @@ def test_delete_checkin_record_is_rejected_but_leave_delete_works(client, db):
     # A leave record can still be deleted, and the delete is audited.
     # Leave is a different day from today's check-in above, so no
     # same-day record conflict (see the hardcoded-date note above).
-    from datetime import timedelta
-
     from app.core.timezone import today as app_today
 
-    leave_date = app_today() + timedelta(days=7)
+    leave_date = _leave_day_in_current_month(exclude=app_today())
     resp = client.post(
         "/api/attendance/leave",
         json={"record_date": leave_date.isoformat()},

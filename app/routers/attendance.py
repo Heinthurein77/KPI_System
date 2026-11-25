@@ -228,6 +228,7 @@ def _serialize(
         check_in=record.check_in.strftime("%H:%M") if record.check_in else None,
         check_out=record.check_out.strftime("%H:%M") if record.check_out else None,
         status=record.status,
+        leave_approval=record.leave_approval,
     )
 
 
@@ -331,6 +332,14 @@ def _working_days(
     ]
 
 
+def _counts_as_leave(record: AttendanceRecord) -> bool:
+    """S-15: only approved (or legacy, leave_approval NULL) leave counts
+    as leave in summaries/exports. Pending/rejected leave is an absence
+    until an admin approves it — an employee cannot turn an absence into
+    leave by marking it themselves."""
+    return record.status == "leave" and record.leave_approval not in ("pending", "rejected")
+
+
 def _summary_for(
     db: Session,
     tenant_id: int,
@@ -353,7 +362,9 @@ def _summary_for(
                 AttendanceRecord.record_date <= end,
             )
         ).all()
-    by_date = {r.record_date: r.status for r in records}
+    by_date = {
+        r.record_date: r.status for r in records if r.status != "leave" or _counts_as_leave(r)
+    }
     working = _working_days(db, tenant_id, year, month, cfg=cfg)
     result = monthly_summary(by_date, working)
     # M-31: the department shown is the one the month's records were
@@ -790,6 +801,9 @@ def mark_leave(
         department_id=target.department_id,
         record_date=payload.record_date,
         status="leave",
+        # S-15: an admin marking leave for someone else approves it by
+        # that action; anyone marking their own leave sends it for review.
+        leave_approval="approved" if target_id != user.id else "pending",
     )
     db.add(record)
     # M1: the pre-check above can race a concurrent check-in/leave for
@@ -800,7 +814,9 @@ def mark_leave(
         audit_service.log(
             db, user, "attendance_leave_created", "attendance_record",
             record.id, f"{target.name} — {payload.record_date.isoformat()}",
-            f"Leave marked for {target.name} on {payload.record_date.isoformat()} by {user.name}.",
+            ("RETROACTIVE — " if retroactive else "")
+            + f"Leave marked for {target.name} on {payload.record_date.isoformat()} by {user.name} "
+            f"({'approved' if record.leave_approval == 'approved' else 'pending approval'}).",
             department_id=target.department_id,
         )
         db.commit()
@@ -820,8 +836,82 @@ def mark_leave(
     return _serialize(db, record)
 
 
+# ------------------------------------------------------------------ leave approval (S-15)
+
+
+def _reviewable_leave(db: Session, record_id: int, user: User) -> AttendanceRecord:
+    """Load a leave record for the approve/reject endpoints, enforcing
+    the review rules: only dept/tenant admins may review, a dept admin
+    only for their own department (snapshot department_id on the record),
+    and nobody may approve their own leave."""
+    record = db.get(AttendanceRecord, record_id)
+    if record is None or record.tenant_id != user.tenant_id:
+        raise HTTPException(404, "Attendance record not found.")
+    if record.status != "leave":
+        raise HTTPException(400, "Only leave records can be approved or rejected.")
+    if user.role == UserRole.EMPLOYEE:
+        raise HTTPException(403, "Only admins can review leave.")
+    if user.role == UserRole.DEPT_ADMIN and (
+        not user.department_id or record.department_id != user.department_id
+    ):
+        raise HTTPException(403, "You can only review leave in your own department.")
+    if record.employee_id == user.id:
+        raise HTTPException(403, "You cannot review your own leave.")
+    if record.leave_approval != "pending":
+        raise HTTPException(409, "This leave has already been reviewed.")
+    return record
+
+
+@router.post("/leave/{record_id}/approve", response_model=AttendanceRecordOut)
+@limiter.limit(ATTENDANCE_RATE_LIMIT, key_func=_authenticated_user_key)
+def approve_leave(
+    request: Request,
+    record_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_tenant_member),
+):
+    """Approve a pending leave day — it counts as leave from now on."""
+    record = _reviewable_leave(db, record_id, user)
+    record.leave_approval = "approved"
+    audit_service.log(
+        db, user, "attendance_leave_approved", "attendance_record",
+        record.id, f"Leave — {record.record_date.isoformat()}",
+        f"Leave for user {record.employee_id} on {record.record_date.isoformat()} "
+        f"approved by {user.name}.",
+        department_id=record.department_id,
+    )
+    db.commit()
+    db.refresh(record)
+    return _serialize(db, record)
+
+
+@router.post("/leave/{record_id}/reject", response_model=AttendanceRecordOut)
+@limiter.limit(ATTENDANCE_RATE_LIMIT, key_func=_authenticated_user_key)
+def reject_leave(
+    request: Request,
+    record_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_tenant_member),
+):
+    """Reject a pending leave day — it stays an absence."""
+    record = _reviewable_leave(db, record_id, user)
+    record.leave_approval = "rejected"
+    audit_service.log(
+        db, user, "attendance_leave_rejected", "attendance_record",
+        record.id, f"Leave — {record.record_date.isoformat()}",
+        f"Leave for user {record.employee_id} on {record.record_date.isoformat()} "
+        f"rejected by {user.name}.",
+        department_id=record.department_id,
+    )
+    db.commit()
+    db.refresh(record)
+    return _serialize(db, record)
+
+
 @router.patch("/records/{record_id}", response_model=AttendanceRecordOut)
+@limiter.limit(ATTENDANCE_RATE_LIMIT, key_func=_authenticated_user_key)
 def update_record(
+    request: Request,
     record_id: int,
     payload: LeaveUpdate,
     db: Session = Depends(get_db),
@@ -876,11 +966,19 @@ def update_record(
     if existing is not None:
         raise HTTPException(409, "An attendance record already exists for this day.")
     old_date = record.record_date
+    # S-15: moving an approved leave day is a new leave request — the
+    # approval does not travel to the new date. An admin moving someone
+    # else's leave re-approves it by that action; the owner moving their
+    # own leave sends it back to pending.
+    if record.status == "leave" and record.record_date != payload.record_date:
+        if record.employee_id == user.id:
+            record.leave_approval = "pending"
     record.record_date = payload.record_date
     audit_service.log(
         db, user, "attendance_leave_updated", "attendance_record",
         record.id, f"Leave — {payload.record_date.isoformat()}",
-        f"Leave moved for user {record.employee_id}: "
+        ("RETROACTIVE — " if retroactive else "")
+        + f"Leave moved for user {record.employee_id}: "
         f"{old_date.isoformat()} → {payload.record_date.isoformat()} by {user.name}.",
         department_id=record.department_id,
     )
@@ -1099,6 +1197,10 @@ def export_report(
         dept_name = u.department.name if u.department else "—"
         for day in working:
             record = records.get(day)
+            # S-15: unapproved leave is an absence in the export, same as
+            # in the summary — only approved (or legacy) leave is leave.
+            if record is not None and record.status == "leave" and not _counts_as_leave(record):
+                record = None
             if record is None:
                 entries.append(
                     {

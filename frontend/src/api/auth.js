@@ -38,9 +38,103 @@ export function logout() {
   return client.post("/api/auth/logout").then((r) => r.data);
 }
 
+// S-03: rotating refresh. The refresh token lives in an httpOnly cookie;
+// this call swaps it (and the access cookie) for a fresh pair. In-flight
+// refreshes are shared so parallel 401s don't each mint a new token and
+// invalidate each other through rotation.
+let refreshPromise = null;
+export function refreshSession() {
+  if (!refreshPromise) {
+    refreshPromise = client
+      .post("/api/auth/refresh")
+      .then((r) => r.data)
+      .finally(() => {
+        refreshPromise = null;
+      });
+  }
+  return refreshPromise;
+}
+
+// S-02: second login step for TOTP-enrolled accounts. The password step
+// returns { totp_required: true } and sets a short-lived pending cookie;
+// this call completes the login. One endpoint serves tenant + platform
+// logins (the pending token carries the tenant). Pass a recovery code
+// instead of a 6-digit code with { recoveryCode }.
+export function verifyTotp(code, recoveryCode) {
+  const body = recoveryCode ? { recovery_code: recoveryCode } : { code };
+  return client.post("/api/auth/login/totp", body).then((r) => r.data);
+}
+
+// S-02: TOTP enrolment + management (tenant session). Platform admins
+// use the /api/platform/auth/totp/* variants below.
+export function getTotpStatus() {
+  return client.get("/api/auth/totp/status").then((r) => r.data);
+}
+
+export function enrollTotp() {
+  return client.post("/api/auth/totp/enroll").then((r) => r.data);
+}
+
+export function verifyTotpEnrolment(code) {
+  return client.post("/api/auth/totp/verify-enrolment", { code }).then((r) => r.data);
+}
+
+export function disableTotp(password) {
+  return client.post("/api/auth/totp/disable", { password });
+}
+
+export function regenerateTotpRecoveryCodes(password) {
+  return client.post("/api/auth/totp/recovery-codes/regenerate", { password }).then((r) => r.data);
+}
+
+export function getPlatformTotpStatus() {
+  return client.get("/api/platform/auth/totp/status").then((r) => r.data);
+}
+
+export function enrollPlatformTotp() {
+  return client.post("/api/platform/auth/totp/enroll").then((r) => r.data);
+}
+
+export function verifyPlatformTotpEnrolment(code) {
+  return client.post("/api/platform/auth/totp/verify-enrolment", { code }).then((r) => r.data);
+}
+
+export function disablePlatformTotp(password) {
+  return client.post("/api/platform/auth/totp/disable", { password });
+}
+
+export function regeneratePlatformTotpRecoveryCodes(password) {
+  return client.post("/api/platform/auth/totp/recovery-codes/regenerate", { password }).then((r) => r.data);
+}
+
+// S-03: revoke every session for the current user (they log in again) or,
+// for a tenant admin, for one of their tenant's users.
+export function revokeAllSessions() {
+  return client.post("/api/auth/revoke-all-sessions").then((r) => r.data);
+}
+
+export function revokeUserSessions(userId) {
+  return client.post(`/api/auth/revoke-user-sessions/${userId}`).then((r) => r.data);
+}
+
+export function platformRevokeUserSessions(userId) {
+  return client.post(`/api/platform/auth/revoke-user-sessions/${userId}`).then((r) => r.data);
+}
+
 export function changePassword(currentPassword, newPassword) {
   return client.post("/api/auth/change-password", {
     current_password: currentPassword,
+    new_password: newPassword,
+  });
+}
+
+// S-05: set a password via the one-time welcome link. No login needed —
+// the signed token is the credential. The 401 interceptor skips this
+// endpoint (it is not a session), so an invalid/expired link surfaces
+// its 400 here instead of redirecting.
+export function setupPassword(token, newPassword) {
+  return client.post("/api/auth/setup-password", {
+    token,
     new_password: newPassword,
   });
 }

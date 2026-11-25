@@ -178,7 +178,7 @@ def login(
         # already audit-logged below, so a locked attempt adds no signal —
         # and logging it would let a locked account keep growing the log.
         # Lockout now escalates (S-04): 1m, then 5m, then 30m.
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many attempts. Account temporarily locked — please wait and try again.")
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many failed attempts. This account is temporarily locked — please wait and try again later.")
 
     # Always run verify_password exactly once, against the real hash if a user
     # matched or the fixed dummy hash otherwise, so an unknown email or an
@@ -240,7 +240,7 @@ def login_totp(
     email = user.email
     account_key = f"tenant:{user.tenant_id}:{email}" if user.tenant_id is not None else f"platform:{email}"
     if is_login_locked(account_key):
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many attempts. Account temporarily locked — please wait and try again.")
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Too many failed attempts. This account is temporarily locked — please wait and try again later.")
 
     code_ok = False
     used_recovery = False

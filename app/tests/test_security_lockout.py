@@ -4,11 +4,25 @@ the bounded failed-login store.
 """
 
 import pytest
+import pyotp
+from fastapi.testclient import TestClient
 
 from app.core import rate_limit
 from app.core.security import validate_password_complexity
+from app.main import app
 from app.models.user import UserRole
 from app.tests.factories import DEFAULT_PASSWORD, auth_headers, make_tenant, make_user
+
+# Bug 4/4: the two 429s must be distinguishable — the per-account lockout
+# names the account as locked; the per-IP slowapi limit names the network.
+LOCKOUT_429_DETAIL = (
+    "Too many failed attempts. This account is temporarily locked — "
+    "please wait and try again later."
+)
+IP_LIMIT_429_DETAIL = (
+    "Too many requests from this network (IP rate limit). "
+    "Please wait a minute and try again."
+)
 
 
 class _FakeClock:
@@ -181,3 +195,140 @@ def test_escalating_lockout_via_login_endpoint(db, client):
         headers={**headers, "X-Forwarded-For": "10.0.0.99"},
     )
     assert resp.status_code == 200
+
+
+def test_locked_account_returns_exact_lockout_message(db, client):
+    """(a) A locked account gets the lockout wording, naming the account
+    as locked. The request comes from a fresh IP so the per-IP limiter
+    has budget left and the per-account lockout is the one answering —
+    from the same IP the slowapi limit fires first instead."""
+    tenant = make_tenant(db)
+    user = make_user(db, tenant, UserRole.EMPLOYEE, email="locked-msg@example.com")
+    headers = {"X-Tenant-Slug": tenant.slug}
+    for _ in range(10):
+        resp = client.post(
+            "/api/auth/login",
+            json={"email": user.email, "password": "WrongPassword1!"},
+            headers=headers,
+        )
+        assert resp.status_code == 401, resp.text
+
+    other_ip = TestClient(app, client=("192.0.2.55", 50000))
+    resp = other_ip.post(
+        "/api/auth/login",
+        json={"email": user.email, "password": DEFAULT_PASSWORD},
+        headers=headers,
+    )
+    assert resp.status_code == 429, resp.text
+    assert resp.json()["detail"] == LOCKOUT_429_DETAIL
+
+
+def test_ip_rate_limit_returns_exact_ip_message(db, client):
+    """(b) 11 login attempts from one IP trip the per-IP slowapi limiter,
+    which fires before the view — so this 429 carries the network/IP
+    wording, not the account-lockout wording."""
+    tenant = make_tenant(db)
+    make_user(db, tenant, UserRole.EMPLOYEE, email="ip-limited@example.com")
+    headers = {"X-Tenant-Slug": tenant.slug}
+    codes = []
+    for _ in range(11):
+        resp = client.post(
+            "/api/auth/login",
+            json={"email": "ip-limited@example.com", "password": "WrongPassword1!"},
+            headers=headers,
+        )
+        codes.append(resp.status_code)
+    assert codes[:10] == [401] * 10
+    assert codes[10] == 429
+    assert resp.json()["detail"] == IP_LIMIT_429_DETAIL
+
+
+def test_lockout_and_ip_limit_messages_differ(db, client):
+    """(c) Both 429s, side by side, from one locked account: the same-IP
+    attempt is answered by the IP limiter, the fresh-IP attempt by the
+    per-account lockout — and the two messages must not be the same, so
+    a blocked user can tell which block they are under."""
+    tenant = make_tenant(db)
+    user = make_user(db, tenant, UserRole.EMPLOYEE, email="distinct@example.com")
+    headers = {"X-Tenant-Slug": tenant.slug}
+    for _ in range(10):
+        resp = client.post(
+            "/api/auth/login",
+            json={"email": user.email, "password": "WrongPassword1!"},
+            headers=headers,
+        )
+        assert resp.status_code == 401, resp.text
+
+    ip_resp = client.post(
+        "/api/auth/login",
+        json={"email": user.email, "password": "WrongPassword1!"},
+        headers=headers,
+    )
+    assert ip_resp.status_code == 429
+    assert ip_resp.json()["detail"] == IP_LIMIT_429_DETAIL
+
+    other_ip = TestClient(app, client=("192.0.2.56", 50000))
+    lock_resp = other_ip.post(
+        "/api/auth/login",
+        json={"email": user.email, "password": DEFAULT_PASSWORD},
+        headers=headers,
+    )
+    assert lock_resp.status_code == 429
+    assert lock_resp.json()["detail"] == LOCKOUT_429_DETAIL
+
+    assert ip_resp.json()["detail"] != lock_resp.json()["detail"]
+    assert "account" in lock_resp.json()["detail"].lower()
+    assert "locked" in lock_resp.json()["detail"].lower()
+    assert "IP rate limit" in ip_resp.json()["detail"]
+
+
+def test_totp_step_lockout_returns_exact_lockout_message(db, client):
+    """(d) The TOTP second step (auth.py:243) answers a locked account with
+    the same lockout wording as the password step. Needs an enrolled
+    account: enrol via the API, take the password step to get the pending
+    cookie, lock the account with 10 failures from a fresh IP (so the
+    per-IP limiter stays out of the way), then present the pending cookie
+    + a correct code from another fresh IP."""
+    tenant = make_tenant(db)
+    admin = make_user(db, tenant, UserRole.TENANT_ADMIN, email="totp-locked@example.com")
+    headers = {"X-Tenant-Slug": tenant.slug}
+    # Enrol TOTP (same calls as test_security_totp._enable_totp).
+    resp = client.post("/api/auth/totp/enroll", headers=auth_headers(admin, tenant))
+    assert resp.status_code == 200, resp.text
+    secret = resp.json()["secret"]
+    resp = client.post(
+        "/api/auth/totp/verify-enrolment",
+        json={"code": pyotp.TOTP(secret).now()},
+        headers=auth_headers(admin, tenant),
+    )
+    assert resp.status_code == 200, resp.text
+
+    # Password step: pending cookie, no session yet.
+    resp = client.post(
+        "/api/auth/login",
+        json={"email": admin.email, "password": DEFAULT_PASSWORD},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["totp_required"] is True
+    pending = client.cookies["totp_pending"]
+
+    # Lock the account: 10 failures from a fresh IP.
+    fail_ip = TestClient(app, client=("192.0.2.60", 50000))
+    for _ in range(10):
+        resp = fail_ip.post(
+            "/api/auth/login",
+            json={"email": admin.email, "password": "WrongPassword1!"},
+            headers=headers,
+        )
+        assert resp.status_code == 401, resp.text
+
+    # TOTP step from another fresh IP with the pending cookie + right code.
+    totp_ip = TestClient(app, client=("192.0.2.61", 50000))
+    resp = totp_ip.post(
+        "/api/auth/login/totp",
+        json={"code": pyotp.TOTP(secret).now()},
+        cookies={"totp_pending": pending},
+    )
+    assert resp.status_code == 429, resp.text
+    assert resp.json()["detail"] == LOCKOUT_429_DETAIL

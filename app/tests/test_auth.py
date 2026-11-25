@@ -211,7 +211,13 @@ def test_login_rate_limit_returns_429_after_10_attempts(db, client):
 
     assert codes[:10] == [401] * 10
     assert codes[10] == 429
-    assert "Too many attempts" in resp.json()["detail"]
+    # The 11th attempt from the same IP trips the per-IP slowapi limiter
+    # (it fires before the view), so this is the IP/network wording, not
+    # the per-account lockout wording — the two must stay distinct.
+    assert resp.json()["detail"] == (
+        "Too many requests from this network (IP rate limit). "
+        "Please wait a minute and try again."
+    )
 
 
 def test_logout_revokes_token_server_side(db, client):

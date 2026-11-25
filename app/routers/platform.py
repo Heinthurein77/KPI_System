@@ -39,7 +39,10 @@ def platform_login(request: Request, response: Response, payload: LoginRequest, 
     email = payload.email.strip().lower()
     account_key = f"platform:{email}"
     if user is not None and is_login_locked(account_key):
-        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many attempts. Please wait a minute and try again.")
+        # Per-account lockout (not the per-IP slowapi limit): this account
+        # hit 10 failed logins, so it gets the lockout wording, which names
+        # the account as locked — not the IP-limiter wording.
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "Too many failed attempts. This account is temporarily locked — please wait and try again later.")
     # Same timing-safety reasoning as app/routers/auth.py's login(): always run
     # verify_password once, against DUMMY_PASSWORD_HASH when no row matched,
     # so a nonexistent/tenant-scoped email doesn't fail measurably faster than

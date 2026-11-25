@@ -337,7 +337,7 @@ app.state.limiter = limiter
 async def handle_rate_limit_exceeded(request: Request, exc: RateLimitExceeded) -> JSONResponse:
     return JSONResponse(
         status_code=429,
-        content={"detail": "Too many attempts. Please wait a minute and try again."},
+        content={"detail": "Too many requests from this network (IP rate limit). Please wait a minute and try again."},
     )
 
 

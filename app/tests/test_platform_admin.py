@@ -3,8 +3,10 @@ is deliberately separate from the tenant login and only ever matches rows
 where tenant_id IS NULL — a normal tenant-scoped user's credentials, even if
 otherwise correct, must never succeed against it."""
 
+from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.main import app
 from app.models.audit_log import AuditLog
 from app.models.tenant import TenantStatus
 from app.models.user import UserRole
@@ -51,6 +53,33 @@ def test_platform_login_rejects_tenant_scoped_user(db, client):
     )
 
     assert resp.status_code == 401
+
+
+def test_platform_locked_account_returns_lockout_message(db, client):
+    """Bug 4/4: the platform login's per-account lockout used to raise
+    with the IP-limiter wording ("Please wait a minute..."), so a locked
+    platform admin could not tell their account was locked. It now gets
+    the same lockout wording as the tenant login. The final attempt comes
+    from a fresh IP so the per-IP limiter has budget left and the
+    per-account lockout is the one answering."""
+    admin = make_user(db, None, UserRole.SUPER_ADMIN, email="root-locked@platform.example.com")
+    for _ in range(10):
+        resp = client.post(
+            "/api/platform/auth/login",
+            json={"email": admin.email, "password": "wrong-password"},
+        )
+        assert resp.status_code == 401, resp.text
+
+    other_ip = TestClient(app, client=("192.0.2.57", 50000))
+    resp = other_ip.post(
+        "/api/platform/auth/login",
+        json={"email": admin.email, "password": DEFAULT_PASSWORD},
+    )
+    assert resp.status_code == 429, resp.text
+    assert resp.json()["detail"] == (
+        "Too many failed attempts. This account is temporarily locked — "
+        "please wait and try again later."
+    )
 
 
 def test_platform_me_returns_super_admin_without_tenant_slug(db, client):

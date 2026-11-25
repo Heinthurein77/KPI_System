@@ -63,6 +63,18 @@ docker compose up -d db
 docker compose exec db pg_isready -U kpi   # must answer "accepting connections"
 ```
 
+**If `kpi-db` is stuck restarting:** the PG 18 image refuses a volume mounted
+at `/var/lib/postgresql/data` (see the `db` service comment). Fix: stop and
+remove the container and its volume, then start again — the volume holds only
+a failed init, no real data:
+
+```bash
+docker compose stop db
+docker compose rm -f db
+docker volume rm kpi-app_kpi_prod_pg_data
+docker compose up -d db
+docker compose exec db pg_isready -U kpi
+
 ## Step 3 — Practice restore (no downtime, Neon still live)
 
 `DATABASE_URL` in `.env` still points at Neon here — that is intentional.

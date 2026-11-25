@@ -14,7 +14,13 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-kpi_system}
     # No ports: only the web container reaches it, over the compose network.
     volumes:
-      - kpi_prod_pg_data:/var/lib/postgresql/data
+      # PG 18+ images store data in a major-version subdirectory (pg_ctlcluster
+      # layout). Mount at /var/lib/postgresql, NOT /var/lib/postgresql/data:
+      # mounting at .../data makes the 18 entrypoint refuse to start
+      # ("there appears to be PostgreSQL data in /var/lib/postgresql/data").
+      # If an old volume was created with the .../data mount, delete it
+      # (docker volume rm kpi-app_kpi_prod_pg_data) — it holds only a failed init.
+      - kpi_prod_pg_data:/var/lib/postgresql
     # Small box (2 GB, web already capped at 1g): keep Postgres modest.
     # shared_buffers 128 MB is plenty for this workload.
     command: postgres -c shared_buffers=128MB -c max_connections=50

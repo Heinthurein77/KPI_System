@@ -403,23 +403,18 @@ def test_export_unknown_user_returns_404(client, db):
     assert resp.status_code == 404, resp.text
 
 
-def test_export_other_department_stays_headers_only_for_dept_admin(client, db):
-    # A department that EXISTS but is outside the caller's scope still
-    # yields a headers-only file (no name leak, no 404-oracle).
-    from io import BytesIO
-
-    from openpyxl import load_workbook
-
+def test_export_other_department_is_404_for_dept_admin(client, db):
+    # M-28 (2026-11-25 security review): a department that EXISTS but is
+    # outside the caller's scope is now a 404, like an unknown one. The
+    # old behaviour (headers-only 200) let a caller probe which
+    # in-tenant departments exist by watching 200-vs-404.
     fx = _export_setup(db)
     resp = client.get(
         "/api/attendance/report/export",
         params={"year": 2026, "month": 11, "department_id": fx["ops"].id},
         headers=auth_headers(fx["dana"], fx["tenant"]),
     )
-    assert resp.status_code == 200, resp.text
-    rows = list(load_workbook(BytesIO(resp.content)).active.iter_rows(values_only=True))
-    assert [r for r in rows[4:] if any(v is not None for v in r)] == []
-    assert "operations" not in resp.headers["content-disposition"].lower()
+    assert resp.status_code == 404, resp.text
 
 
 # ---------------------------------------------------------------- m7

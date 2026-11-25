@@ -4,9 +4,16 @@
 migration (2026-11-25) changed the backup story: the database is now the
 local `db` container, Neon PITR is gone, and `scripts/backup-db.sh` dumps
 from the container, encrypts the dump, and restore-verifies it every night.
-The cron job itself was never confirmed installed — §1 is still the open
-step. Do not mark the backup finding (S-14) closed until the cron is
-installed, one manual run has succeeded, and its time is recorded in §4.
+**Backup cron: VERIFIED INSTALLED 2026-11-25** — the first manual run
+succeeded that day at 12:02 (`kpi-backup-2026-11-25_1202.dump.enc`,
+restore-verified; see §4). **Rollover cron: VERIFIED INSTALLED
+2026-11-20 ~15:13.** What is still open (§1): the user confirming on
+the server with `crontab -l` that all four jobs are listed (reminders
+08:00, rollover 07:00, prune monthly, backup 02:00) plus the daily
+08:30 log watch — the agent cannot verify the server crontab itself,
+so M-16 stays PARTIAL. Still user-side: the off-server copy and the
+full disaster drill (§3b). Do not mark the backup finding (S-14) closed
+until the off-server copy exists and the drill has been run and timed.
 
 ## The backup story (what exists)
 
@@ -43,8 +50,8 @@ installed, one manual run has succeeded, and its time is recorded in §4.
 > rely only on lazy per-employee materialisation when each employee
 > opened their dashboard; the cron is now the real automation and the
 > lazy path is only a fallback. The three jobs in §1 are therefore now
-> four; `scripts/check-cron-logs.sh` still watches only the original
-> three — extend it to the rollover log if you want the same watch.
+> four; `scripts/check-cron-logs.sh` watches all four since the M-21
+> fix on 2026-11-25 (the rollover log was the blind spot until then).
 
 ## 1. Confirm the server crontab
 
@@ -54,7 +61,11 @@ On the server, in `~/kpi-app`:
 crontab -l
 ```
 
-All four jobs must be listed. Install any missing one with `crontab -e`
+All four jobs must be listed — **backup (02:00) and rollover (07:00)
+were verified installed on 2026-11-25 and 2026-11-20 respectively,
+but only `crontab -l` on the server proves all four are still there**
+(the agent cannot check the server crontab). Install any missing one
+with `crontab -e`
 — **do not paste a cron line directly into the shell** (it will try to run
 it as a command and fail). All four are required (N2, 2026-11-12) — the
 backup job included: it is the highest-stakes job, and without it there
@@ -80,6 +91,12 @@ is nothing to restore from.
 # script redirects itself into backups/backup.log, so no redirect is needed.
 # Setup first (once): echo "BACKUP_PASSPHRASE=$(openssl rand -hex 24)" >> .env
 0 2 * * * cd ~/kpi-app && ./scripts/backup-db.sh
+
+# Cron-log watch — daily 08:30 (see scripts/check-cron-logs.sh). One
+# summary line per job; exit 1 (and the mail below) if any job failed,
+# went stale, or never ran. All four jobs above are watched, including
+# the rollover log.
+30 8 * * * cd ~/kpi-app && ./scripts/check-cron-logs.sh || echo "KPI cron failure — check the logs" | mail -s "KPI cron check failed" you@example.com
 ```
 
 Then verify the backups are actually being written (not just scheduled):
@@ -150,7 +167,7 @@ database), then start the app and log in. Record the time it took in §4.
 
 | Date | Cron installed | Manual run OK | Nightly verify passing | Full disaster drill (min) | Problems found |
 |---|---|---|---|---|---|
-| _(fill in after install + first manual run)_ | | | | | |
+| 2026-11-25 | backup 02:00 yes (first manual run 12:02, `kpi-backup-2026-11-25_1202.dump.enc`, restore-verified); rollover 07:00 yes (installed 2026-11-20 ~15:13) — confirm all four with `crontab -l` | yes | not yet observed (first nightly run due 02:00 2026-11-26) | not done | Off-server copy still missing; full drill still to do |
 
 If any step fails, the backup story is broken until it is fixed — say so
 plainly and do not call S-14 closed. The drill is the finding; the scripts

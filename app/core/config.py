@@ -6,7 +6,7 @@ from math import log2
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 logger = logging.getLogger("kpi_system.config")

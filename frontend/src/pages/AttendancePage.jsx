@@ -679,12 +679,22 @@ export default function AttendancePage() {
                   <button
                     type="button"
                     onClick={handleCheckOut}
-                    disabled={busy || !todayData.ip_allowed || !record || !!record.check_out || record.status === "leave"}
+                    // M-30: the server closes yesterday's still-open record
+                    // on check-out (after-midnight fallback), so the button
+                    // stays enabled when such a record exists even with no
+                    // record for today — it used to be disabled and the
+                    // fallback was unreachable from the UI.
+                    disabled={busy || !todayData.ip_allowed || (!record && !todayData.has_open_yesterday_record) || (record && (!!record.check_out || record.status === "leave"))}
                     className="rounded-lg border border-slate-300 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:opacity-40"
                   >
                     Check-out
                   </button>
                 </div>
+              )}
+              {canCheckIn && !record && todayData.has_open_yesterday_record && (
+                <p className="mt-3 text-sm text-amber-700">
+                  You have an open check-in from yesterday — checking out now will close it.
+                </p>
               )}
             </>
           )}

@@ -57,7 +57,9 @@ def test_forged_xff_from_non_proxy_peer_is_ignored(client, db):
     direct = TestClient(app, client=NON_PROXY_PEER)
     resp = direct.post(
         "/api/attendance/check-in",
-        headers={**auth_headers(emp, tenant), "X-Forwarded-For": OFFICE_IP},
+        # Origin: the request is a browser-style one — the 403 must
+        # come from the WiFi gate, not the headerless-CSRF rule (M-37).
+        headers={**auth_headers(emp, tenant), "X-Forwarded-For": OFFICE_IP, "Origin": "http://testserver"},
     )
     assert resp.status_code == 403, resp.text
 
@@ -70,7 +72,10 @@ def test_xff_from_trusted_proxy_peer_is_honoured(client, db):
     via_proxy = TestClient(app, client=PROXY_PEER)
     resp = via_proxy.post(
         "/api/attendance/check-in",
-        headers={**auth_headers(emp, tenant), "X-Forwarded-For": OFFICE_IP},
+        # Origin: a browser-style request — without it the headerless
+        # CSRF rule (M-37) would 403 this cookie-authenticated POST
+        # before the WiFi gate ever saw it.
+        headers={**auth_headers(emp, tenant), "X-Forwarded-For": OFFICE_IP, "Origin": "http://testserver"},
     )
     assert resp.status_code == 201, resp.text
 

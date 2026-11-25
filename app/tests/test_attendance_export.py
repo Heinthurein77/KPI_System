@@ -172,11 +172,14 @@ def test_export_dept_admin_scoping(client, db):
     data = _data_rows(rows)
     assert len(data) == 63
     assert {r[2] for r in data} == {"Sales"}
-    # Asking for another department yields a headers-only file.
-    _, rows = _export(
-        client, fx["dana"], fx["tenant"], {"department_id": fx["ops"].id}
+    # M-28: asking for another department is a 404, not a
+    # headers-only file (that 200-vs-404 difference was an oracle).
+    resp = client.get(
+        "/api/attendance/report/export",
+        params={"year": YEAR, "month": MONTH, "department_id": fx["ops"].id},
+        headers=auth_headers(fx["dana"], fx["tenant"]),
     )
-    assert _data_rows(rows) == []
+    assert resp.status_code == 404, resp.text
 
 
 def test_export_employee_sees_only_self(client, db):
@@ -221,16 +224,21 @@ def test_export_user_id_person_only(client, db):
 
 def test_export_user_id_scoping(client, db):
     fx = _setup(client, db)
-    # An employee asking for someone else gets a headers-only file.
-    _, rows = _export(
-        client, fx["alice"], fx["tenant"], {"user_id": fx["bob"].id}
+    # M-28: an employee asking for someone else gets a 404, not a
+    # headers-only file.
+    resp = client.get(
+        "/api/attendance/report/export",
+        params={"year": YEAR, "month": MONTH, "user_id": fx["bob"].id},
+        headers=auth_headers(fx["alice"], fx["tenant"]),
     )
-    assert _data_rows(rows) == []
+    assert resp.status_code == 404, resp.text
     # A dept admin asking for someone outside their department: same.
-    _, rows = _export(
-        client, fx["dana"], fx["tenant"], {"user_id": fx["carol"].id}
+    resp = client.get(
+        "/api/attendance/report/export",
+        params={"year": YEAR, "month": MONTH, "user_id": fx["carol"].id},
+        headers=auth_headers(fx["dana"], fx["tenant"]),
     )
-    assert _data_rows(rows) == []
+    assert resp.status_code == 404, resp.text
     # A dept admin asking for someone in their own department: works.
     _, rows = _export(
         client, fx["dana"], fx["tenant"], {"user_id": fx["bob"].id}

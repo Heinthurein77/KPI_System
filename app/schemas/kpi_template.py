@@ -53,6 +53,15 @@ class CreateTemplateRequest(BaseModel):
     def _name_not_blank(cls, v: str) -> str:
         # B-m2: an empty/whitespace-only metric name must 422 here, like
         # the rename path already rejects it — it must never be persisted.
+        # M-39 (metric names EXEMPT): control characters are deliberately
+        # NOT rejected here. Live production metric names contain
+        # newlines (e.g. the ~245-char Audit Cycle metric) and the user
+        # rule is that metric names are entered as-is; rejecting them
+        # would break real data (test_long_metric_custom_create_keeps_
+        # full_audit_label pins this). The newline-in-email-Subject risk
+        # remains as a residual: it must be fixed at the email layer
+        # (sanitize the Subject in email_service), not by rejecting
+        # metric names.
         v = v.strip()
         if not v:
             raise ValueError("Metric name cannot be empty.")
@@ -73,7 +82,8 @@ class CreateCustomTemplateRequest(_PeriodYearValidated):
     @field_validator("metric_name")
     @classmethod
     def _name_not_blank(cls, v: str) -> str:
-        # B-m2: same rule as CreateTemplateRequest.
+        # B-m2: same rule as CreateTemplateRequest (M-39 metric-name
+        # exemption applies here too — see above).
         v = v.strip()
         if not v:
             raise ValueError("Metric name cannot be empty.")
@@ -106,7 +116,8 @@ class CreateCustomTemplateWithRebalanceRequest(_PeriodYearValidated):
     @field_validator("metric_name")
     @classmethod
     def _name_not_blank(cls, v: str) -> str:
-        # B-m2: same rule as CreateTemplateRequest.
+        # B-m2: same rule as CreateTemplateRequest (M-39 metric-name
+        # exemption applies here too — see above).
         v = v.strip()
         if not v:
             raise ValueError("Metric name cannot be empty.")
@@ -207,3 +218,14 @@ class UpdateTemplateNameRequest(BaseModel):
     """
 
     metric_name: str
+
+    @field_validator("metric_name")
+    @classmethod
+    def _name_not_blank(cls, v: str) -> str:
+        # M-39: the rename path had no validator at all — a blank name
+        # was stored unchecked. Control characters stay allowed (metric
+        # names are entered as-is; see the exemption note above).
+        v = v.strip()
+        if not v:
+            raise ValueError("Metric name cannot be empty.")
+        return v

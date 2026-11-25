@@ -604,11 +604,14 @@ def test_rename_template_dept_admin_other_department_forbidden(client, db):
 
 
 def test_rename_template_rejects_empty_name(client, db):
+    # M-39: the rename path now validates metric_name in the schema, so
+    # a blank name is a 422 (was a router-level 400 before the schema
+    # validator existed). The name must still be unchanged afterwards.
     tenant = make_tenant(db)
     admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
     tpl = make_template(db, tenant, metric_name="Old")
     resp = _rename(client, tpl.id, "   ", admin, tenant)
-    assert resp.status_code == 400, resp.text
+    assert resp.status_code == 422, resp.text
     db.refresh(tpl)
     assert tpl.metric_name == "Old"
 

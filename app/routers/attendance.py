@@ -21,6 +21,7 @@ Visibility mirrors the KPI role model:
 from __future__ import annotations
 
 import calendar
+import hashlib
 import json
 import logging
 from datetime import date as date_type, time as time_type, timedelta
@@ -39,6 +40,7 @@ from app.core.deps import (
 from app.core.timezone import now as _now_local, today as _today_local
 from app.core.proxy import trusted_client_ip
 from app.core.rate_limit import (
+    ADMIN_WRITE_RATE_LIMIT,
     ATTENDANCE_RATE_LIMIT,
     EXPORT_RATE_LIMIT,
     REPORT_RATE_LIMIT,
@@ -76,7 +78,7 @@ from app.services.attendance_service import (
     parse_time,
 )
 from app.services.excel_safe import safe_file_part as _safe_file_part
-from app.core.validation import validate_month_bounds
+from app.core.validation import validate_leave_date_window, validate_month_bounds
 
 router = APIRouter(prefix="/api/attendance", tags=["attendance"])
 
@@ -159,6 +161,44 @@ def _visible_user_ids(db: Session, user: User) -> list[int]:
     else:
         return [user.id]
     return list(db.scalars(stmt))
+
+
+def _visible_user_ids_for_month(
+    db: Session, user: User, start: date_type, end: date_type
+) -> list[int]:
+    """Visible user ids for a month's report/export (M-31).
+
+    The base set follows the caller's CURRENT department — but a
+    transferred employee's history must stay with the department the
+    days were recorded in (each record snapshots department_id at
+    creation). So a dept admin also sees anyone with a record in this
+    month whose snapshot department is theirs, even if that person has
+    since moved. Tenant admins already see everyone; employees only
+    themselves.
+    """
+    ids = set(_visible_user_ids(db, user))
+    if user.role == UserRole.DEPT_ADMIN and user.department_id is not None:
+        extra = db.scalars(
+            select(AttendanceRecord.employee_id).where(
+                AttendanceRecord.tenant_id == user.tenant_id,
+                AttendanceRecord.department_id == user.department_id,
+                AttendanceRecord.record_date >= start,
+                AttendanceRecord.record_date <= end,
+            )
+        ).all()
+        ids.update(extra)
+    return sorted(ids)
+
+
+def _log_wifi_denial(user: User, ip: str, action: str) -> None:
+    """M-27: WiFi-gate denials are logged (they never were) so spoofing
+    attempts are visible. The IP is logged as a truncated hash, not
+    plaintext (M-15); the user id identifies the account."""
+    ip_hash = hashlib.sha256(ip.encode()).hexdigest()[:12]
+    logger.warning(
+        "Attendance WiFi-gate denial user=%s action=%s ip_hash=%s",
+        user.id, action, ip_hash,
+    )
 
 
 def _month_bounds(year: int, month: int) -> tuple[date_type, date_type]:
@@ -316,13 +356,30 @@ def _summary_for(
     by_date = {r.record_date: r.status for r in records}
     working = _working_days(db, tenant_id, year, month, cfg=cfg)
     result = monthly_summary(by_date, working)
+    # M-31: the department shown is the one the month's records were
+    # recorded in (snapshot department_id), not the employee's CURRENT
+    # department — a transfer mid-month must not rewrite history. With
+    # no records this month, fall back to the current department.
+    department_id = employee.department_id
+    department_name = employee.department.name if employee.department else None
+    if records:
+        from collections import Counter
+
+        snapshot_ids = Counter(
+            r.department_id for r in records if r.department_id is not None
+        )
+        if snapshot_ids:
+            snap_id = snapshot_ids.most_common(1)[0][0]
+            snap_dept = db.get(Department, snap_id)
+            department_id = snap_id
+            department_name = snap_dept.name if snap_dept else None
     return AttendanceSummaryOut(
         year=year,
         month=month,
         user_id=employee.id,
         employee_name=employee.name,
-        department_id=employee.department_id,
-        department_name=employee.department.name if employee.department else None,
+        department_id=department_id,
+        department_name=department_name,
         role=employee.role.value,
         working_days=result["working_days"],
         present=result["present"],
@@ -409,7 +466,9 @@ def _save_settings(db: Session, user: User, data: dict) -> AttendanceSettings:
 
 
 @router.patch("/settings", response_model=AttendanceSettingsOut)
+@limiter.limit(ADMIN_WRITE_RATE_LIMIT, key_func=_authenticated_user_key)
 def update_settings(
+    request: Request,
     payload: AttendanceSettingsUpdate,
     db: Session = Depends(get_db),
     user: User = Depends(require_tenant_admin),
@@ -452,6 +511,22 @@ def get_today(
             AttendanceRecord.record_date == today,
         )
     )
+    # M-30: is there a still-open record from yesterday? The check-out
+    # endpoint closes exactly that record (after-midnight fallback), so
+    # the UI can offer Check-out even with no record for today.
+    yesterday = today - timedelta(days=1)
+    has_open_yesterday_record = (
+        db.scalar(
+            select(AttendanceRecord).where(
+                AttendanceRecord.tenant_id == user.tenant_id,
+                AttendanceRecord.employee_id == user.id,
+                AttendanceRecord.record_date == yesterday,
+                AttendanceRecord.check_in.is_not(None),
+                AttendanceRecord.check_out.is_(None),
+            )
+        )
+        is not None
+    )
     allowed, enforced = _ip_allowed(cfg, _client_ip(request))
     out = _settings_out(cfg)
     return AttendanceTodayOut(
@@ -463,6 +538,7 @@ def get_today(
         wifi_enforced=enforced,
         ip_allowed=allowed,
         record=_serialize(db, record) if record else None,
+        has_open_yesterday_record=has_open_yesterday_record,
         upcoming_holidays=_upcoming_holidays(cfg, today),
     )
 
@@ -485,6 +561,9 @@ def check_in(
     ip = _client_ip(request)
     allowed, enforced = _ip_allowed(cfg, ip)
     if not allowed:
+        # M-27: log the denial (IP hashed, M-15) — WiFi-gate 403s were
+        # never logged or audited, so spoofing attempts were invisible.
+        _log_wifi_denial(user, ip, "check-in")
         raise HTTPException(
             403,
             "Check-in is only allowed on office WiFi. "
@@ -547,9 +626,12 @@ def check_in(
             raise HTTPException(409, "You have already checked in today.")
         raise
     db.refresh(record)
+    # M-15: log the user id only — the client IP used to be logged here
+    # in plaintext (the audit row above already keeps the IP decision
+    # as queryable evidence).
     logger.info(
-        "Attendance check-in user=%s date=%s ip=%s enforced=%s",
-        user.id, today.isoformat(), ip, enforced,
+        "Attendance check-in user=%s date=%s enforced=%s",
+        user.id, today.isoformat(), enforced,
     )
     return _serialize(db, record)
 
@@ -567,6 +649,8 @@ def check_out(
     ip = _client_ip(request)
     allowed, enforced = _ip_allowed(cfg, ip)
     if not allowed:
+        # M-27: log the denial (IP hashed, M-15).
+        _log_wifi_denial(user, ip, "check-out")
         raise HTTPException(
             403,
             "Check-out is only allowed on office WiFi. "
@@ -639,9 +723,10 @@ def check_out(
     )
     db.commit()
     db.refresh(record)
+    # M-15: log the user id only — see check-in.
     logger.info(
-        "Attendance check-out user=%s date=%s ip=%s",
-        user.id, record.record_date.isoformat(), ip,
+        "Attendance check-out user=%s date=%s",
+        user.id, record.record_date.isoformat(),
     )
     return _serialize(db, record)
 
@@ -650,7 +735,9 @@ def check_out(
 
 
 @router.post("/leave", response_model=AttendanceRecordOut, status_code=201)
+@limiter.limit(ATTENDANCE_RATE_LIMIT, key_func=_authenticated_user_key)
 def mark_leave(
+    request: Request,
     payload: LeaveCreate,
     db: Session = Depends(get_db),
     user: User = Depends(require_tenant_member),
@@ -666,6 +753,13 @@ def mark_leave(
     target = db.get(User, target_id)
     if target is None or target.tenant_id != user.tenant_id:
         raise HTTPException(404, "User not found.")
+    # M-31: tenant admins never have attendance records — their leave
+    # would be invisible in every report/export (those filter to
+    # EMPLOYEE/DEPT_ADMIN), so reject it instead of recording it.
+    if target.role == UserRole.TENANT_ADMIN:
+        raise HTTPException(
+            400, "Tenant admins do not have attendance records, so leave cannot be marked for them."
+        )
     # m11: leave only on a working day — weekends and holidays are not
     # working days, so there is nothing to take leave from.
     cfg = _settings_dict(db, user.tenant_id)
@@ -673,6 +767,14 @@ def mark_leave(
         raise HTTPException(
             400, "Leave can only be marked on a working day (not a weekend or holiday)."
         )
+    # S-15: bound the date to the current month (after the working-day
+    # check, so a weekend/holiday still reports as such). Past months
+    # cannot be rewritten into leave, and far-future dates are rejected.
+    validate_leave_date_window(payload.record_date)
+    # S-15: a leave day in the past (inside this month) is retroactive
+    # — it rewrites history that may already have been reported as an
+    # absence, so the audit row says so explicitly.
+    retroactive = payload.record_date < _today_local()
     existing = db.scalar(
         select(AttendanceRecord).where(
             AttendanceRecord.tenant_id == user.tenant_id,
@@ -755,6 +857,14 @@ def update_record(
             "A leave day can only be moved within the same month. "
             "Delete it and mark a new leave day instead.",
         )
+    # S-15: the new date must also be inside the current month (after
+    # the working-day / same-month checks, so those keep their own
+    # messages) — a leave day cannot be moved into a past month or the
+    # far future.
+    validate_leave_date_window(payload.record_date)
+    # S-15: moving a leave day to a past date rewrites history — flag
+    # it in the audit row.
+    retroactive = payload.record_date < _today_local()
     existing = db.scalar(
         select(AttendanceRecord).where(
             AttendanceRecord.tenant_id == user.tenant_id,
@@ -785,7 +895,9 @@ def update_record(
 
 
 @router.delete("/records/{record_id}", status_code=204)
+@limiter.limit(ATTENDANCE_RATE_LIMIT, key_func=_authenticated_user_key)
 def delete_record(
+    request: Request,
     record_id: int,
     db: Session = Depends(get_db),
     user: User = Depends(require_tenant_admin),
@@ -822,7 +934,10 @@ def get_summary(
     user: User = Depends(require_tenant_member),
 ):
     target_id = user_id or user.id
-    if target_id not in _visible_user_ids(db, user):
+    start, end = _month_bounds(year, month)
+    # M-31: same month-aware visibility as the report — a transferred
+    # employee's history stays visible to their old department.
+    if target_id not in _visible_user_ids_for_month(db, user, start, end):
         raise HTTPException(403, "Not allowed to view this user's attendance.")
     target = db.get(User, target_id)
     if target is None or target.tenant_id != user.tenant_id:
@@ -836,7 +951,7 @@ def get_report(
     request: Request,
     year: int = Query(...),
     month: int = Query(...),
-    limit: int | None = Query(None, ge=1, le=1000),
+    limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     db: Session = Depends(get_db),
     user: User = Depends(require_tenant_member),
@@ -844,12 +959,14 @@ def get_report(
     # M13: settings loaded once, all of the month's records fetched in
     # ONE query and grouped in memory, and _serialize takes the already-
     # loaded user — a report no longer costs ~2 queries per user plus
-    # one db.get per record. limit/offset paginate the user list; the
-    # default (no limit) returns every visible row, as the frontend
-    # expects.
+    # one db.get per record. M-26: limit defaults to a page (100) and
+    # is capped at 1000 — the old default (no limit) returned every
+    # visible row, unbounded. The frontend does not paginate yet, so a
+    # tenant with more than 100 visible users needs limit= passed
+    # explicitly until the page learns offset/limit.
     start, end = _month_bounds(year, month)
     cfg = _settings_dict(db, user.tenant_id)
-    visible = _visible_user_ids(db, user)
+    visible = _visible_user_ids_for_month(db, user, start, end)
     users_stmt = (
         select(User)
         .options(selectinload(User.department))
@@ -859,9 +976,8 @@ def get_report(
         )
         .order_by(User.name)
         .offset(offset)
+        .limit(limit)
     )
-    if limit is not None:
-        users_stmt = users_stmt.limit(limit)
     users = db.scalars(users_stmt).all()
     by_user: dict[int, list[AttendanceRecord]] = {}
     if users:
@@ -903,6 +1019,7 @@ def export_report(
     month: int = Query(...),
     department_id: int | None = Query(None),
     user_id: int | None = Query(None),
+    limit: int = Query(1000, ge=1, le=1000),
     db: Session = Depends(get_db),
     user: User = Depends(require_tenant_member),
 ):
@@ -910,14 +1027,16 @@ def export_report(
     day per person. Same visibility as GET /report: a dept admin only ever
     gets their own department, even when no department filter is given.
     Working days without a record appear as Absent with blank times.
-    With user_id, only that person is exported (per-person download); a
-    user outside the caller's visible set yields a headers-only file.
-    An unknown department_id/user_id (no such row, or another tenant's)
-    returns 404 instead of a silently empty file; headers-only is only
-    for a valid-but-empty scope. Late minutes are recorded in the
-    database but deliberately never exported."""
+    M-26: the export is capped at `limit` users (default/max 1000) — it
+    used to be unbounded. M-28: an out-of-scope target (a department or
+    user the caller cannot see) returns 404, not a headers-only
+    workbook — the old 200-vs-404 difference let a caller probe which
+    in-tenant targets exist. An unknown department_id/user_id (no such
+    row, or another tenant's) returns 404; headers-only is only for a
+    valid-but-empty scope (e.g. a department with no one in it).
+    Late minutes are recorded in the database but deliberately never exported."""
     start, end = _month_bounds(year, month)
-    visible = _visible_user_ids(db, user)
+    visible = _visible_user_ids_for_month(db, user, start, end)
     users = db.scalars(
         select(User)
         .options(selectinload(User.department))
@@ -926,11 +1045,17 @@ def export_report(
             User.role.in_([UserRole.EMPLOYEE, UserRole.DEPT_ADMIN]),
         )
         .order_by(User.name)
+        .limit(limit)
     ).all()
     dept_label = None
     if department_id is not None:
         dept = db.get(Department, department_id)
         if dept is None or dept.tenant_id != user.tenant_id:
+            raise HTTPException(404, "Department not found.")
+        # M-28: a department the caller cannot see is 404, not a
+        # headers-only 200 — otherwise the status code alone reveals
+        # that the department exists in this tenant.
+        if user.role != UserRole.TENANT_ADMIN and user.department_id != department_id:
             raise HTTPException(404, "Department not found.")
         # Only put the department name in the filename when the caller
         # may see that department (tenant admin: any; anyone else:
@@ -944,14 +1069,14 @@ def export_report(
         target = db.get(User, user_id)
         if target is None or target.tenant_id != user.tenant_id:
             raise HTTPException(404, "User not found.")
+        # M-28: an out-of-scope in-tenant target is 404 too.
         if (
             target.id not in visible
             or target.role not in (UserRole.EMPLOYEE, UserRole.DEPT_ADMIN)
         ):
-            users = []
-        else:
-            users = [target]
-            person_label = target.name
+            raise HTTPException(404, "User not found.")
+        users = [target]
+        person_label = target.name
     # M13: one settings load and one records query for the whole export,
     # grouped in memory — not a settings + records query per user, and
     # no lazy department load per user (eager-loaded above).

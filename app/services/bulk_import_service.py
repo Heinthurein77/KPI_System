@@ -50,6 +50,7 @@ from __future__ import annotations
 
 import re
 import secrets
+import zipfile
 from dataclasses import dataclass, field
 from datetime import date
 from io import BytesIO
@@ -99,6 +100,47 @@ EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 # Zip-bomb / abuse guard: reject workbooks with more data rows than this.
 MAX_IMPORT_ROWS = 5000
+
+# M-36: the 10 MB router cap is compressed size only — an .xlsx is a
+# ZIP, so a tiny upload can expand to gigabytes. Check the
+# DECOMPRESSED size before openpyxl touches the bytes: reject when the
+# entries total more than this, or when any single entry does. 50 MB
+# uncompressed is far above any real import (5000 rows of short text
+# is well under 5 MB).
+MAX_UNCOMPRESSED_BYTES = 50 * 1024 * 1024
+
+
+def _check_uncompressed_size(contents: bytes) -> str | None:
+    """M-36 zip-bomb guard: error message when the workbook's
+    decompressed size exceeds the bound, else None. A non-ZIP input
+    returns None — load_workbook reports that as 'not a valid Excel
+    file' below, as before."""
+    try:
+        with zipfile.ZipFile(BytesIO(contents)) as zf:
+            total = 0
+            for info in zf.infolist():
+                if info.file_size > MAX_UNCOMPRESSED_BYTES:
+                    return (
+                        f"Workbook entry {info.filename!r} expands to "
+                        f"{info.file_size / (1024 * 1024):.1f} MB when decompressed "
+                        f"(max {MAX_UNCOMPRESSED_BYTES // (1024 * 1024)} MB per entry)."
+                    )
+                total += info.file_size
+            if total > MAX_UNCOMPRESSED_BYTES:
+                return (
+                    f"Workbook expands to {total / (1024 * 1024):.1f} MB "
+                    f"when decompressed (max {MAX_UNCOMPRESSED_BYTES // (1024 * 1024)} MB)."
+                )
+    except zipfile.BadZipFile:
+        return None
+    return None
+
+
+def _has_control_chars(value: str) -> bool:
+    # M-39: a newline in an imported name/position/metric becomes a
+    # notification email's Subject and kills that email — same rule as
+    # the user/metric-name schema validators.
+    return any(ch in value for ch in CONTROL_CHARACTERS)
 
 
 @dataclass
@@ -192,6 +234,10 @@ def _parse_recurring(value) -> bool:
 def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImport:
     """Parse and fully validate an uploaded workbook. No database writes."""
     parsed = ParsedImport()
+    size_error = _check_uncompressed_size(contents)
+    if size_error is not None:
+        parsed.errors.append(ImportRowError(sheet="-", row=0, message=size_error))
+        return parsed
     try:
         wb = load_workbook(BytesIO(contents), read_only=True, data_only=True)
     except Exception:
@@ -264,6 +310,10 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
         if not name:
             parsed.errors.append(ImportRowError(sheet, idx, "Name is required."))
             continue
+        if _has_control_chars(name):
+            parsed.errors.append(ImportRowError(
+                sheet, idx, "Name must not contain line breaks or tabs."))
+            continue
         if len(name) > MAX_NAME_CHARS:
             parsed.errors.append(ImportRowError(
                 sheet, idx,
@@ -276,6 +326,10 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
             parsed.errors.append(ImportRowError(
                 sheet, idx,
                 f"Email is too long ({len(email)} characters, max {MAX_EMAIL_CHARS})."))
+            continue
+        if position and _has_control_chars(position):
+            parsed.errors.append(ImportRowError(
+                sheet, idx, "Position must not contain line breaks or tabs."))
             continue
         if position and len(position) > MAX_POSITION_CHARS:
             parsed.errors.append(ImportRowError(
@@ -300,6 +354,10 @@ def parse_import_file(contents: bytes, db: Session, tenant_id: int) -> ParsedImp
         if not metric:
             parsed.errors.append(ImportRowError(sheet, idx, "Metric name is required."))
             continue
+        # M-39 metric-name exemption: control characters are allowed in
+        # metric names (live production metrics contain newlines and are
+        # entered as-is — see app/schemas/kpi_template.py). Only user
+        # name/position are rejected for control characters above.
         try:
             target = _as_number(row[4], "Target")
             weight = _as_number(row[5], "Weight")

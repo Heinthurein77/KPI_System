@@ -1,6 +1,8 @@
 import fcntl
+import hmac
 import logging
 import os
+import secrets
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,7 +16,7 @@ from sqlalchemy import text
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from app.core.config import settings
 from app.core.rate_limit import limiter
-from app.core.security import _request_is_secure
+from app.core.security import SESSION_COOKIE_NAME, _request_is_secure
 from app.core.tenant import TenantResolutionMiddleware
 from app.database import engine
 from app.routers import admin, analytics, attendance, auth, dashboard, importer, kpi, notifications, platform, reminders, reports
@@ -81,6 +83,35 @@ def upgrade_with_retry(
         raise last_error
 
 
+# M-17c: the startup migration lock used to block forever
+# (fcntl.flock with no timeout) if a previous worker died while holding
+# it — every worker would hang at boot. Bound the wait; a worker that
+# cannot get the lock in this long fails loudly instead of hanging.
+MIGRATION_LOCK_TIMEOUT_SECONDS = 120
+
+
+def _acquire_migration_lock(path: Path, timeout: float = MIGRATION_LOCK_TIMEOUT_SECONDS):
+    """Open + exclusively lock the migration lock file, waiting at most
+    `timeout` seconds. Returns the open file (caller must close it,
+    which releases the lock). Raises TimeoutError when the lock is
+    still held after the timeout."""
+    lock_file = open(path, "a+")
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return lock_file
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                lock_file.close()
+                raise TimeoutError(
+                    f"Could not acquire the migration lock at {path} within "
+                    f"{timeout}s — another worker may have died while holding "
+                    "it. Remove the stale lock file and restart."
+                ) from None
+            time.sleep(0.5)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     # m28: @app.on_event("startup") is deprecated — startup work lives
@@ -102,13 +133,13 @@ async def lifespan(_app: FastAPI):
         # never shared a session. The file lock below is held for the
         # whole upgrade call itself, so whichever worker gets there
         # first runs the migrations and the rest block, then find
-        # everything already at head.
-        with open(_MIGRATION_LOCK_PATH, "a+") as lock_file:
-            fcntl.flock(lock_file, fcntl.LOCK_EX)
-            try:
-                upgrade_with_retry(_ALEMBIC_CFG)
-            finally:
-                fcntl.flock(lock_file, fcntl.LOCK_UN)
+        # everything already at head. The wait is bounded (M-17c): a
+        # stale lock fails startup loudly instead of hanging it.
+        lock_file = _acquire_migration_lock(_MIGRATION_LOCK_PATH)
+        try:
+            upgrade_with_retry(_ALEMBIC_CFG)
+        finally:
+            lock_file.close()
     yield
 
 
@@ -132,10 +163,61 @@ app.add_middleware(TenantResolutionMiddleware)
 
 _STATE_CHANGING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
+# M-37: double-submit CSRF token. The existing Origin/Referer gate
+# below blocks cross-site POSTs (browsers always send Origin on a
+# cross-site POST), but a mutating request with NEITHER header used to
+# be waved through — "API clients, tests, curl". A scripted client
+# holding a stolen session cookie could use that gap, so headerless
+# cookie-authenticated mutations now need the token as well:
+#   1. any response mints a random `csrf_token` cookie (not HttpOnly —
+#      JS must be able to read it to send it back);
+#   2. a headerless mutating request carrying a session cookie must
+#      send the same value back as an X-CSRF-Token header.
+# Deliberately NOT breaking: requests that carry an Origin/Referer
+# (every browser request, including the whole React frontend), Bearer
+# API clients, and Starlette TestClient ("testclient" peer — the test
+# suite has no browser and sends no Origin). API clients that use
+# cookie auth from a script fetch a token from GET /api/csrf-token
+# first (it returns the value and sets the cookie).
+CSRF_COOKIE_NAME = "csrf_token"
+CSRF_HEADER_NAME = "x-csrf-token"
+
+
+def _csrf_token_valid(request: Request) -> bool:
+    token = request.headers.get(CSRF_HEADER_NAME)
+    cookie = request.cookies.get(CSRF_COOKIE_NAME)
+    return bool(token and cookie and hmac.compare_digest(token, cookie))
+
+
+def _headerless_mutation_rejected(request: Request) -> bool:
+    """True when a headerless state-changing request must be rejected
+    for lack of a CSRF token. Only applies to cookie-authenticated
+    requests: no session cookie means there is no ambient credential
+    to forge with, and Bearer clients are API clients by definition."""
+    origin = request.headers.get("origin")
+    referer = request.headers.get("referer")
+    if origin or referer:
+        return False
+    if not request.cookies.get(SESSION_COOKIE_NAME):
+        return False
+    if request.headers.get("authorization"):
+        return False
+    peer = request.client.host if request.client else ""
+    if peer == "testclient":
+        # Starlette TestClient's synthetic peer — the test suite.
+        return False
+    return not _csrf_token_valid(request)
+
 _CSP = (
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    "img-src 'self' data:; object-src 'none'; frame-ancestors 'none'; "
+    "base-uri 'self'; form-action 'self'"
 )
+# M-17e: object-src 'none' added (no plugins/embeds are used anywhere).
+# style-src keeps 'unsafe-inline': the frontend needs it — Recharts and
+# Tailwind apply inline styles (style attributes) for charts and
+# layout, and removing it breaks the dashboards. That is the documented
+# trade-off; script-src stays 'self' with no unsafe-inline.
 
 
 def _cross_site_origin(request: Request) -> bool:
@@ -177,16 +259,59 @@ async def security_headers(request: Request, call_next):
             status_code=403,
             content={"detail": "Cross-site request rejected."},
         )
+    if request.method in _STATE_CHANGING_METHODS and _headerless_mutation_rejected(request):
+        return JSONResponse(
+            status_code=403,
+            content={"detail": "CSRF token missing or invalid. Fetch one from GET /api/csrf-token and send it as an X-CSRF-Token header."},
+        )
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["Content-Security-Policy"] = _CSP
+    # M-37: mint the double-submit CSRF cookie when the client does not
+    # have one yet (every response — a scripted client fetches it with
+    # a plain GET before its first mutation). Skip when the handler
+    # already set it (GET /api/csrf-token), so the two values cannot
+    # disagree.
+    already_set = any(
+        h.startswith(CSRF_COOKIE_NAME + "=")
+        for h in response.headers.getlist("set-cookie")
+    )
+    if CSRF_COOKIE_NAME not in request.cookies and not already_set:
+        response.set_cookie(
+            CSRF_COOKIE_NAME,
+            secrets.token_urlsafe(32),
+            httponly=False,  # JS must read it to send it back as a header
+            secure=_request_is_secure(request),
+            samesite="lax",
+            path="/",
+        )
     # HSTS only when this request actually arrived over HTTPS — sending
     # it over plain HTTP would be meaningless (and the header is also
     # set by Caddy in production).
     if _request_is_secure(request):
         response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
+
+@app.get("/api/csrf-token")
+def csrf_token(request: Request):
+    """M-37: hand a double-submit CSRF token to a cookie-authenticated
+    API client. Returns the value and sets the matching cookie; the
+    client sends the value back as an X-CSRF-Token header on headerless
+    mutating requests. Browsers never need this — they always send an
+    Origin header, which the Origin gate already covers."""
+    token = request.cookies.get(CSRF_COOKIE_NAME) or secrets.token_urlsafe(32)
+    response = JSONResponse(content={"csrf_token": token})
+    response.set_cookie(
+        CSRF_COOKIE_NAME,
+        token,
+        httponly=False,
+        secure=_request_is_secure(request),
+        samesite="lax",
+        path="/",
+    )
     return response
 
 

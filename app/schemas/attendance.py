@@ -7,14 +7,35 @@ from datetime import date as date_type
 
 from pydantic import BaseModel, field_validator
 
-# RFC 1918 private ranges — a private IP can never match a check-in, because
-# the WiFi gate compares the request's PUBLIC IP. Saving one would silently
-# lock the whole tenant out of check-in, so settings reject them outright.
-_RFC1918_NETWORKS = (
-    ipaddress.ip_network("10.0.0.0/8"),
-    ipaddress.ip_network("172.16.0.0/12"),
-    ipaddress.ip_network("192.168.0.0/16"),
+# M-24: an office IP must be an address a real check-in can ever match
+# — the WiFi gate compares the request's PUBLIC IP. The old validator
+# rejected only the three RFC-1918 ranges, so loopback, link-local, ULA,
+# multicast and CGNAT addresses were all accepted and would silently
+# lock the whole tenant out of check-in. The rule is now: globally
+# routable, or one of the documentation ranges the test suite uses as a
+# stand-in office IP (TEST-NET-1/2/3 — is_global is False for those, so
+# a bare is_global check would reject every test office IP). Multicast
+# is rejected explicitly: ipaddress reports it as "global".
+_TEST_NETWORKS = (
+    ipaddress.ip_network("192.0.2.0/24"),    # TEST-NET-1 (RFC 5737)
+    ipaddress.ip_network("198.51.100.0/24"),  # TEST-NET-2 (RFC 5737)
+    ipaddress.ip_network("203.0.113.0/24"),  # TEST-NET-3 (RFC 5737)
 )
+
+# M-25: size caps — an unbounded holidays/office_ips list is an
+# unbounded write (and every holiday change notifies/emails the whole
+# tenant). A year holds at most 366 days; 20 office IPs is far above
+# any real office's public-IP count.
+MAX_OFFICE_IPS = 20
+MAX_HOLIDAYS = 366
+
+
+def _is_matchable_office_ip(ip: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    if ip.is_multicast or ip.is_loopback or ip.is_link_local or ip.is_unspecified:
+        return False
+    if ip.is_global:
+        return True
+    return any(ip in net for net in _TEST_NETWORKS)
 
 
 class HolidayOut(BaseModel):
@@ -63,6 +84,10 @@ class AttendanceSettingsUpdate(BaseModel):
     def _check_office_ips(cls, value):
         if value is None:
             return value
+        if len(value) > MAX_OFFICE_IPS:
+            raise ValueError(
+                f"office_ips must have at most {MAX_OFFICE_IPS} entries."
+            )
         cleaned = []
         for item in value:
             entry = item.strip() if isinstance(item, str) else item
@@ -72,11 +97,12 @@ class AttendanceSettingsUpdate(BaseModel):
                 ip = ipaddress.ip_address(entry)
             except ValueError:
                 raise ValueError(f"office_ips must be valid IP addresses (got {entry!r}).") from None
-            if any(ip in network for network in _RFC1918_NETWORKS):
+            if not _is_matchable_office_ip(ip):
                 raise ValueError(
-                    f"office_ips must be public IPs — {entry} is a private (RFC 1918) "
-                    "address and can never match a check-in, because the WiFi gate "
-                    "compares public IPs. Use the office's public IP instead."
+                    f"office_ips must be public IPs — {entry} is a private "
+                    "or non-routable address and can never match a "
+                    "check-in, because the WiFi gate compares public IPs. "
+                    "Use the office's public IP instead."
                 )
             cleaned.append(str(ip))
         return cleaned
@@ -86,6 +112,10 @@ class AttendanceSettingsUpdate(BaseModel):
     def _check_holidays(cls, value):
         if value is None:
             return value
+        if isinstance(value, list) and len(value) > MAX_HOLIDAYS:
+            raise ValueError(
+                f"holidays must have at most {MAX_HOLIDAYS} entries."
+            )
         # Strict parse (bad date / long name -> 422), then dedupe by date
         # and sort. The model import is lazy, mirroring the parse_time
         # import above — schemas must not pull models in at import time.
@@ -129,6 +159,11 @@ class AttendanceTodayOut(BaseModel):
     wifi_enforced: bool
     ip_allowed: bool
     record: AttendanceRecordOut | None = None
+    # M-30: the server closes yesterday's still-open record on check-out
+    # (after-midnight fallback), but the UI used to disable Check-out
+    # whenever there was no record for today — the fallback was
+    # unreachable. The page enables the button when this is True.
+    has_open_yesterday_record: bool = False
     # Holidays from today through today+7 days, sorted by date — the
     # Attendance page banner renders these.
     upcoming_holidays: list[HolidayOut] = []

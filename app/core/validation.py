@@ -30,6 +30,54 @@ from app.core.months import MONTH_NAMES
 MIN_YEAR, MAX_YEAR = 2000, 2100
 VALID_PERIODS = tuple(MONTH_NAMES)
 
+# Control characters that must never appear in a display name, position,
+# department, or metric name (M-39): a newline inside a name becomes the
+# notification email's Subject line, and EmailMessage raises ValueError
+# on linefeeds — so that notification's email is silently dropped. A tab
+# or carriage return is equally meaningless in a name. Reject at the
+# schema boundary (422) instead of letting it through to the mailer.
+CONTROL_CHARACTERS = ("\n", "\r", "\t")
+
+
+def reject_control_chars(value: str, field: str = "value") -> str:
+    """Raise ValueError when `value` contains \\n, \\r or \\t."""
+    if any(ch in value for ch in CONTROL_CHARACTERS):
+        raise ValueError(
+            f"{field} must not contain line breaks or tabs."
+        )
+    return value
+
+
+def validate_leave_date_window(value: date_type) -> date_type:
+    """A leave day must fall inside the current calendar month (S-15).
+
+    The window is [1st of this month, last day of this month]: past
+    months are closed (an old absence cannot be rewritten into leave
+    months later) and far-future dates (year 9999) are rejected. There
+    is no employment-start date on the User model, so "no dates before
+    employment" cannot be checked against a hire date — the current
+    month's start is the bound instead. A leave day earlier than today
+    inside the month is still allowed (retroactive within the month)
+    but the router flags it RETROACTIVE in the audit log. Raises
+    HTTPException(400) — the leave endpoints call this from the router
+    (after the working-day / same-month checks, so those keep their
+    own 400s), not from the schema, so a non-working day still reports
+    as a working-day error rather than a window error.
+    """
+    from app.core.timezone import today as app_today
+
+    today = app_today()
+    first = today.replace(day=1)
+    _, last_day = calendar.monthrange(today.year, today.month)
+    last = date_type(today.year, today.month, last_day)
+    if not (first <= value <= last):
+        raise HTTPException(
+            400,
+            "Leave can only be marked within the current month "
+            f"({first.isoformat()} – {last.isoformat()}).",
+        )
+    return value
+
 
 def validate_year(value: int, *, min_year: int = MIN_YEAR, max_year: int = MAX_YEAR) -> int:
     """A calendar year in range; ValueError (→ 422 in pydantic) otherwise."""

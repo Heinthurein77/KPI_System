@@ -2,9 +2,9 @@
 backup script's log contract (scripts/backup-db.sh) — N1, 2026-11-12;
 N8–N11, 2026-11-13.
 
-The watcher must cover all three required cron jobs (deadline reminders,
-audit prune, DB backup) and exit 1 on a FAILURE line, a missing log, or a
-log with no runs. Since N8 it must also: only count failures in the last
+The watcher must cover all four required cron jobs (deadline reminders,
+recurring-KPI rollover, audit prune, DB backup) and exit 1 on a FAILURE
+line, a missing log, or a log with no runs. Since N8 it must also: only count failures in the last
 24h and after the most recent SUCCESS; flag a START with no outcome older
 than 2h as STALE; and flag a job with no run inside its max age (daily
 36h, monthly prune 35d) as STALE.
@@ -47,14 +47,20 @@ def _fmt(dt):
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
-def _write_logs(base: Path, backup_lines=None, reminders=True, prune=True):
-    """Fake the three cron logs under base/ (the watcher's $1 layout)."""
+def _write_logs(base: Path, backup_lines=None, reminders=True, prune=True, rollover=True):
+    """Fake the four cron logs under base/ (the watcher's $1 layout)."""
     now = datetime.now()
     if reminders:
         (base / "deadline-reminders.log").write_text(
             f"{_fmt(now - timedelta(hours=1))} INFO Deadline reminders job starting.\n"
             f"{_fmt(now - timedelta(hours=1) + timedelta(seconds=60))} INFO Deadline reminders job succeeded:"
             " window_open=True reminded=3 errors=0\n"
+        )
+    if rollover:
+        (base / "recurring-rollover.log").write_text(
+            f"{_fmt(now - timedelta(hours=2))} INFO Recurring rollover job starting.\n"
+            f"{_fmt(now - timedelta(hours=2) + timedelta(seconds=60))} INFO Recurring rollover job succeeded:"
+            " year=2026 period=November created=0 skipped=0 errors=0\n"
         )
     if prune:
         (base / "prune-audit.log").write_text(
@@ -93,13 +99,23 @@ def _run_watcher(app_dir: Path):
     )
 
 
-def test_watcher_all_three_ok(tmp_path):
+def test_watcher_all_four_ok(tmp_path):
     _write_logs(tmp_path, backup_lines=_backup_ok())
     result = _run_watcher(tmp_path)
     assert result.returncode == 0, result.stdout
     assert "deadline-reminders: OK" in result.stdout
+    assert "recurring-rollover: OK" in result.stdout
     assert "prune-audit: OK" in result.stdout
     assert "db-backup: OK" in result.stdout
+
+
+def test_watcher_rollover_log_missing_exits_1(tmp_path):
+    # M-21: the rollover log was the blind spot — a missing rollover log
+    # must fail the watch like any other missing job log.
+    _write_logs(tmp_path, backup_lines=_backup_ok(), rollover=False)
+    result = _run_watcher(tmp_path)
+    assert result.returncode == 1
+    assert "recurring-rollover: MISSING" in result.stdout
 
 
 def test_watcher_backup_failure_exits_1(tmp_path):

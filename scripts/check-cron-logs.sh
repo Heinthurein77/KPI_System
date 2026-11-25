@@ -44,11 +44,15 @@ HUNG_AFTER_HOURS=2
 cutoff=$(date -d "$FAILURE_WINDOW_HOURS hours ago" '+%F %T')
 hung_cutoff=$(date -d "$HUNG_AFTER_HOURS hours ago" '+%F %T')
 
-# job-name -> log file -> max hours since the last run. All three required
-# cron jobs (N1/N2, 2026-11-12) — the DB backup log lives under backups/
-# because the backup script redirects itself there (N11, 2026-11-13;
-# see scripts/backup-db.sh). Prune runs monthly, so its max age is 35 days.
+# job-name -> log file -> max hours since the last run. All four required
+# cron jobs (N1/N2, 2026-11-12, plus the rollover, S-M1 2026-11-20) —
+# the DB backup log lives under backups/ because the backup script
+# redirects itself there (N11, 2026-11-13; see scripts/backup-db.sh).
+# The rollover log (M-21, 2026-11-25) was the blind spot: the daily
+# 07:00 recurring-KPI rollover ran unwatched until now. Prune runs
+# monthly, so its max age is 35 days.
 JOBS="deadline-reminders:$LOG_DIR/deadline-reminders.log:36
+recurring-rollover:$LOG_DIR/recurring-rollover.log:36
 prune-audit:$LOG_DIR/prune-audit.log:840
 db-backup:$LOG_DIR/backups/backup.log:36"
 

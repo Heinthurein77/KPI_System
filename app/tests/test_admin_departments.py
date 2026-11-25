@@ -265,6 +265,9 @@ def test_rename_department_rejects_duplicate_name(db, client):
 
 
 def test_rename_department_rejects_empty_name(db, client):
+    # M-39/M-34: the rename path now validates the name in the schema, so
+    # a blank name is a 422 (was a router-level 400 before the schema
+    # validator existed). The name must still be unchanged afterwards.
     tenant = make_tenant(db)
     admin = _tenant_admin(db, tenant)
     dept = make_department(db, tenant, name="Sales")
@@ -272,7 +275,7 @@ def test_rename_department_rejects_empty_name(db, client):
     resp = client.patch(
         f"/api/admin/departments/{dept.id}", json={"name": "   "}, headers=auth_headers(admin, tenant)
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 422, resp.text
 
 
 def test_rename_department_not_found(db, client):

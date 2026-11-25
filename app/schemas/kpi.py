@@ -69,7 +69,19 @@ def _reject_non_numeric_keys(scores: dict[str, float]) -> dict[str, float]:
     return scores
 
 
+# M-32: cap on scores/comments dict entries per request (same 500 as
+# BulkApproveRequest's items cap) — an unbounded dict is an unbounded
+# write per request.
+MAX_SCORE_ENTRIES = 500
+
+
 def _validate_score_keys_and_values(scores: dict[str, float]) -> dict[str, float]:
+    # M-32: cap the dict itself (like BulkApproveRequest caps its items
+    # at 500) — an unbounded dict is an unbounded write per request.
+    if len(scores) > MAX_SCORE_ENTRIES:
+        raise ValueError(
+            f"Too many scores (max {MAX_SCORE_ENTRIES} per request)."
+        )
     scores = _reject_non_numeric_keys(scores)
     return _reject_negative_scores(scores)
 
@@ -80,6 +92,10 @@ MAX_COMMENT_LENGTH = 2000
 def _validate_comment_keys_and_values(comments: dict[str, str]) -> dict[str, str]:
     # Comment-dict keys are submission IDs, like scores. over-long values are
     # rejected with a 422 instead of being silently truncated.
+    if len(comments) > MAX_SCORE_ENTRIES:
+        raise ValueError(
+            f"Too many comments (max {MAX_SCORE_ENTRIES} per request)."
+        )
     for key in comments:
         if not key.isdigit():
             raise ValueError(f"Invalid submission id: {key!r}.")

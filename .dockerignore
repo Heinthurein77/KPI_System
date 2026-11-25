@@ -24,3 +24,7 @@ frontend/dist
 frontend/.env
 frontend/.env.local
 frontend/.env.test
+# M-17a: Playwright session cookies — the e2e setup stores logged-in
+# browser state (cookies) under frontend/e2e/.auth/. It must never be
+# copied into the Docker build context (or the image).
+frontend/e2e/.auth/

@@ -18,27 +18,40 @@ on:
   push:
   pull_request:
 
+# S-12: least privilege — no job in this workflow needs to write to the
+# repo, so the default broad GITHUB_TOKEN is narrowed to read-only.
+permissions:
+  contents: read
+
 jobs:
   backend:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      # M-18: third-party actions are pinned by commit SHA, not floating
+      # tags — a tag can be re-pointed after the fact. SHAs below are the
+      # tag tips verified against the GitHub API on 2026-11-25.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
       - name: Install dependencies
+        # S-11: install from the lockfile, not the (now pinned)
+        # requirements files — the lockfile is the reproducible set.
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
-      - name: Python lint (ruff, E9+F only — see pyproject.toml)
+          pip install -r requirements.lock
+      - name: Python lint (ruff — see pyproject.toml)
         run: ruff check app scripts
-      - name: Dependency audit (pip-audit, no known vulns at HEAD)
-        run: pip-audit -r requirements.txt -r requirements-dev.txt
-      - name: Backend tests (with coverage report, no fail threshold)
+      - name: Dependency audit (pip-audit on the installed lockfile env)
+        run: pip-audit
+      - name: Backend tests (with coverage floor — see below)
+        # M-20: the coverage report now fails the job below 50%. The
+        # floor is set well under the measured full-suite coverage, so
+        # it bites only on a real coverage regression, not on day one.
         run: >-
           python -m pytest app/tests/ -q
-          --cov=app --cov-report=term-missing
+          --cov=app --cov-report=term-missing --cov-fail-under=50
           --deselect app/tests/test_combined_score.py::test_weighted_average_across_mixed_weights
           --deselect app/tests/test_combined_score.py::test_target_zero_or_none_is_skipped_but_counts_toward_total_count
           --deselect app/tests/test_combined_score.py::test_attainment_capped_at_default_max_cap_120
@@ -55,8 +68,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: "20"
           cache: npm
@@ -66,6 +79,14 @@ jobs:
         working-directory: frontend
       - name: Lint
         run: npm run lint
+        working-directory: frontend
+      - name: Dependency audit (npm audit)
+        # M-20: non-blocking for now — npm audit cannot run behind the
+        # dev egress proxy (403), so a hard gate would fail every local
+        # check; in GitHub CI it runs for real and its output is visible
+        # on the job. Make it blocking once the audit is clean in CI.
+        continue-on-error: true
+        run: npm audit
         working-directory: frontend
       - name: Build
         run: npm run build
@@ -100,14 +121,14 @@ jobs:
       ENVIRONMENT: development
       CORS_ORIGINS: http://testserver
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.11"
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+          pip install -r requirements.lock
       - name: Migrate a scratch Postgres database to head
         run: python -m alembic upgrade head
       - name: Migration-chain tests (incl. Postgres schema parity)
@@ -116,11 +137,15 @@ jobs:
   # T-m3: the pre-deploy smoke test — boots the stack against a scratch
   # Postgres and hits /readyz + /login, so a bad build or migration is
   # caught before deploy. Docker is preinstalled on ubuntu-latest.
+  #
+  # S-13: this job builds and runs the PR's code, so it does NOT run on
+  # pull requests (untrusted code in CI). It runs only on pushes to
+  # main — the trusted branch — after the other jobs have passed.
   smoke-test:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Run scripts/smoke-test.sh
         run: ./scripts/smoke-test.sh
-

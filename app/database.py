@@ -1,7 +1,9 @@
 import logging
 import time
 from collections.abc import Generator
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+import ipaddress
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -55,6 +57,64 @@ def install_pool_checkout_monitor(engine_, threshold_seconds: float = POOL_CHECK
     pool.connect = timed_connect  # type: ignore[method-assign]
     pool._checkout_monitor_installed = True  # type: ignore[attr-defined]
 
+# ---------------------------------------------------------------------------
+# M-13: DATABASE_URL sslmode is enforced in code, not just documented.
+#
+# A Postgres URL pointing at a non-local host without an sslmode gets
+# sslmode=require appended before the engine is built, so a forgotten
+# query param can never leave a production connection unencrypted. The
+# local database is exempt by design: the 2026-11-25 migration moved
+# production to a local `db` container reached over the private compose
+# network (postgresql://kpi:...@db:5432), where TLS adds nothing — and
+# requiring it there would break the deployment. Local means: loopback,
+# a private/reserved IP, or a single-label hostname (a compose service
+# name such as `db`); anything with a dot in it (e.g. xxx.neon.tech)
+# is treated as remote. An explicit sslmode in the URL is always
+# honoured as-is.
+# ---------------------------------------------------------------------------
+
+def _is_local_db_host(host: str) -> bool:
+    if not host or host in ("localhost", "db"):
+        return True
+    try:
+        addr = ipaddress.ip_address(host)
+    except ValueError:
+        # A hostname: single-label names are compose/private names;
+        # anything dotted is a public DNS name.
+        return "." not in host
+    return (
+        addr.is_loopback
+        or addr.is_private
+        or addr.is_link_local
+        or addr.is_reserved
+        or addr.is_unspecified
+    )
+
+
+def ensure_db_sslmode(url: str) -> str:
+    """Append sslmode=require to a remote Postgres URL that lacks one."""
+    parsed = urlparse(url)
+    if parsed.scheme not in (
+        "postgres",
+        "postgresql",
+        "postgresql+psycopg",
+        "postgresql+psycopg2",
+    ):
+        return url
+    params = dict(parse_qsl(parsed.query))
+    if "sslmode" in params:
+        return url
+    if _is_local_db_host(parsed.hostname or ""):
+        return url
+    params["sslmode"] = "require"
+    new_url = urlunparse(parsed._replace(query=urlencode(params)))
+    logger.warning(
+        "DATABASE_URL for host %s had no sslmode; enforcing sslmode=require.",
+        parsed.hostname,
+    )
+    return new_url
+
+
 if settings.is_sqlite:
     _engine_options = {"connect_args": {"check_same_thread": False}}
 else:
@@ -82,7 +142,11 @@ else:
 
 # pool_pre_ping validates a connection on checkout, so the first request after a
 # Neon suspend transparently reconnects (waking the compute) instead of erroring.
-engine = create_engine(settings.sqlalchemy_database_url, pool_pre_ping=True, **_engine_options)
+engine = create_engine(
+    ensure_db_sslmode(settings.sqlalchemy_database_url),
+    pool_pre_ping=True,
+    **_engine_options,
+)
 
 install_pool_checkout_monitor(engine)
 

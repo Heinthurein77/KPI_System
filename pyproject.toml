@@ -11,4 +11,17 @@
 target-version = "py312"
 
 [tool.ruff.lint]
-select = ["E9", "F"]
+# Widened 2026-11-25 (M-20, security review): E4 (import placement),
+# E7 (statement issues) and W (whitespace warnings) join E9 + F. B
+# (bugbear, 191 findings) and UP (pyupgrade, 351) were measured and are
+# deliberately NOT enabled yet — a dedicated cleanup pass, not a drive-by.
+select = ["E9", "F", "E4", "E7", "W"]
+
+# Three pre-existing findings in files owned by other tracks, exempted
+# here rather than fixed in a track that does not own them (2026-11-25
+# security fix-all, Track 3). Each is one line; the owning track or the
+# coordinator can fix it and drop the exemption.
+[tool.ruff.lint.per-file-ignores]
+"app/migrations/versions/0001_baseline.py" = ["W291"]
+"app/routers/dashboard.py" = ["W292"]
+"app/tests/test_dept_admin_department_visibility.py" = ["E402"]

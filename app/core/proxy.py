@@ -6,28 +6,47 @@ only trust those headers when the socket peer actually IS the proxy —
 otherwise any direct client can forge X-Forwarded-For and defeat the
 Attendance WiFi gate and the per-IP login rate limit.
 
-Trusted peers are loopback and RFC-1918 private networks (the Docker
-bridge network Caddy sits on is 172.16/12) plus ULA IPv6. Public IPs —
-including the documentation ranges used in tests (203.0.113.0/24,
-198.51.100.0/24, which ``ipaddress`` misleadingly reports as private) —
-are never trusted. The literal peer ``"testclient"`` is Starlette
-TestClient's synthetic peer (it has no socket); it is trusted so the
-existing test suite, which simulates office WiFi by setting the header,
-keeps working. It can never occur on a real socket connection.
+Trusted peers come from ``TRUSTED_PROXY_CIDRS`` (app/core/config.py):
+loopback plus the Docker bridge space by default. That is deliberately
+narrower than the old rule (any RFC-1918 peer): 10/8 and 192.168/16
+peers are no longer trusted, and on the server the list should be
+pinned to the Caddy container / compose network (see the setting's
+comment). Public IPs — including the documentation ranges used in
+tests (203.0.113.0/24, 198.51.100.0/24, which ``ipaddress``
+misleadingly reports as private) — are never trusted. The literal peer
+``"testclient"`` is Starlette TestClient's synthetic peer (it has no
+socket); it is trusted so the existing test suite, which simulates
+office WiFi by setting the header, keeps working. It can never occur
+on a real socket connection.
 """
 
 from __future__ import annotations
 
 import ipaddress
+from functools import lru_cache
 
-_TRUSTED_NETWORKS = (
-    ipaddress.ip_network("127.0.0.0/8"),   # loopback
-    ipaddress.ip_network("::1/128"),       # loopback v6
-    ipaddress.ip_network("10.0.0.0/8"),    # RFC 1918
-    ipaddress.ip_network("172.16.0.0/12"),  # RFC 1918 (Docker bridge)
-    ipaddress.ip_network("192.168.0.0/16"),  # RFC 1918
-    ipaddress.ip_network("fd00::/8"),      # IPv6 ULA
-)
+
+@lru_cache(maxsize=8)
+def _trusted_networks(cidrs: str) -> tuple:
+    networks = []
+    for entry in cidrs.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            networks.append(ipaddress.ip_network(entry, strict=False))
+        except ValueError:
+            continue
+    return tuple(networks)
+
+
+def _configured_networks() -> tuple:
+    # Read through get_settings() at call time (not import time) so a
+    # TRUSTED_PROXY_CIDRS change via the environment is honoured
+    # without an import cycle: config does not import this module.
+    from app.core.config import get_settings
+
+    return _trusted_networks(get_settings().TRUSTED_PROXY_CIDRS)
 
 
 def is_trusted_proxy_peer(peer: str | None) -> bool:
@@ -41,7 +60,7 @@ def is_trusted_proxy_peer(peer: str | None) -> bool:
         addr = ipaddress.ip_address(peer)
     except ValueError:
         return False
-    return any(addr in net for net in _TRUSTED_NETWORKS)
+    return any(addr in net for net in _configured_networks())
 
 
 def _socket_peer(request) -> str:

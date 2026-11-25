@@ -1,8 +1,35 @@
 # Production stack: the web app behind Caddy (automatic HTTPS). The database is
-# external (Neon.tech), supplied through DATABASE_URL in .env — there is deliberately
-# no Postgres service. For local development with a bundled Postgres, use
-# docker-compose.local.yml.
+# a local Postgres container (since the 2026-11-25 Neon → server migration —
+# Neon Free hit its 1 GB / 100 CU-h limits). DATABASE_URL in .env points at it
+# over the compose network; there is deliberately no published Postgres port.
+# For local development with a throwaway Postgres, use docker-compose.local.yml.
 services:
+  db:
+    image: postgres:${PG_VERSION:-18}-alpine
+    container_name: kpi-db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kpi}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-kpi_system}
+    # No ports: only the web container reaches it, over the compose network.
+    volumes:
+      - kpi_prod_pg_data:/var/lib/postgresql/data
+    # Small box (2 GB, web already capped at 1g): keep Postgres modest.
+    # shared_buffers 128 MB is plenty for this workload.
+    command: postgres -c shared_buffers=128MB -c max_connections=50
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kpi}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
   web:
     build:
       context: .
@@ -28,6 +55,9 @@ services:
     # Keep a runaway process from taking SSH and the OS down with it on a 2 GB box;
     # the container is simply restarted (restart: always) if it ever hits this.
     mem_limit: 1g
+    depends_on:
+      db:
+        condition: service_healthy
     # Give gunicorn's graceful-timeout (30s) room to finish in-flight requests
     # before docker escalates to SIGKILL on `docker compose down/up`.
     stop_grace_period: 40s
@@ -69,3 +99,4 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  kpi_prod_pg_data:

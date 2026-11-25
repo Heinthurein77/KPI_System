@@ -96,7 +96,7 @@ docker compose exec -T db pg_restore -U kpi -d kpi_system --no-owner --no-privil
 `pg_restore` may print warnings — what matters is the verification:
 
 ```bash
-docker compose exec db psql -U kpi -d kpi_system -c "SELECT version FROM alembic_version;"
+docker compose exec db psql -U kpi -d kpi_system -c "SELECT version_num FROM alembic_version;"
 # must be: 0025_attendance_status_check
 docker compose exec db psql -U kpi -d kpi_system -c \
   "SELECT (SELECT count(*) FROM users) AS users, (SELECT count(*) FROM kpi_submissions) AS submissions, (SELECT count(*) FROM attendance_records) AS attendance;"

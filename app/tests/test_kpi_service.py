@@ -10,6 +10,7 @@ from datetime import date
 import pytest
 from fastapi import HTTPException
 
+from app.models.audit_log import AuditLog
 from app.models.kpi_submission import KPIStatus, KPISubmission
 from app.models.user import UserRole
 from app.services import kpi_service
@@ -597,16 +598,61 @@ def test_reject_submission_disallowed_from_other_statuses(db, status):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("status", [KPIStatus.DRAFT, KPIStatus.PENDING_DEPT_APPROVAL])
-def test_tenant_admin_override_forces_approved_regardless_of_status(db, status):
+@pytest.mark.parametrize(
+    "status",
+    [
+        KPIStatus.DRAFT,
+        KPIStatus.REJECTED,
+        KPIStatus.PENDING_DEPT_APPROVAL,
+        KPIStatus.PENDING_FINAL_APPROVAL,
+    ],
+)
+def test_tenant_admin_override_rejects_non_approved_status(db, status):
+    """Override is a post-approval correction only: a DRAFT / REJECTED /
+    still-pending row is rejected with 400 and nothing changes — no
+    score, no status change, no remarks change, no audit row."""
     _, _, _, _, admin, submission = _basic_setup(db, status=status)
+    before_status = submission.status
+    before_final = submission.final_score
+    before_remarks = submission.remarks
 
-    kpi_service.tenant_admin_override(db, admin, submission, 77.0, "override remarks")
+    with pytest.raises(HTTPException) as exc_info:
+        kpi_service.tenant_admin_override(db, admin, submission, 77.0, "override remarks")
+
+    assert exc_info.value.status_code == 400
+    db.refresh(submission)
+    assert submission.status == before_status
+    assert submission.final_score == before_final
+    assert submission.remarks == before_remarks
+    assert (
+        db.query(AuditLog)
+        .filter(AuditLog.action == "kpi_overridden", AuditLog.entity_id == submission.id)
+        .count()
+        == 0
+    )
+
+
+def test_tenant_admin_override_on_approved_corrects_score(db):
+    """Override on an already-APPROVED row still works: the row stays
+    APPROVED, the new score and remarks are stored, and the correction
+    is audit-logged ("Score corrected after approval")."""
+    _, _, _, _, admin, submission = _basic_setup(
+        db, status=KPIStatus.APPROVED, self_score=80.0, dept_score=85.0, final_score=70.0,
+    )
+
+    kpi_service.tenant_admin_override(db, admin, submission, 77.0, "correction")
 
     assert submission.status == KPIStatus.APPROVED
     assert submission.final_score == 77.0
-    assert submission.remarks == "override remarks"
+    assert submission.remarks == "correction"
     assert submission.final_reviewed_by_id == admin.id
+    rows = (
+        db.query(AuditLog)
+        .filter(AuditLog.action == "kpi_overridden", AuditLog.entity_id == submission.id)
+        .all()
+    )
+    assert len(rows) == 1
+    assert "Score corrected after approval" in rows[0].summary
 
 
 # ---------------------------------------------------------------------------

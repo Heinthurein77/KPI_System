@@ -506,6 +506,7 @@ def test_m23_override_email_carries_no_score(db):
         db, tenant, employee, template, year=2026, period="October",
         status=KPIStatus.PENDING_FINAL_APPROVAL, self_score=80.0, dept_score=80.0,
     )
+    kpi_service.final_approve(db, admin, submission, 87.0, None)
     kpi_service.tenant_admin_override(db, admin, submission, 93.0, None)
     message = _notification_message(db, employee.id, "kpi_overridden")
     assert "93" not in message

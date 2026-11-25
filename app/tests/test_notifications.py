@@ -121,6 +121,8 @@ def test_final_approve_and_override_notify_employee(db):
     assert "kpi_final_approved" in types
 
     submission2 = _submit(db, tenant, employee, period="October")
+    kpi_service.dept_approve(db, dept_admin, submission2, 85.0, None)
+    kpi_service.final_approve(db, tenant_admin, submission2, None, None)
     kpi_service.tenant_admin_override(db, tenant_admin, submission2, 90.0, None)
     types = [n.type for n in _notifications_for(db, employee)]
     assert "kpi_overridden" in types

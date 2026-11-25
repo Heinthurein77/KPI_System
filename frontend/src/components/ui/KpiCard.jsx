@@ -440,7 +440,7 @@ export default function KpiCard({
             </div>
           )}
 
-          {onOverride && (
+          {onOverride && s.status === "approved" && (
             <div>
               <button
                 type="button"

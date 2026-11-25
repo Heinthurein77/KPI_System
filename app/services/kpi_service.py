@@ -1121,35 +1121,37 @@ def tenant_admin_override(
     expected_year: int | None = None,
     expected_period: str | None = None,
 ) -> None:
-    """Tenant Admin can override the score and force-approve at any workflow stage.
+    """Tenant Admin can correct the score of an already-APPROVED
+    submission via override. The row stays APPROVED; the correction is
+    audit-logged ("Score corrected after approval: ...") and the
+    employee is notified, exactly like a first override.
 
-    Post-approval correction (user decision 2026-11-20): a tenant admin
-    may correct an already-APPROVED row's score via override. The row
-    stays APPROVED; the correction is audit-logged
-    ("Score corrected after approval: ...") and the employee is
-    notified, exactly like a first override. The C2 claim below still
-    serialises concurrent overrides — a second caller racing this one
-    blocks on the row lock, then claims the (now corrected) row and
-    overwrites with its own score, so corrections are last-write-wins
-    in score order, never duplicated audit rows.
+    APPROVED-only (bug fix 2026-11-25): override is a post-approval
+    correction, NOT an approval path — a DRAFT, REJECTED or still-pending
+    row is rejected with 400 and nothing changes. The exit for a DRAFT
+    stuck after grace is the employee's own withdraw (``withdraw_draft``,
+    S-M2), which deletes the stuck DRAFT rows without inventing a score;
+    override must not be used just to clear an unscored draft. The C2
+    claim below still serialises concurrent overrides on the same
+    APPROVED row — a second caller racing this one blocks on the row
+    lock, then claims the (now corrected) row and overwrites with its
+    own score, so corrections are last-write-wins in score order, never
+    duplicated audit rows.
 
     Weight guard — DELIBERATE BYPASS, documented (B-M4): unlike
     dept_approve / final_approve, this function does NOT call
     validate_period_total_weight. Override is the escape hatch for
-    legacy over-100 periods. It is NOT the exit for a DRAFT stuck after
-    grace — that exit is now the employee's own withdraw
-    (``withdraw_draft``, S-M2), which deletes the stuck DRAFT rows
-    without inventing a score; override still works on a DRAFT, but it
-    force-approves with an admin-chosen score and must not be used just
-    to clear an unscored draft.
+    legacy over-100 periods.
     """
     _assert_period_match(submission, expected_year, expected_period)
-    was_approved = submission.status == KPIStatus.APPROVED
+    if submission.status != KPIStatus.APPROVED:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Only an already-approved submission can be corrected via override.",
+        )
     _claim_submission(
         db, submission,
-        [KPIStatus.DRAFT, KPIStatus.REJECTED,
-         KPIStatus.PENDING_DEPT_APPROVAL, KPIStatus.PENDING_FINAL_APPROVAL,
-         KPIStatus.APPROVED],
+        [KPIStatus.APPROVED],
         "Submission could not be claimed (already handled by another caller).",
     )
     _validate_score_within_target(submission, final_score, "Override score")
@@ -1164,9 +1166,7 @@ def tenant_admin_override(
     submission.final_reviewed_at = _now()
     audit_service.log(
         db, admin, "kpi_overridden", "kpi_submission", submission.id, _entity_label(submission),
-        f"Score corrected after approval: {fmt_score(old_score)} → {fmt_score(final_score)}."
-        if was_approved else
-        f"Score overridden: {fmt_score(old_score)} → {fmt_score(final_score)}.",
+        f"Score corrected after approval: {fmt_score(old_score)} → {fmt_score(final_score)}.",
         department_id=submission.department_id,
     )
     if admin.id != submission.employee_id:

@@ -53,7 +53,7 @@ def test_override_and_reject_record_distinct_actions(db, client):
     employee = make_user(db, tenant, UserRole.EMPLOYEE, department=dept)
     template = make_template(db, tenant, department=dept)
     submission = make_submission(
-        db, tenant, employee, template, status=KPIStatus.PENDING_FINAL_APPROVAL, dept_score=70.0
+        db, tenant, employee, template, status=KPIStatus.APPROVED, dept_score=70.0, final_score=80.0
     )
 
     resp = client.post(

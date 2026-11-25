@@ -193,6 +193,9 @@ def test_override_on_already_approved_corrects_score(client, db):
     the correction is audit-logged ("Score corrected after approval")."""
     tenant, admin, _employee, submission = _pending_final_setup(db)
     headers = auth_headers(admin, tenant)
+    approve = {"year": 2026, "period": "October", "final_score": 60.0}
+    approved = client.post(f"/api/kpi/{submission.id}/final-approve", json=approve, headers=headers)
+    assert approved.status_code == 200, approved.text
     payload = {"year": 2026, "period": "October", "final_score": 70.0}
     first = client.post(f"/api/kpi/{submission.id}/override", json=payload, headers=headers)
     assert first.status_code == 200, first.text
@@ -214,18 +217,35 @@ def test_override_on_already_approved_corrects_score(client, db):
     assert "corrected after approval" in summaries[-1]
 
 
-def test_override_racing_final_approve_serialises_without_500s(client, db):
-    """Post-approval correction (user decision 2026-11-20): an override
-    racing a final approve no longer has a single winner. Every
-    override succeeds — the first as the approval, the rest as
-    corrections — while a final approve only wins if it claims the row
-    before any override does (otherwise 400). The claim still
-    serialises the race: no 500s, at most one final-approval audit row,
-    and exactly one override audit row per override that returned 200."""
+def test_override_on_pending_row_returns_400_and_changes_nothing(client, db):
+    """Override is APPROVED-only: overriding a still-pending row via the
+    API returns 400 and changes nothing — no score, no status change,
+    no audit row."""
     tenant, admin, _employee, submission = _pending_final_setup(db)
     headers = auth_headers(admin, tenant)
+    payload = {"year": 2026, "period": "October", "final_score": 70.0}
+    resp = client.post(f"/api/kpi/{submission.id}/override", json=payload, headers=headers)
+    assert resp.status_code == 400, resp.text
+    db.expire_all()
+    s = db.get(type(submission), submission.id)
+    assert s.status == KPIStatus.PENDING_FINAL_APPROVAL
+    assert s.final_score is None
+    assert _audit_count(db, "kpi_overridden", submission.id) == 0
+
+
+def test_override_racing_final_approve_serialises_without_500s(client, db):
+    """Post-approval correction (user decision 2026-11-20): override is
+    APPROVED-only, so the race is now between concurrent corrections of
+    an already-approved row. Every override succeeds as a correction
+    while a final approve on the already-APPROVED row gets a 400. The
+    claim still serialises the race: no 500s and exactly one override
+    audit row per override that returned 200."""
+    tenant, admin, _employee, submission = _pending_final_setup(db)
+    headers = auth_headers(admin, tenant)
+    approve = {"year": 2026, "period": "October", "final_score": 60.0}
+    approved = client.post(f"/api/kpi/{submission.id}/final-approve", json=approve, headers=headers)
+    assert approved.status_code == 200, approved.text
     override = {"year": 2026, "period": "October", "final_score": 70.0}
-    approve = {"year": 2026, "period": "October", "final_score": 70.0}
     with ThreadPoolExecutor(max_workers=8) as pool:
         futures = (
             [pool.submit(client.post, f"/api/kpi/{submission.id}/override", headers=headers, json=override)
@@ -238,9 +258,8 @@ def test_override_racing_final_approve_serialises_without_500s(client, db):
     db.expire_all()
     assert db.get(type(submission), submission.id).status == KPIStatus.APPROVED
     assert _audit_count(db, "kpi_overridden", submission.id) == 4
-    final_approved = _audit_count(db, "kpi_final_approved", submission.id)
-    assert final_approved in (0, 1)
-    assert codes.count(200) == 4 + final_approved, codes
+    assert _audit_count(db, "kpi_final_approved", submission.id) == 1
+    assert codes.count(200) == 4, codes
 
 
 # ---------------------------------------------------------------- B-M5

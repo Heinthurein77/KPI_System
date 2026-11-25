@@ -12,8 +12,13 @@ migrations (the dump carries the `alembic_version` table, so startup
 migrations no-op), Caddy, or the Neon project — Neon is left untouched as
 the instant rollback.
 
-**Downtime:** one short window (dump + restore, a few minutes for this DB
-size). Users see the login page fail to load during it. Do it off-hours.
+**Downtime:** one short window (dump + restore; the DB is only ~10 MB, so a
+few minutes at most). Users see the login page fail to load during it. Do it
+off-hours.
+
+**Order matters:** the practice dump (Step 3) reads the Neon URL from `.env`,
+so `DATABASE_URL` is switched to local only at cutover (Step 4). Do not
+switch it early or the dump will read the empty local DB.
 
 ## Step 0 — Pre-checks (on the server, `cd ~/kpi-app`)
 
@@ -35,24 +40,20 @@ self-hosted option was rejected for this 2 GB box; it is back on the table now
 only because Neon Free is exhausted — if `free -m` shows under ~500 MB free,
 stop and reconsider the paid Neon Launch plan instead.)
 
-## Step 1 — Set the new variables (on the server)
+**Step 0 results (2026-11-25):** available 1011 MB, disk 31 GB free, Neon is
+PostgreSQL 18.7, DB is 9,664 kB. Green light — `PG_VERSION=18`.
 
-In `~/kpi-app/.env`, **keep the old Neon `DATABASE_URL` line** — comment it out
-instead of deleting it, it is the rollback. Then add:
+## Step 1 — Add the new variables (on the server, `DATABASE_URL` untouched)
 
 ```bash
-PG_VERSION=18            # per the Step 0 version check (Neon is PostgreSQL 18.7)
-POSTGRES_PASSWORD=$(openssl rand -hex 24)   # run once, paste the value — or type your own
+cd ~/kpi-app
+cp .env .env.neon-backup
+DB_PASS=$(openssl rand -hex 24)
+printf '%s\n' "PG_VERSION=18" "POSTGRES_USER=kpi" "POSTGRES_PASSWORD=$DB_PASS" "POSTGRES_DB=kpi_system" >> .env
 ```
 
-Then set the new `DATABASE_URL` (same password, URL-encoded if it contains
-special characters — `openssl rand -hex` output is safe as-is):
-
-```
-DATABASE_URL=postgresql://kpi:<POSTGRES_PASSWORD>@db:5432/kpi_system
-```
-
-Keep `.env` at `chmod 600`.
+Keep `.env` at `chmod 600`. Do **not** send the password anywhere — it lives
+only in the server `.env`.
 
 ## Step 2 — Pull the new compose file and start only the DB
 
@@ -64,7 +65,8 @@ docker compose exec db pg_isready -U kpi   # must answer "accepting connections"
 
 ## Step 3 — Practice restore (no downtime, Neon still live)
 
-Dump from Neon (client version 17 dumps either server version):
+`DATABASE_URL` in `.env` still points at Neon here — that is intentional.
+Dump from Neon (client version 18 dumps this server version):
 
 ```bash
 docker run --rm --env-file .env -v ~/kpi-app:/backup postgres:18-alpine sh -c \
@@ -95,14 +97,20 @@ If they match, the procedure works — proceed to cutover. If not, stop and repo
 
 ```bash
 docker compose stop web
-# Final dump — catches any writes made after the Step 3 dump:
+# Final dump — catches any writes made after the Step 3 dump. DATABASE_URL is
+# still the Neon one here, so this reads Neon:
 docker run --rm --env-file .env -v ~/kpi-app:/backup postgres:18-alpine sh -c \
   'pg_dump "$DATABASE_URL" -Fc --no-owner --no-privileges -f /backup/kpi-neon-final.dump'
 # Fresh DB, then restore the final dump:
 docker compose exec db psql -U kpi -d postgres -c "DROP DATABASE kpi_system;" -c "CREATE DATABASE kpi_system OWNER kpi;"
 docker cp ~/kpi-app/kpi-neon-final.dump kpi-db:/tmp/final.dump
 docker compose exec -T db pg_restore -U kpi -d kpi_system --no-owner --no-privileges /tmp/final.dump
-# Re-verify counts + alembic_version as in Step 3, then start the app:
+# Re-verify counts + alembic_version as in Step 3, then switch the URL:
+sed -i '/neon\.tech/s/^/# /' .env
+DB_PASS=$(grep '^POSTGRES_PASSWORD=' .env | cut -d= -f2)
+printf '%s\n' "DATABASE_URL=postgresql://kpi:$DB_PASS@db:5432/kpi_system" >> .env
+grep -n "DATABASE_URL" .env   # exactly one uncommented line, pointing at @db:5432
+# Start the app:
 VITE_APP_COMMIT=$(git rev-parse --short HEAD) docker compose up -d --build
 curl -s http://127.0.0.1:8000/readyz; curl -s http://127.0.0.1:8000/healthz
 ```
@@ -113,8 +121,9 @@ debug live on the new DB.
 
 ## Step 5 — Rollback (if the cutover fails)
 
-Neon was never written to, so the old data is intact. In `.env`, swap
-`DATABASE_URL` back to the commented-out Neon line, then:
+Neon was never written to, so the old data is intact. In `.env`, delete the
+local `DATABASE_URL` line and uncomment the Neon line (or `cp .env.neon-backup
+.env` and re-add the `PG_VERSION`/`POSTGRES_*` lines), then:
 
 ```bash
 docker compose up -d web

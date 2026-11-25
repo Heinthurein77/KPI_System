@@ -1,15 +1,24 @@
-fastapi>=0.115.6
-slowapi>=0.1.9
-uvicorn[standard]>=0.34.0
-gunicorn>=23.0.0
-sqlalchemy>=2.0.36
-pydantic>=2.10.4
-pydantic-settings>=2.7.1
-bcrypt>=4.2.1
-pyjwt>=2.10.1
-psycopg[binary]>=3.2.3
-python-dotenv>=1.0.1
-alembic>=1.14.0
-openpyxl>=3.1.5
-python-multipart>=0.0.18
-fpdf2>=2.8.0
+# Backend dependencies — pinned to exact versions (S-11). A fresh
+# install must reproduce the exact environment the suite runs against;
+# unpinned `>=` ranges used to let any new (possibly compromised or
+# breaking) release in silently. Versions below are the ones installed
+# in the repo venv at pin time; upgrade deliberately (bump + re-run the
+# suite + refresh requirements.lock), never by floating the range.
+# No dependency was upgraded to a newer major version by this pin.
+fastapi==0.143.0
+slowapi==0.1.10
+uvicorn[standard]==0.54.0
+gunicorn==26.2.0
+sqlalchemy==2.1.4
+pydantic==2.14.1
+pydantic-settings==2.15.0
+bcrypt==5.0.0
+cryptography==50.0.2
+pyjwt==2.15.1
+psycopg[binary]==3.3.6
+python-dotenv==1.2.4
+alembic==1.20.0
+openpyxl==3.1.5
+python-multipart==0.0.32
+pyotp==2.12.1
+fpdf2==2.8.9

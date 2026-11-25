@@ -18,6 +18,7 @@
 
 import { useCallback, useRef, useState } from "react";
 import { getErrorMessage } from "../api/errors";
+import { refreshSession } from "../api/auth";
 
 // How often the dashboard boards silently re-check for new submissions,
 // so a KPI filled on the employee side shows on the admin side without a
@@ -39,24 +40,51 @@ export function useApi(fetcher, { onSuccess, onError } = {}) {
     (args, { silent = false } = {}) => {
       const requestId = ++loadIdRef.current;
       if (!silent) setLoading(true);
-      return fetcher(args)
-        .then((d) => {
-          if (loadIdRef.current !== requestId) return undefined;
-          setData(d);
-          setError(null);
-          if (!silent) setLoading(false);
-          callbacksRef.current.onSuccess?.(d);
-          return d;
-        })
-        .catch((err) => {
-          if (loadIdRef.current !== requestId) return undefined;
-          if (!silent) setLoading(false);
-          if (silent) return undefined; // background tick: keep old data
-          const message = getErrorMessage(err);
-          setError(message);
-          callbacksRef.current.onError?.(message, err);
-          return undefined;
-        });
+      // S-03: silent refresh — access tokens live 1 h now, so a data load
+      // that lands after expiry gets one refresh-and-retry before the
+      // error surfaces. The axios client's own 401 interceptor
+      // (frontend/src/api/client.js) now does the same globally (refresh
+      // first, redirect only when the refresh itself 401s), so for
+      // axios-backed fetchers the interceptor usually retries before this
+      // catch ever runs. This retry remains as the fallback for fetchers
+      // that bypass that interceptor, and for the case where the
+      // interceptor's refresh failed on a transient network error while
+      // the refresh token itself is still valid.
+      const attempt = (retried) =>
+        fetcher(args)
+          .then((d) => {
+            if (loadIdRef.current !== requestId) return undefined;
+            setData(d);
+            setError(null);
+            if (!silent) setLoading(false);
+            callbacksRef.current.onSuccess?.(d);
+            return d;
+          })
+          .catch((err) => {
+            if (loadIdRef.current !== requestId) return undefined;
+            if (!retried && err?.response?.status === 401) {
+              return refreshSession()
+                .then(() => attempt(true))
+                .catch(() => {
+                  // Refresh failed (revoked/idle/expired) — fall through
+                  // to the normal 401 handling below with the original error.
+                  if (loadIdRef.current !== requestId) return undefined;
+                  if (!silent) setLoading(false);
+                  if (silent) return undefined;
+                  const message = getErrorMessage(err);
+                  setError(message);
+                  callbacksRef.current.onError?.(message, err);
+                  return undefined;
+                });
+            }
+            if (!silent) setLoading(false);
+            if (silent) return undefined; // background tick: keep old data
+            const message = getErrorMessage(err);
+            setError(message);
+            callbacksRef.current.onError?.(message, err);
+            return undefined;
+          });
+      return attempt(false);
     },
     [fetcher]
   );

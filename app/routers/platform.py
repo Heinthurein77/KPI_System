@@ -7,21 +7,23 @@ from app.core.deps import require_platform_super_admin
 from app.core.rate_limit import (
     LOGIN_RATE_LIMIT,
     PASSWORD_RATE_LIMIT,
+    _authenticated_user_key,
     clear_failed_logins,
     is_login_locked,
     limiter,
-    record_failed_login,
 )
-from app.core.security import DUMMY_PASSWORD_HASH, _request_is_secure, clear_session_cookie, create_session_token, hash_password, set_session_cookie, validate_password_length, verify_password
+from app.core.security import DUMMY_PASSWORD_HASH, TOTP_ENFORCE_FOR_ADMINS, _request_is_secure, clear_refresh_cookie, clear_session_cookie, confirm_totp_enrolment, create_totp_pending_token, disable_totp, hash_password, recovery_codes_remaining, regenerate_recovery_codes, set_totp_pending_cookie, start_totp_enrolment, validate_password_complexity, validate_password_length, verify_password
 from app.database import get_db
 from app.models.audit_log import AuditLog
+from app.models.refresh_token import RefreshToken
 from app.models.tenant import Tenant, TenantStatus
 from app.models.user import User, UserRole
+from app.routers.auth import _issue_session, _login_failure, _revoke_all_sessions
 from app.schemas.audit_log import AuditLogOut
-from app.schemas.auth import ChangePasswordRequest, LoginRequest, LoginResponse
+from app.schemas.auth import ChangePasswordRequest, LoginRequest, LoginResponse, TotpDisableRequest, TotpEnrollResponse, TotpRecoveryCodesResponse, TotpRegenerateRecoveryCodesRequest, TotpStatusResponse, TotpVerifyEnrolmentRequest
 from app.schemas.platform import CreateTenantRequest, TenantOut
-from app.schemas.user import UserOut
-from app.services import audit_service
+from app.schemas.user import ResetPasswordRequest, UserOut
+from app.services import audit_service, email_service, notification_service
 
 router = APIRouter(prefix="/api/platform", tags=["platform"])
 
@@ -44,21 +46,32 @@ def platform_login(request: Request, response: Response, payload: LoginRequest, 
     # a real platform account with a wrong password.
     password_hash = user.password_hash if user is not None else DUMMY_PASSWORD_HASH
     password_ok = verify_password(payload.password, password_hash)
-    if user is None or not user.is_active or not password_ok:
-        if user is not None:
-            record_failed_login(account_key)
-            # M7 (PM review 2026-11-12): platform login failures are audit
-            # events, logged platform-scoped (tenant_id NULL — migration
-            # 0024). Flood bound: the per-account lock caps logged failures
-            # at 10/minute per account, and the per-IP slowapi limit caps
-            # it per IP. Unknown emails have no user row to be the actor,
-            # so they are not logged.
-            audit_service.log(
-                db, user, "login_failed", "user", user.id, user.name,
-                "Failed platform login attempt.",
-            )
-            db.commit()
+    # M-05 (security review 2026-11-25): this endpoint mints a platform
+    # token — assert role == SUPER_ADMIN before minting. The query above
+    # already restricts to tenant_id IS NULL rows, so today only super
+    # admins can match; the explicit check is defence-in-depth against a
+    # future tenant-less non-super-admin row ever being minted a platform
+    # token. A wrong-role row fails exactly like a wrong password (same
+    # 401, same audit, same lockout accounting) so the failure mode does
+    # not reveal which part was wrong.
+    role_ok = user is not None and user.role == UserRole.SUPER_ADMIN
+    if user is None or not user.is_active or not password_ok or not role_ok:
+        _login_failure(db, user, None, email, account_key)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid email or password.")
+
+    # S-02: TOTP second step, same as the tenant login — the shared
+    # POST /api/auth/login/totp endpoint completes it (the pending token
+    # carries tenant_id None for platform accounts).
+    if user.totp_enabled and user.totp_secret_encrypted:
+        set_totp_pending_cookie(
+            response, create_totp_pending_token(user.id, None), secure=_request_is_secure(request)
+        )
+        audit_service.log(
+            db, user, "login_totp_required", "user", user.id, user.name,
+            "Password accepted; TOTP verification required.",
+        )
+        db.commit()
+        return LoginResponse(user=user, totp_required=True)
 
     clear_failed_logins(account_key)
     # M7: platform login success is an audit event. Login performs no other
@@ -68,9 +81,7 @@ def platform_login(request: Request, response: Response, payload: LoginRequest, 
         f"Successful login as {user.role.value}.",
     )
     db.commit()
-    token = create_session_token(user.id, tenant_id=None, token_version=user.token_version or 0)
-    set_session_cookie(response, token, secure=_request_is_secure(request))
-    return LoginResponse(user=user)
+    return _issue_session(db, user, response, request)
 
 
 @router.get("/auth/me", response_model=UserOut)
@@ -82,7 +93,7 @@ def platform_me(user: User = Depends(require_platform_super_admin)):
 
 
 @router.post("/auth/change-password", status_code=status.HTTP_204_NO_CONTENT)
-@limiter.limit(PASSWORD_RATE_LIMIT)
+@limiter.limit(PASSWORD_RATE_LIMIT, key_func=_authenticated_user_key)
 def platform_change_password(
     request: Request,
     payload: ChangePasswordRequest,
@@ -93,17 +104,25 @@ def platform_change_password(
     """Password change for platform super admins. The tenant-scoped
     /api/auth/change-password 401s for tenant-less accounts, which would
     trip the SPA's global 401 handler and bounce them to /login."""
+    # M-03: per-authenticated-user limit key (mirrors the tenant endpoint).
     if not verify_password(payload.current_password, admin.password_hash):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect.")
-    if len(payload.new_password) < 8:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "New password must be at least 8 characters.")
+    # S-04: new≠current + complexity, 400 like the tenant endpoint.
+    # Length first, so an over-72-byte password reports the 72-byte limit.
     try:
         validate_password_length(payload.new_password)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    if verify_password(payload.new_password, admin.password_hash):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "New password must differ from the current password.")
+    try:
+        validate_password_complexity(payload.new_password)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     admin.password_hash = hash_password(payload.new_password)
     admin.must_change_password = False
     admin.token_version = (admin.token_version or 0) + 1
+    db.query(RefreshToken).filter(RefreshToken.user_id == admin.id).delete(synchronize_session=False)
     # S-M5: platform password changes are audited like tenant ones —
     # who changed it and that all sessions were invalidated. The
     # password itself is never logged. Platform-scoped (tenant_id NULL)
@@ -117,6 +136,168 @@ def platform_change_password(
     # The token_version bump invalidates this session — clear the now-dead
     # cookie so the SPA doesn't keep sending it. The admin logs in again.
     clear_session_cookie(response, secure=_request_is_secure(request))
+    clear_refresh_cookie(response, secure=_request_is_secure(request))
+
+
+# ---------------------------------------------------------------------------
+# TOTP enrolment + management for the platform super admin (S-02).
+# The tenant-scoped /api/auth/totp/* endpoints 401 for tenant-less
+# accounts by design, so the platform admin manages TOTP here. The
+# login second step is shared: POST /api/auth/login/totp.
+# ---------------------------------------------------------------------------
+
+@router.post("/auth/totp/enroll", response_model=TotpEnrollResponse)
+def platform_totp_enroll(db: Session = Depends(get_db), admin: User = Depends(require_platform_super_admin)):
+    try:
+        secret, otpauth_url = start_totp_enrolment(db, admin)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, str(exc)) from exc
+    audit_service.log(
+        db, admin, "totp_enrolment_started", "user", admin.id, admin.name,
+        "Platform TOTP enrolment started; secret stored encrypted, not yet confirmed.",
+    )
+    db.commit()
+    return TotpEnrollResponse(secret=secret, otpauth_url=otpauth_url)
+
+
+@router.post("/auth/totp/verify-enrolment", response_model=TotpRecoveryCodesResponse)
+def platform_totp_verify_enrolment(
+    payload: TotpVerifyEnrolmentRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_platform_super_admin),
+):
+    try:
+        codes = confirm_totp_enrolment(db, admin, payload.code)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    audit_service.log(
+        db, admin, "totp_enabled", "user", admin.id, admin.name,
+        "Platform TOTP enabled; recovery codes issued.",
+    )
+    db.commit()
+    return TotpRecoveryCodesResponse(recovery_codes=codes)
+
+
+@router.get("/auth/totp/status", response_model=TotpStatusResponse)
+def platform_totp_status(admin: User = Depends(require_platform_super_admin)):
+    return TotpStatusResponse(
+        enabled=bool(admin.totp_enabled),
+        enrolled=bool(admin.totp_secret_encrypted),
+        recovery_codes_remaining=recovery_codes_remaining(admin),
+        enforced_for_admins=TOTP_ENFORCE_FOR_ADMINS,
+    )
+
+
+@router.post("/auth/totp/disable", status_code=status.HTTP_204_NO_CONTENT)
+def platform_totp_disable(
+    payload: TotpDisableRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_platform_super_admin),
+):
+    if not verify_password(payload.password, admin.password_hash):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect.")
+    disable_totp(db, admin)
+    audit_service.log(
+        db, admin, "totp_disabled", "user", admin.id, admin.name,
+        "Platform TOTP disabled for this account.",
+    )
+    db.commit()
+
+
+@router.post("/auth/totp/recovery-codes/regenerate", response_model=TotpRecoveryCodesResponse)
+def platform_totp_regenerate_recovery_codes(
+    payload: TotpRegenerateRecoveryCodesRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_platform_super_admin),
+):
+    if not verify_password(payload.password, admin.password_hash):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Current password is incorrect.")
+    try:
+        codes = regenerate_recovery_codes(db, admin)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    audit_service.log(
+        db, admin, "totp_recovery_codes_regenerated", "user", admin.id, admin.name,
+        "Platform TOTP recovery codes regenerated; previous codes invalidated.",
+    )
+    db.commit()
+    return TotpRecoveryCodesResponse(recovery_codes=codes)
+
+
+@router.post("/auth/revoke-user-sessions/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def platform_revoke_user_sessions(
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_platform_super_admin),
+):
+    """S-03: the platform admin can revoke any user's sessions (all
+    tenants) — token_version bump + refresh-token delete."""
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
+    _revoke_all_sessions(db, target)
+    audit_service.log(
+        db, admin, "sessions_revoked", "user", target.id, target.name,
+        f"All sessions revoked for {target.name} by platform admin {admin.name}.",
+        department_id=target.department_id,
+    )
+    db.commit()
+
+
+@router.post("/users/{user_id}/reset-password", response_model=UserOut)
+@limiter.limit(PASSWORD_RATE_LIMIT, key_func=_authenticated_user_key)
+def platform_reset_user_password(
+    request: Request,
+    user_id: int,
+    payload: ResetPasswordRequest,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_platform_super_admin),
+):
+    """M-02 remainder: the platform admin resets a TENANT ADMIN's
+    password. The tenant-scoped endpoint deliberately 403s a fellow
+    tenant admin's reset ("Only the platform admin can reset another
+    tenant admin's password"), and until this endpoint existed there was
+    no path at all — a locked-out tenant admin could not be recovered.
+    Scoped to tenant admins only: every other role is reset through the
+    tenant endpoint by that tenant's own admin. Mirrors its contract
+    (length check, must_change_password, token_version bump, user
+    notified in-app + by email)."""
+    target = db.get(User, user_id)
+    if target is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "User not found.")
+    if target.role != UserRole.TENANT_ADMIN:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Only tenant admins are reset from the platform — other roles "
+            "are reset by their tenant admin.",
+        )
+    try:
+        validate_password_length(payload.password)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    target.password_hash = hash_password(payload.password)
+    target.must_change_password = True
+    target.token_version = (target.token_version or 0) + 1
+    audit_service.log(
+        db, admin, "user_password_reset", "user", target.id, target.name,
+        f"Password reset by platform admin {admin.name}.",
+        department_id=target.department_id,
+    )
+    emailed = notification_service.notify_user(
+        db,
+        tenant_id=target.tenant_id,
+        user_id=target.id,
+        type="password_reset",
+        title="Your password was reset",
+        message=(
+            "Your KPI account password was reset by the platform admin. "
+            "Sign in with the new password — you will be asked to change it."
+        ),
+        link="/login",
+    )
+    db.commit()
+    email_service.send_for_notifications(db, emailed)
+    return target
 
 
 @router.get("/audit-log", response_model=list[AuditLogOut])
@@ -158,11 +339,15 @@ def create_tenant(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f'A tenant with slug "{slug}" already exists.')
     # Mirrors the minimum-length check in auth.change_password — CreateTenantRequest
     # itself places no constraint on admin_password, and this is the one place a
-    # brand-new tenant admin credential gets set.
-    if len(payload.admin_password) < 8:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Admin password must be at least 8 characters.")
+    # brand-new tenant admin credential gets set. S-04: the same complexity
+    # policy as change-password (letter + digit, common-password blocklist).
+    # Length first, so an over-72-byte password reports the 72-byte limit.
     try:
         validate_password_length(payload.admin_password)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    try:
+        validate_password_complexity(payload.admin_password)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 

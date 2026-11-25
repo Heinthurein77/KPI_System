@@ -14,8 +14,15 @@ class NotAuthenticated(HTTPException):
 
 
 def _session_token(request: Request) -> str | None:
-    # httpOnly session cookie first (the SPA's normal auth path — immune to
-    # XSS token theft), then the Authorization header for API clients/tests.
+    # M-06 (security review 2026-11-25) — DECIDED: keep accepting the
+    # Authorization: Bearer header alongside the httpOnly session cookie,
+    # documented as intended. The SPA itself never sends the header (the
+    # cookie is its only auth path, so XSS cannot steal a session token);
+    # the header exists for genuine API clients and for the test suite,
+    # which builds Bearer tokens directly (see app/tests/factories.py
+    # auth_headers). Removing it would break those clients with no
+    # security gain — the same JWT validation, token_version check, and
+    # revocation check apply to both transports.
     cookie_token = request.cookies.get(SESSION_COOKIE_NAME)
     if cookie_token:
         return cookie_token
@@ -33,7 +40,7 @@ def _assert_not_revoked(db: Session, claims) -> None:
     """A logged-out token stays dead even if its cookie/token is replayed.
 
     Every token issued since jti was introduced carries one. A token
-    without a jti predates that change and is long expired (24 h
+    without a jti predates that change and is long expired (1 h
     lifetime), so it is rejected outright instead of skipping the
     revocation check on a dead code path.
     """

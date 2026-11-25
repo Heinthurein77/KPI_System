@@ -316,10 +316,13 @@ def test_login_failure_records_audit_entry(db, client):
     assert entry["actor_name"] == user.name
 
 
-def test_login_failure_for_unknown_email_records_no_audit_entry(db, client):
-    """An unknown email has no user row to be the audit actor, so there is
-    nothing audit_service.log can record — the per-IP rate limit is the
-    only control there, and the attempt must not create a row."""
+def test_login_failure_for_unknown_email_records_audit_entry(db, client):
+    """M-07 (security review 2026-11-25): an unknown email's failed login
+    IS audited now — keyed by the email, not by a user row (there is
+    none): actor_id NULL, actor_role "unknown", entity_label the email.
+    The per-IP rate limit bounds how fast these rows can be created."""
+    from app.models.audit_log import AuditLog
+
     tenant = make_tenant(db)
     admin = make_user(db, tenant, UserRole.TENANT_ADMIN)
 
@@ -330,7 +333,13 @@ def test_login_failure_for_unknown_email_records_no_audit_entry(db, client):
     )
     assert resp.status_code == 401
 
-    assert _audit_entries(client, admin, tenant) == []
+    entries = [e for e in _audit_entries(client, admin, tenant) if e["action"] == "login_failed"]
+    assert len(entries) == 1
+    assert entries[0]["entity_label"] == "nobody@example.com"
+    assert entries[0]["actor_role"] == "unknown"
+    row = db.query(AuditLog).filter(AuditLog.action == "login_failed").one()
+    assert row.actor_id is None
+    assert row.tenant_id == tenant.id
 
 
 def test_failed_login_storm_is_bounded_by_lockout(db, client):

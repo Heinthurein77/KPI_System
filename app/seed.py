@@ -6,10 +6,19 @@ Run with: python -m app.seed
 
 Override the default bootstrap account via env vars (recommended for production):
   PLATFORM_SUPER_ADMIN_NAME, PLATFORM_SUPER_ADMIN_EMAIL, PLATFORM_SUPER_ADMIN_PASSWORD
+
+M-41 (security review 2026-11-25): the seeded account must change its
+password on first login (must_change_password=True), and the password is
+NEVER printed to stdout — stdout ends up in deploy logs, where a printed
+credential lives forever. When no password is supplied via env, a random
+one is generated and written to a 0600 temp file whose PATH is printed
+instead; the operator reads the file once, signs in, and changes the
+password (forced on first login).
 """
 
 import os
 import secrets
+import tempfile
 from sqlalchemy import select
 from app.core.security import hash_password
 from app.database import SessionLocal
@@ -18,8 +27,8 @@ from app.models.user import User, UserRole
 SUPER_ADMIN_NAME = os.getenv("PLATFORM_SUPER_ADMIN_NAME", "Platform Super Admin")
 SUPER_ADMIN_EMAIL = os.getenv("PLATFORM_SUPER_ADMIN_EMAIL", "platform-admin@kpi.com")
 # Never fall back to a well-known default password: if the env var is not set,
-# generate a one-time random password (printed once below). A publicly-known
-# default would let anyone sign in as platform Super Admin.
+# generate a one-time random password. It is NEVER printed (see module
+# docstring) — see run() for where it goes.
 if "PLATFORM_SUPER_ADMIN_PASSWORD" in os.environ:
     SUPER_ADMIN_PASSWORD = os.environ["PLATFORM_SUPER_ADMIN_PASSWORD"]
     _generated_password = False
@@ -46,15 +55,28 @@ def run() -> None:
                 password_hash=hash_password(SUPER_ADMIN_PASSWORD),
                 role=UserRole.SUPER_ADMIN,
                 department_id=None,
+                # M-41: a seeded bootstrap account must change its password
+                # on first login — the initial credential is never a
+                # standing password.
+                must_change_password=True,
             )
         )
         db.commit()
 
         print("Seed complete — platform Super Admin account created:")
         print(f"  Email:    {SUPER_ADMIN_EMAIL}")
-        print(f"  Password: {SUPER_ADMIN_PASSWORD}")
+        # The password itself is never printed (M-41).
         if _generated_password:
-            print("  NOTE: this password was randomly generated — save it now, it won't be shown again.")
+            fd, path = tempfile.mkstemp(prefix="platform-admin-password-")
+            with os.fdopen(fd, "w") as f:
+                f.write(SUPER_ADMIN_PASSWORD)
+            os.chmod(path, 0o600)
+            print(f"  Password: randomly generated — read it once from {path}")
+            print("  (file is mode 0600; delete it after signing in. You will be")
+            print("  forced to change the password on first login.)")
+        else:
+            print("  Password: the one supplied via PLATFORM_SUPER_ADMIN_PASSWORD.")
+            print("  You will be forced to change it on first login.")
         print("Sign in at /platform/login and create tenants from the Platform portal.")
     finally:
         db.close()

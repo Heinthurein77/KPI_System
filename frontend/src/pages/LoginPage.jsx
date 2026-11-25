@@ -1,9 +1,11 @@
 import { useState } from "react";
 import { Link, Navigate, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import * as authApi from "../api/auth";
+import { getErrorMessage } from "../api/errors";
 
 export default function LoginPage() {
-  const { user, login } = useAuth();
+  const { user, refreshUser } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   // Prefill the org slug from the last successful login (S-m6): a
@@ -14,6 +16,14 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  // S-02: second login step for TOTP-enrolled accounts. The password step
+  // returns totp_required and sets a short-lived pending cookie; the code
+  // step below completes the login. The context login() is bypassed here
+  // on purpose — it has no totp_required signal — and refreshUser() picks
+  // the session up from /me once the second step succeeds.
+  const [totpRequired, setTotpRequired] = useState(false);
+  const [totpCode, setTotpCode] = useState("");
+  const [useRecoveryCode, setUseRecoveryCode] = useState(false);
 
   // Tenant users are bounced to their dashboard, as before. A platform
   // super_admin is NOT redirected: their browser session must not make a
@@ -28,12 +38,29 @@ export default function LoginPage() {
     e.preventDefault();
     setSubmitting(true);
     setError(null);
-    const result = await login(orgSlug, email, password);
-    setSubmitting(false);
-    if (result.ok) {
+    try {
+      if (totpRequired) {
+        // Second step: 6-digit authenticator code, or a single-use
+        // recovery code when the authenticator is unavailable.
+        await authApi.verifyTotp(
+          useRecoveryCode ? null : totpCode,
+          useRecoveryCode ? totpCode : null
+        );
+        await refreshUser();
+        navigate("/dashboard", { replace: true });
+        return;
+      }
+      const data = await authApi.login(orgSlug, email, password);
+      if (data.totp_required) {
+        setTotpRequired(true);
+        return;
+      }
+      await refreshUser();
       navigate("/dashboard", { replace: true });
-    } else {
-      setError(result.error);
+    } catch (err) {
+      setError(getErrorMessage(err, "Invalid organization, email, or password."));
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -141,6 +168,43 @@ export default function LoginPage() {
           )}
 
           <form onSubmit={handleSubmit} className="mt-7 space-y-4">
+            {totpRequired ? (
+              <>
+                <p className="text-sm text-slate-500">
+                  Your account uses two-factor authentication. Enter the 6-digit code from your
+                  authenticator app{useRecoveryCode ? ", or a recovery code" : ""}.
+                </p>
+                <div>
+                  <label htmlFor="totpCode" className="block text-sm font-medium text-slate-700 mb-1.5">
+                    {useRecoveryCode ? "Recovery code" : "Authenticator code"}
+                  </label>
+                  <input
+                    id="totpCode"
+                    type="text"
+                    required
+                    autoFocus
+                    autoComplete="one-time-code"
+                    inputMode={useRecoveryCode ? "text" : "numeric"}
+                    value={totpCode}
+                    onChange={(e) => setTotpCode(e.target.value)}
+                    className="w-full rounded-lg border border-slate-300 px-3.5 py-2.5 text-sm shadow-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-brand-500 transition"
+                    placeholder={useRecoveryCode ? "xxxx-xxxx" : "123456"}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUseRecoveryCode((v) => !v);
+                    setTotpCode("");
+                    setError(null);
+                  }}
+                  className="text-sm font-medium text-brand-600 hover:text-brand-700 underline underline-offset-2"
+                >
+                  {useRecoveryCode ? "Use an authenticator code instead" : "Lost your authenticator? Use a recovery code"}
+                </button>
+              </>
+            ) : (
+              <>
             <div>
               <label htmlFor="orgSlug" className="block text-sm font-medium text-slate-700 mb-1.5">
                 Organization
@@ -184,12 +248,14 @@ export default function LoginPage() {
                 placeholder="••••••••"
               />
             </div>
+              </>
+            )}
             <button
               type="submit"
               disabled={submitting}
               className="w-full inline-flex items-center justify-center gap-1.5 rounded-lg bg-brand-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-brand-700 transition disabled:opacity-60"
             >
-              {submitting ? "Signing in…" : "Sign in"}
+              {submitting ? "Signing in…" : totpRequired ? "Verify code" : "Sign in"}
               <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                 <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
               </svg>

@@ -139,9 +139,21 @@ class _FakeRequest:
 def test_rate_limit_key_uses_x_forwarded_for():
     # Rightmost entry: the one appended by our own reverse proxy (Caddy),
     # the only entry an attacker cannot spoof. Leftmost is client-supplied
-    # and must never be trusted.
-    req = _FakeRequest(headers={"x-forwarded-for": "203.0.113.7, 10.0.0.1"})
+    # and must never be trusted. The header is honoured only when the
+    # peer IS a trusted proxy (M-12: TRUSTED_PROXY_CIDRS, loopback by
+    # default) — so the fake peer here is 127.0.0.1.
+    req = _FakeRequest(
+        headers={"x-forwarded-for": "203.0.113.7, 10.0.0.1"}, remote="127.0.0.1"
+    )
     assert _client_ip_key(req) == "10.0.0.1"
+
+
+def test_rate_limit_key_ignores_x_forwarded_for_from_untrusted_peer():
+    # M-12: an XFF from a peer outside TRUSTED_PROXY_CIDRS is ignored —
+    # the key falls back to the peer address, so a forged header cannot
+    # move the caller onto someone else's rate-limit bucket.
+    req = _FakeRequest(headers={"x-forwarded-for": "203.0.113.7, 10.0.0.1"})
+    assert _client_ip_key(req) == "10.0.0.5"
 
 
 def test_rate_limit_key_falls_back_to_remote_addr():

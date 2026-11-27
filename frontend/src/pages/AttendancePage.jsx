@@ -13,7 +13,7 @@ import HolidayBanner from "../components/attendance/HolidayBanner";
 import HolidayListEditor from "../components/attendance/HolidayListEditor";
 import { MONTHS } from "../utils/months";
 import { slugify } from "../utils/slugify";
-import { formatHoliday, normalizeHolidays, validateHolidayRows } from "../utils/holidays";
+import { formatHoliday, holidaysInMonth, isInHolidayMonth, normalizeHolidays, validateHolidayRows } from "../utils/holidays";
 import { middayLabel } from "../utils/time";
 import { downloadBlob } from "../utils/download";
 import {
@@ -125,6 +125,25 @@ export default function AttendancePage() {
   // needed for them.
   const [holidays, setHolidays] = useState([]);
   const [officeIpsText, setOfficeIpsText] = useState("");
+  // Holidays are edited one month at a time: the selector below picks
+  // the month, the editor shows only that month's rows, and edits merge
+  // back into the full list — other months are never touched, so
+  // switching months can never lose a holiday. Independent of the
+  // report month above: browsing an old report must not move the
+  // holiday editor. Office IPs stay global (no month concept).
+  const [holidayYear, setHolidayYear] = useState(now.getFullYear());
+  const [holidayMonth, setHolidayMonth] = useState(now.getMonth() + 1);
+
+  // Merge one month's edited rows back into the full holidays list.
+  // Rows outside the selected month are kept verbatim; a row whose date
+  // was edited into another month survives too — it simply shows up
+  // under that month instead. No normalize here: it would drop a row
+  // whose date is still blank while being typed.
+  function handleMonthHolidaysChange(nextMonthRows) {
+    const other = holidays.filter((h) => !isInHolidayMonth(h.date, holidayYear, holidayMonth));
+    setHolidays([...other, ...nextMonthRows]);
+    setSettingsError("");
+  }
   // Settings-only error, shown under the Save button where the admin is
   // working (the page-top banner is a long scroll away from the form).
   const [settingsError, setSettingsError] = useState("");
@@ -1126,14 +1145,49 @@ export default function AttendancePage() {
                 />
                 <span className="text-xs text-slate-400">Empty = not enforced yet (testing). Once set, check-in/out works only from these IPs.</span>
               </label>
+              <div>
+                <p className="text-sm font-medium text-slate-700">Holidays — one month at a time</p>
+                <p className="mt-1 text-xs text-slate-400">
+                  Pick a month, add that month&apos;s holidays, and save. At month end, switch to the next month and add its holidays. Past months are kept — nothing is deleted when you switch months.
+                </p>
+                <div className="mt-2 flex flex-wrap items-end gap-3">
+                  <label className="text-sm font-medium text-slate-700">
+                    <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">Month</span>
+                    <select
+                      value={holidayMonth}
+                      onChange={(e) => setHolidayMonth(Number(e.target.value))}
+                      aria-label="Holiday month"
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+                    >
+                      {MONTHS.map((name, i) => (
+                        <option key={i + 1} value={i + 1}>{name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="text-sm font-medium text-slate-700">
+                    <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">Year</span>
+                    <select
+                      value={holidayYear}
+                      onChange={(e) => setHolidayYear(Number(e.target.value))}
+                      aria-label="Holiday year"
+                      className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm"
+                    >
+                      {[now.getFullYear() - 2, now.getFullYear() - 1, now.getFullYear(), now.getFullYear() + 1, now.getFullYear() + 2].map((y) => (
+                        <option key={y} value={y}>{y}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+              </div>
               <HolidayListEditor
-                value={holidays}
-                onChange={(next) => {
-                  setHolidays(next);
-                  setSettingsError("");
-                }}
+                value={holidaysInMonth(holidays, holidayYear, holidayMonth)}
+                month={{ year: holidayYear, month: holidayMonth }}
+                onChange={handleMonthHolidaysChange}
                 onError={setSettingsError}
               />
+              <p className="text-xs text-slate-400">
+                All months: {holidays.length} date{holidays.length === 1 ? "" : "s"} in total.
+              </p>
               {settingsError && (
                 <p className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{settingsError}</p>
               )}

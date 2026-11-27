@@ -40,8 +40,36 @@ export function normalizeHolidays(list) {
   return Object.keys(byDate).sort().map((d) => byDate[d]);
 }
 
-// "2026-11-23" -> "Monday, 23 Nov 2026". Parsed at UTC noon so the
-// weekday never slips a day in any browser timezone.
+// --- Month-by-month editing -------------------------------------------
+// Holidays are stored as one flat list (the date carries the month), but
+// the settings UI edits one month at a time: the admin picks a month,
+// works on that month's holidays, and at month end moves on to the next
+// month. Past months stay in the list — switching months never deletes
+// anything. A row with no date yet (still being typed) belongs to the
+// month being edited, so it never vanishes from the editor.
+
+// First and last day of a month, as YYYY-MM-DD strings.
+export function monthBounds(year, month) {
+  const first = `${year}-${String(month).padStart(2, "0")}-01`;
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const last = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  return { first, last };
+}
+
+// True when `dateIso` falls in the given month — or when it is blank /
+// not a real date, so an in-progress row stays visible (in every month)
+// instead of vanishing while it is being typed; the save validation
+// still blocks it until a date is picked or the row is removed.
+export function isInHolidayMonth(dateIso, year, month) {
+  if (!isRealDateString(dateIso || "")) return true;
+  const [y, m] = dateIso.split("-").map(Number);
+  return y === year && m === month;
+}
+
+export function holidaysInMonth(list, year, month) {
+  if (!Array.isArray(list)) return [];
+  return list.filter((row) => isInHolidayMonth(row?.date, year, month));
+}
 export function formatHolidayDate(dateIso) {
   const [y, m, d] = dateIso.split("-").map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d, 12));
